@@ -1,0 +1,25 @@
+---
+alwaysApply: false
+---
+# Arquitectura del Sistema de Gestión de Carteras
+
+Este sistema está diseñado con una arquitectura de tres componentes desacoplados para garantizar la escalabilidad, seguridad y facilidad de mantenimiento.
+
+## Componentes Principales
+
+El proyecto se divide en tres repositorios/proyectos independientes:
+
+1.  **API Backend (`gestion_carteras_api`)**:
+    *   **Tecnología**: Python con FastAPI.
+    *   **Propósito**: Es el cerebro central del sistema. Contiene toda la lógica de negocio (cálculos, validaciones) y es el único componente que se comunica directamente con la base de datos PostgreSQL. Sirve datos a través de una API REST a las otras dos aplicaciones.
+
+2.  **Aplicación de Escritorio (`proyecto_gestion_carteras`)**:
+    *   **Tecnología**: Python con Tkinter.
+    *   **Usuario**: El/La Manager del negocio.
+    *   **Funcionalidad**: Es una herramienta de gestión y administración. Permite realizar tareas de alto nivel como generar la liquidación diaria de los empleados, acceder a informes contables y tener una visión global del negocio.
+    *   **Punto de Entrada**: [main.py](mdc:main.py)
+
+3.  **Aplicación Web Móvil (`gestion_carteras_frontend`)**:
+    *   **Tecnología**: JavaScript con React (como Progressive Web App - PWA).
+    *   **Usuario**: Empleados de campo.
+    *   **Funcionalidad**: Es la herramienta para el trabajo diario. Permite a los empleados ver información actualizada de los clientes y sus tarjetas, registrar abonos, dar de alta nuevos préstamos y registrar gastos. Está diseñada para funcionar con y sin conexión a internet, sincronizando los datos cuando hay conexión disponible.
