@@ -1,5 +1,6 @@
 from fastapi import FastAPI, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
+import os
 from typing import List, Optional
 import logging
 from decimal import Decimal
@@ -38,15 +39,20 @@ app = FastAPI(
     version="1.0.0",
 )
 
-# CORS: permitir frontend local (PWA en Vite)
-_allowed_origins = [
-    "http://localhost:5173",
-    "http://127.0.0.1:5173",
-    "http://localhost:5174",
-    "http://127.0.0.1:5174",
-    "http://172.20.10.7:5174",
-    "http://172.20.10.7:5173",
-]
+# CORS: permitir orígenes configurables por entorno (CORS_ORIGINS="https://app.pages.dev,https://tu-dominio.com")
+_env_cors = os.getenv("CORS_ORIGINS", "")
+if _env_cors:
+    _allowed_origins = [o.strip() for o in _env_cors.split(',') if o.strip()]
+else:
+    # Fallback a orígenes locales de desarrollo
+    _allowed_origins = [
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "http://localhost:5174",
+        "http://127.0.0.1:5174",
+        "http://172.20.10.7:5174",
+        "http://172.20.10.7:5173",
+    ]
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_allowed_origins,
