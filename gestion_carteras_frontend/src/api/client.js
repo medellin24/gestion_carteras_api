@@ -1,10 +1,18 @@
 const BASE_URL = (() => {
-  const raw = (import.meta.env.VITE_API_BASE_URL || '').trim()
+  // Aceptar ambas variantes y espacios
+  const raw = (
+    import.meta.env.VITE_API_BASE_URL ||
+    import.meta.env.VITE_BASE_API_URL ||
+    ''
+  ).trim()
   if (raw) {
     return raw.endsWith('/') ? raw.slice(0, -1) : raw
   }
   // Solo permitir fallback local en modo desarrollo
-  return import.meta.env.DEV ? 'http://127.0.0.1:8000' : ''
+  if (import.meta.env.DEV) return 'http://127.0.0.1:8000'
+  // Último recurso en prod: usar la URL pública conocida si no se definieron variables
+  const prodFallback = 'https://asjiz6txe3.us-east-2.awsapprunner.com'
+  return prodFallback
 })()
 
 class ApiError extends Error {
@@ -22,12 +30,7 @@ class ApiError extends Error {
 
 async function request(path, { method = 'GET', body, headers, timeoutMs } = {}) {
   const DEFAULT_TIMEOUT_MS = Number(import.meta.env.VITE_HTTP_TIMEOUT_MS || 120000)
-  if (!BASE_URL) {
-    throw new ApiError(
-      'Configuración faltante: defina VITE_API_BASE_URL para producción.',
-      { type: 'config' }
-    )
-  }
+  // Nunca lanzar por falta de BASE_URL en prod; ya tenemos fallback
   async function doFetch(withToken) {
     const accessToken = withToken ? localStorage.getItem('access_token') : null
     const finalHeaders = {
