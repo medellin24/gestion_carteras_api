@@ -35,7 +35,7 @@
    - Build command: `cd gestion_carteras_frontend && npm ci && npm run build`
    - Output directory: `gestion_carteras_frontend/dist`
    - Variables:
-     - `VITE_API_BASE_URL=https://<apprunner-url>`
+     - `    VITE_API_BASE_URL=https://<apprunner-url>`
 3. Deploy y prueba (Application tab → Manifest, Service Worker)
 
 ## 3) DNS
