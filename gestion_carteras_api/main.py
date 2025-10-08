@@ -1257,8 +1257,18 @@ def create_tarjeta_endpoint(tarjeta: TarjetaCreate, principal: dict = Depends(ge
             numero_ruta=Decimal(str(tarjeta.numero_ruta)) if tarjeta.numero_ruta is not None else None,
             observaciones=tarjeta.observaciones,
             posicion_anterior=Decimal(str(tarjeta.posicion_anterior)) if tarjeta.posicion_anterior is not None else None,
-            posicion_siguiente=Decimal(str(tarjeta.posicion_siguiente)) if tarjeta.posicion_siguiente is not None else None
+            posicion_siguiente=Decimal(str(tarjeta.posicion_siguiente)) if tarjeta.posicion_siguiente is not None else None,
         )
+        # Si viene fecha_creacion explícita, actualizarla inmediatamente
+        if tarjeta.fecha_creacion is not None and codigo:
+            try:
+                from .database.tarjetas_db import actualizar_tarjeta
+                _ = actualizar_tarjeta(
+                    tarjeta_codigo=codigo,
+                    fecha_creacion=tarjeta.fecha_creacion,
+                )
+            except Exception:
+                pass
         if not codigo:
             raise HTTPException(status_code=400, detail="No se pudo crear la tarjeta.")
         db_tarjeta = obtener_tarjeta_por_codigo(codigo)
