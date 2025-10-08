@@ -30,7 +30,16 @@ def login(body: LoginRequest):
     user = get_user_by_username(body.username)
     if not user or not user.get("is_active"):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Credenciales inválidas")
-    if not verify_password(body.password, user["password_hash"]):
+    # Verificación de contraseña robusta para evitar 500 por hash inválido o backend ausente
+    try:
+        if not user.get("password_hash"):
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Credenciales inválidas")
+        if not verify_password(body.password, user["password_hash"]):
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Credenciales inválidas")
+    except HTTPException:
+        raise
+    except Exception:
+        # Si la verificación falla por error interno (p. ej., formato de hash o backend), no exponer 500
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Credenciales inválidas")
 
     role = user["role"]
