@@ -66,6 +66,7 @@ class TarjetaCreate(TarjetaBase):
     numero_ruta: Optional[float] = None
     posicion_anterior: Optional[float] = None
     posicion_siguiente: Optional[float] = None
+    fecha_creacion: Optional[datetime] = None
 
 class TarjetaUpdate(BaseModel):
     monto: Optional[float] = None
