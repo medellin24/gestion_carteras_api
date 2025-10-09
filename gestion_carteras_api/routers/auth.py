@@ -38,26 +38,22 @@ def login(body: LoginRequest):
     empleado_identificacion = user.get("empleado_identificacion")
 
     # Enforzar suscripción vigente solo para admin y cobrador que dependan de la cuenta
-    try:
-        if cuenta_id:
-            from ..database.connection_pool import DatabasePool
-            from datetime import date as _date, datetime as _dt, timedelta
-            with DatabasePool.get_cursor() as cur:
-                cur.execute("SELECT estado_suscripcion, trial_until, fecha_fin, fecha_inicio FROM cuentas_admin WHERE id=%s", (cuenta_id,))
-                row = cur.fetchone()
-                if row:
-                    estado, trial_until, fecha_fin, fecha_inicio = row
-                    fin = fecha_fin or trial_until
-                    # Normalizar 'fin' a date si viene como datetime
-                    if fin and hasattr(fin, 'date'):
-                        fin = fin.date()
-                    if not fin and fecha_inicio:
-                        fin = fecha_inicio + timedelta(days=30)
-                    if fin and _date.today() > fin:
-                        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Suscripción vencida. Contacte al administrador para reactivar.")
-    except Exception:
-        # No provocar 500 si el esquema/datos aún no están alineados
-        pass
+    if cuenta_id:
+        from ..database.connection_pool import DatabasePool
+        from datetime import date as _date, datetime as _dt, timedelta
+        with DatabasePool.get_cursor() as cur:
+            cur.execute("SELECT estado_suscripcion, trial_until, fecha_fin, fecha_inicio FROM cuentas_admin WHERE id=%s", (cuenta_id,))
+            row = cur.fetchone()
+            if row:
+                estado, trial_until, fecha_fin, fecha_inicio = row
+                fin = fecha_fin or trial_until
+                # Normalizar 'fin' a date si viene como datetime
+                if fin and hasattr(fin, 'date'):
+                    fin = fin.date()
+                if not fin and fecha_inicio:
+                    fin = fecha_inicio + timedelta(days=30)
+                if fin and _date.today() > fin:
+                    raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Suscripción vencida. Contacte al administrador para reactivar.")
 
     access_token = create_token(
         subject=str(user["id"]),
