@@ -1,9 +1,10 @@
 import tkinter as tk
 from tkinter import ttk, messagebox
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import Decimal
 import logging
 from tkinter import Toplevel
+from tkinter import filedialog
 
 # Importar el cliente de la API desde la nueva ruta raíz
 from api_client.client import api_client
@@ -20,9 +21,20 @@ class FrameEntrega(ttk.Frame):
         self._abonos_cache_por_tarjeta = {}
         self._abonos_prefetch_thread = None
         self._empleado_en_prefetch = None
+        # Caché de resumen por código de tarjeta
+        self._resumen_cache_por_tarjeta = {}
         
         style = ttk.Style()
+        try:
+            style.theme_use('clam')
+        except Exception:
+            pass
         style.configure('Contraste.TFrame', background='#E0E0E0')
+        # Estilos: azul bondi clarito y combobox ocre (readonly)
+        style.configure('Bondi.TButton', font=('Segoe UI', 10, 'bold'), padding=(8, 5), background='#73D0E6', foreground='black')
+        style.map('Bondi.TButton', background=[('active', '#4FC3D9'), ('pressed', '#4FC3D9')])
+        style.configure('Ocre.TCombobox', fieldbackground='#F2C97D', background='#F2C97D', foreground='black')
+        style.map('Ocre.TCombobox', fieldbackground=[('readonly', '#F2C97D')], background=[('readonly', '#F2C97D')], foreground=[('readonly', 'black')])
         self.setup_ui()
         self.cargar_empleados()
 
@@ -51,16 +63,16 @@ class FrameEntrega(ttk.Frame):
 
         # Fila única para selección de empleado y estado
         ttk.Label(frame_seleccion, text="Seleccione un empleado").pack(side='left', padx=(0,5))
-        self.combo_empleados = ttk.Combobox(frame_seleccion, width=25, state="readonly")
+        self.combo_empleados = ttk.Combobox(frame_seleccion, width=32, state="readonly", style='Ocre.TCombobox')
         self.combo_empleados.pack(side='left', padx=5)
         # Al abrir el combo, recargar empleados desde la API para reflejar altas recientes
         self.combo_empleados.bind('<Button-1>', lambda e: self.cargar_empleados())
         # Botón de refresco manual
         ttk.Button(frame_seleccion, text="↻", width=3, command=self.cargar_empleados).pack(side='left', padx=(0,5))
         
-        self.combo_estado = ttk.Combobox(frame_seleccion, width=12, 
+        self.combo_estado = ttk.Combobox(frame_seleccion, width=14, 
                                        values=['activas', 'cancelada', 'pendiente'],
-                                       state="readonly")
+                                       state="readonly", style='Ocre.TCombobox')
         self.combo_estado.pack(side='left', padx=5)
         self.combo_estado.set('activas')
 
@@ -88,8 +100,9 @@ class FrameEntrega(ttk.Frame):
                        rowheight=25,
                        fieldbackground='white')
         
-        # SOLUCIÓN RADICAL: En vez de usar background, usamos foreground para distinguir tarjetas nuevas
-        # Las tarjetas nuevas tendrán texto en verde oscuro, evitando conflicto con la selección
+        # Tags de filas alternadas y tarjetas nuevas
+        self.tree.tag_configure('row_even', background='white')
+        self.tree.tag_configure('row_odd', background='#E6F4FA')  # Azul bondi claro
         self.tree.tag_configure('nueva', foreground='#006400')  # Verde oscuro para el texto
         
         # Configurar columnas con sus nombres y anchos específicos
@@ -182,7 +195,7 @@ class FrameEntrega(ttk.Frame):
             self._abonos_cache_por_tarjeta = {}
             codigos_para_prefetch = []
 
-            for tarjeta in tarjetas:
+            for idx, tarjeta in enumerate(tarjetas):
                 fecha_creacion_dt = datetime.fromisoformat(tarjeta['fecha_creacion'].replace('Z', '+00:00'))
                 fecha_tarjeta = fecha_creacion_dt.date()
                 es_nueva = fecha_tarjeta == fecha_actual
@@ -209,6 +222,7 @@ class FrameEntrega(ttk.Frame):
                 ).upper()
 
                 # El iid del item en el Treeview será el ID/código de la tarjeta
+                row_tag = 'row_odd' if (idx % 2) else 'row_even'
                 item_id = self.tree.insert('', 'end', values=(
                     ruta_str,
                     f"${tarjeta['monto']:,.0f}",
@@ -217,7 +231,7 @@ class FrameEntrega(ttk.Frame):
                     fecha_str,
                     tarjeta['cuotas'],
                     tarjeta['codigo']
-                ), iid=tarjeta.get('id', tarjeta.get('codigo')))
+                ), iid=tarjeta.get('id', tarjeta.get('codigo')), tags=(row_tag,))
 
                 # Acumular códigos de tarjeta para prefetch
                 try:
@@ -228,7 +242,11 @@ class FrameEntrega(ttk.Frame):
                     pass
                 
                 if es_nueva:
-                    self.tree.item(item_id, tags=('nueva',))
+                    # Añadir tag 'nueva' además del tag de fila
+                    current_tags = list(self.tree.item(item_id, 'tags') or [])
+                    if 'nueva' not in current_tags:
+                        current_tags.append('nueva')
+                    self.tree.item(item_id, tags=tuple(current_tags))
                 
                 if nueva_tarjeta_id and (tarjeta.get('id', tarjeta.get('codigo')) == nueva_tarjeta_id):
                     self.tree.selection_set(item_id)
@@ -295,10 +313,16 @@ class FrameEntrega(ttk.Frame):
             filas = []
             for idx, abono in enumerate(abonos):
                 try:
-                    fecha_dt = datetime.fromisoformat(str(abono['fecha']).replace('Z', '+00:00'))
-                    fecha_str = fecha_dt.strftime("%d/%m/%Y %H:%M")
+                    fecha_raw = str(abono.get('fecha', ''))
+                    # Normalizar 'Z' a offset explícito y parsear
+                    fecha_dt = datetime.fromisoformat(fecha_raw.replace('Z', '+00:00'))
+                    # Si viene sin tz, asumir UTC y convertir a local
+                    if fecha_dt.tzinfo is None:
+                        fecha_dt = fecha_dt.replace(tzinfo=timezone.utc)
+                    fecha_local = fecha_dt.astimezone()
+                    fecha_str = fecha_local.strftime("%d/%m/%Y %H:%M")
                 except Exception:
-                    fecha_str = str(abono.get('fecha', ''))
+                    fecha_str = fecha_raw
                 try:
                     monto_str = f"$ {Decimal(abono['monto']):,.0f}"
                 except Exception:
@@ -321,7 +345,7 @@ class FrameEntrega(ttk.Frame):
         padding_y = 8
 
         # Botón Ver
-        ttk.Button(self.frame_central, text="Ver", padding=(0, 5)).pack(
+        ttk.Button(self.frame_central, text="Ver", style='Bondi.TButton', padding=(0, 5)).pack(
             fill='x', padx=5, pady=padding_y)
 
         # Label para la fecha
@@ -337,9 +361,9 @@ class FrameEntrega(ttk.Frame):
         ttk.Label(frame_tipo, text="Cambiar Tipo").pack(anchor='w')
         
         # Combobox en la siguiente fila
-        self.combo_tipo = ttk.Combobox(frame_tipo, width=12,
+        self.combo_tipo = ttk.Combobox(frame_tipo, width=18,
                                       values=['activas', 'cancelada', 'pendiente'],
-                                      state="readonly")
+                                      state="readonly", style='Ocre.TCombobox')
         self.combo_tipo.pack(fill='x', pady=(5,0))
         self.combo_tipo.bind('<<ComboboxSelected>>', self.cambiar_tipo_tarjeta)
 
@@ -357,12 +381,12 @@ class FrameEntrega(ttk.Frame):
             ('Tarjeta Eliminar', self.eliminar_tarjeta_seleccionada),
             ('Tarjeta Buscar', None),
             ('Tarjeta Mover', None),
-            ('Tarjeta error', None)
+            ('Importar Tarjetas', self.importar_tarjetas)
         ]
 
         self.botones_accion = {}
         for texto, comando in botones:
-            btn = ttk.Button(self.frame_central, text=texto, padding=(0, 5), command=comando)
+            btn = ttk.Button(self.frame_central, text=texto, style='Bondi.TButton', padding=(0, 5), command=comando)
             btn.pack(fill='x', padx=5, pady=8)
             self.botones_accion[texto] = btn
 
@@ -544,10 +568,12 @@ class FrameEntrega(ttk.Frame):
             self.tabla_abonos.heading(col, text=headers[col])
             self.tabla_abonos.column(col, width=anchos[col], anchor='center')
         
-        # Configurar estilo de la tabla
+        # Configurar estilo de la tabla y alternado para abonos
         style = ttk.Style()
         style.configure('Treeview', rowheight=25)
         style.configure('Treeview.Heading', font=('Arial', 9, 'bold'))
+        self.tabla_abonos.tag_configure('row_even', background='white')
+        self.tabla_abonos.tag_configure('row_odd', background='#E6F4FA')
         
         # Scrollbars para la tabla
         scrollbar_y_abonos = ttk.Scrollbar(frame_tabla_abonos, orient="vertical", command=self.tabla_abonos.yview)
@@ -653,7 +679,14 @@ class FrameEntrega(ttk.Frame):
             codigo_tarjeta = self.lbl_codigo_tarjeta.cget('text')
             self.cargar_abonos_tarjeta(codigo_tarjeta)
 
-            # Intentar cargar resumen si existe el método en el cliente (compatibilidad)
+            # Intentar usar resumen desde caché para respuesta inmediata
+            resumen_cache = self._resumen_cache_por_tarjeta.get(codigo_tarjeta)
+            if resumen_cache:
+                self.actualizar_monto_cuota_defecto(resumen_cache)
+                self._render_resumen_labels_sin_autocancel(resumen_cache)
+                return
+
+            # Intentar cargar resumen desde API
             resumen = None
             if hasattr(self.api_client, 'get_tarjeta_resumen'):
                 try:
@@ -666,6 +699,12 @@ class FrameEntrega(ttk.Frame):
                 for label in self.info_labels.values():
                     label.config(text="--", foreground='black')
                 return
+
+            # Guardar en caché y actualizar UI
+            try:
+                self._resumen_cache_por_tarjeta[codigo_tarjeta] = resumen
+            except Exception:
+                pass
 
             self.actualizar_monto_cuota_defecto(resumen)
             tarjeta_fue_cancelada = self.actualizar_resumen_tarjeta(resumen)
@@ -694,14 +733,15 @@ class FrameEntrega(ttk.Frame):
                 return
 
             # Render desde caché (más antiguo -> más reciente)
-            for fila in filas_cache:
+            for idx, fila in enumerate(filas_cache):
                 abono_id, fecha_str, monto_str, item_index, cod = fila
+                row_tag = 'row_odd' if (idx % 2) else 'row_even'
                 self.tabla_abonos.insert('', 'end', iid=abono_id, values=(
                     fecha_str,
                     monto_str,
                     item_index,
                     cod
-                ))
+                ), tags=(row_tag,))
                 
         except Exception as e:
             logger.error(f"Error al cargar abonos desde API: {e}")
@@ -715,14 +755,15 @@ class FrameEntrega(ttk.Frame):
                 return
             for item in self.tabla_abonos.get_children():
                 self.tabla_abonos.delete(item)
-            for fila in filas_cache:
+            for idx, fila in enumerate(filas_cache):
                 abono_id, fecha_str, monto_str, item_index, cod = fila
+                row_tag = 'row_odd' if (idx % 2) else 'row_even'
                 self.tabla_abonos.insert('', 'end', iid=abono_id, values=(
                     fecha_str,
                     monto_str,
                     item_index,
                     cod
-                ))
+                ), tags=(row_tag,))
         except Exception as e:
             logger.debug(f"No se pudo renderizar abonos desde caché para {tarjeta_codigo}: {e}")
 
@@ -873,16 +914,23 @@ class FrameEntrega(ttk.Frame):
                     return
 
             # Usar código de tarjeta para el API de abonos
-            # Preparar fecha del usuario para el abono (dd/mm/yyyy -> ISO)
+            # Preparar fecha/hora LOCAL del usuario para el abono (dd/mm/yyyy -> ISO con zona horaria)
             fecha_txt = self.entry_fecha_abono.get().strip()
-            fecha_iso = None
+            from datetime import datetime as _dt
             try:
+                # Usar medio día local para evitar saltos de día por conversiones de zona horaria
+                tz_local = _dt.now().astimezone().tzinfo
                 if fecha_txt:
                     d, m, a = fecha_txt.split('/')
-                    from datetime import datetime as _dt
-                    fecha_iso = _dt(int(a), int(m), int(d), 12, 0, 0).isoformat()
+                    dt_local = _dt(int(a), int(m), int(d), 12, 0, 0, tzinfo=tz_local)
+                else:
+                    ahora = _dt.now().astimezone()
+                    dt_local = _dt(ahora.year, ahora.month, ahora.day, 12, 0, 0, tzinfo=ahora.tzinfo)
+                fecha_iso = dt_local.isoformat()
             except Exception:
-                fecha_iso = None
+                # Fallback: medio día local de hoy
+                ahora = _dt.now().astimezone()
+                fecha_iso = _dt(ahora.year, ahora.month, ahora.day, 12, 0, 0, tzinfo=ahora.tzinfo).isoformat()
 
             abono_data = {
                 "tarjeta_codigo": self.lbl_codigo_tarjeta.cget('text'),
@@ -894,6 +942,15 @@ class FrameEntrega(ttk.Frame):
             
             if nuevo_abono and 'id' in nuevo_abono:
                 self.entry_monto_abono.delete(0, tk.END)
+                # Invalidar caché de resumen de la tarjeta actual
+                try:
+                    cod = self.lbl_codigo_tarjeta.cget('text')
+                    if cod:
+                        self._resumen_cache_por_tarjeta.pop(cod, None)
+                        # Invalidar también el caché de abonos para forzar recarga desde API
+                        self._abonos_cache_por_tarjeta.pop(cod, None)
+                except Exception:
+                    pass
                 # Recargar todos los datos de forma diferida
                 self.cargar_datos_tarjeta_diferido(self.tarjeta_seleccionada)
                 
@@ -944,6 +1001,15 @@ class FrameEntrega(ttk.Frame):
                 resultado = self.api_client.delete_abono(self.abono_seleccionado)
                 
                 if resultado and resultado.get('ok'):
+                    # Invalidar caché de resumen de la tarjeta actual
+                    try:
+                        cod = self.lbl_codigo_tarjeta.cget('text')
+                        if cod:
+                            self._resumen_cache_por_tarjeta.pop(cod, None)
+                            # Invalidar también el caché de abonos para forzar recarga desde API
+                            self._abonos_cache_por_tarjeta.pop(cod, None)
+                    except Exception:
+                        pass
                     self.cargar_datos_tarjeta_diferido(self.tarjeta_seleccionada)
                     self.abono_seleccionado = None
                     messagebox.showinfo("Éxito", "Abono eliminado correctamente")
@@ -968,6 +1034,28 @@ class FrameEntrega(ttk.Frame):
             self.entry_monto_abono.insert(0, f"{valor_cuota:,.0f}")
         except Exception as e:
             logger.error(f"Error al actualizar monto por defecto desde resumen: {e}")
+
+    def _render_resumen_labels_sin_autocancel(self, resumen: dict):
+        """Actualiza labels de resumen sin ejecutar la lógica de autocancelación."""
+        try:
+            self.info_labels['Cuotas'].config(
+                text=f"{resumen.get('cuotas_restantes', 0)} cuota(s) de $ {Decimal(resumen.get('valor_cuota', 0)):,.0f}")
+            self.info_labels['Abono'].config(
+                text=f"$ {Decimal(resumen.get('total_abonado', 0)):,.0f}")
+            saldo_pendiente = Decimal(resumen.get('saldo_pendiente', 0))
+            saldo_color = '#d32f2f' if saldo_pendiente > 0 else '#2e7d32'
+            self.info_labels['Saldo'].config(
+                text=f"$ {saldo_pendiente:,.0f}", foreground=saldo_color)
+            cuotas_atrasadas = resumen.get('cuotas_pendientes_a_la_fecha', 0)
+            atraso_color = '#d32f2f' if cuotas_atrasadas > 0 else '#2e7d32'
+            self.info_labels['Cuotas pendientes a la fecha'].config(
+                text=str(cuotas_atrasadas), foreground=atraso_color)
+            dias_vencido = resumen.get('dias_pasados_cancelacion', 0)
+            vencido_color = '#d32f2f' if dias_vencido > 0 else '#2e7d32'
+            self.info_labels['Días pasados de cancelación'].config(
+                text=str(dias_vencido), foreground=vencido_color)
+        except Exception as e:
+            logger.debug(f"No se pudo renderizar resumen desde caché: {e}")
     
     def on_click_monto(self, event=None):
         """Selecciona todo el texto cuando se hace clic en el campo de monto"""
@@ -1107,3 +1195,337 @@ class FrameEntrega(ttk.Frame):
             
             
             
+    def importar_tarjetas(self):
+        """Importa tarjetas en lote desde un archivo CSV o XLSX.
+        Requiere que haya un empleado seleccionado para asociar las tarjetas.
+        """
+        try:
+            empleado_nombre = self.combo_empleados.get().strip()
+            if not empleado_nombre:
+                messagebox.showwarning("Empleado requerido", "Seleccione un empleado antes de importar.")
+                return
+            empleado_id = self.empleados_dict.get(empleado_nombre)
+            if not empleado_id:
+                messagebox.showerror("Empleado inválido", "No se pudo resolver la identificación del empleado seleccionado.")
+                return
+
+            file_path = filedialog.askopenfilename(
+                title="Seleccionar archivo de importación",
+                filetypes=[
+                    ("Archivos soportados", "*.csv *.xlsx"),
+                    ("CSV", "*.csv"),
+                    ("Excel", "*.xlsx"),
+                    ("Todos", "*.*"),
+                ]
+            )
+            if not file_path:
+                return
+
+            # Leer datos
+            try:
+                rows = self._leer_archivo_importacion(file_path)
+            except ImportError:
+                messagebox.showerror(
+                    "Dependencia faltante",
+                    "Para archivos .xlsx se requiere 'openpyxl'. Convierta a CSV o instale openpyxl."
+                )
+                return
+            except Exception as e:
+                logger.error(f"Error leyendo archivo de importación: {e}")
+                messagebox.showerror("Error", f"No se pudo leer el archivo: {e}")
+                return
+
+            if not rows:
+                messagebox.showwarning("Archivo vacío", "No se encontraron filas para importar.")
+                return
+
+            # Validar columnas requeridas
+            requeridas_cliente = {"identificacion", "nombre", "apellido"}
+            requeridas_tarjeta = {"ruta", "monto", "interes", "cuotas"}
+            cols_presentes = set(rows[0].keys())
+            faltantes = (requeridas_cliente | requeridas_tarjeta) - cols_presentes
+            if faltantes:
+                messagebox.showerror("Columnas faltantes", f"Faltan columnas obligatorias: {', '.join(sorted(faltantes))}")
+                return
+
+            # Según aclaración: el 'monto' siempre viene como TOTAL con interés incluido
+            monto_es_total = True
+
+            resumen = {
+                "clientes_creados": 0,
+                "tarjetas_creadas": 0,
+                "abonos_creados": 0,
+                "errores": 0,
+            }
+            errores_detalle = []
+
+            for idx, raw in enumerate(rows, start=1):
+                try:
+                    identificacion = str(raw.get("identificacion") or "").strip()
+                    nombre = str(raw.get("nombre") or "").strip().upper()
+                    apellido = str(raw.get("apellido") or "").strip().upper()
+                    telefono = str(raw.get("telefono") or "").strip() or None
+                    direccion = str(raw.get("direccion") or "").strip().upper() or None
+                    ruta_raw = (raw.get("ruta") if raw.get("ruta") is not None else "").__str__().strip()
+                    estado_raw = str(raw.get("estado") or "").strip().lower()
+                    fecha_txt = str(raw.get("fecha") or "").strip()
+                    interes_raw = raw.get("interes")
+                    cuotas_raw = raw.get("cuotas")
+                    monto_raw = raw.get("monto")
+                    abonado_raw = raw.get("abonado")
+
+                    # Validaciones básicas
+                    if not identificacion or not nombre or not apellido:
+                        raise ValueError("Fila sin datos mínimos de cliente (identificacion, nombre, apellido)")
+
+                    interes = self._to_int(interes_raw, name="interes")
+                    cuotas = self._to_int(cuotas_raw, name="cuotas")
+                    if cuotas <= 0:
+                        raise ValueError("'cuotas' debe ser > 0")
+                    monto_in = self._to_decimal(monto_raw, name="monto")
+                    # Convertir a prestado (siempre viene total)
+                    base = (1 + (interes or 0) / 100.0)
+                    if base <= 0:
+                        raise ValueError("interes inválido para convertir monto total")
+                    monto_prestado = float(monto_in) / base
+
+                    numero_ruta = self._parse_ruta(ruta_raw)
+                    estado_norm = self._normalizar_estado(estado_raw) if estado_raw else "activas"
+                    abonado = float(self._to_decimal(abonado_raw, allow_empty=True) or 0)
+
+                    # fecha_creacion obligatoria para activas
+                    fecha_creacion = None
+                    if estado_norm == "activas":
+                        if not fecha_txt:
+                            raise ValueError("'fecha' es obligatoria para tarjetas activas")
+                        try:
+                            # Acepta dd/mm/yyyy o yyyy-mm-dd
+                            if "/" in fecha_txt:
+                                d, m, a = fecha_txt.split("/")
+                                from datetime import datetime as _dt
+                                fecha_creacion = _dt(int(a), int(m), int(d), 12, 0, 0)
+                            else:
+                                from datetime import datetime as _dt
+                                dt = _dt.fromisoformat(fecha_txt)
+                                fecha_creacion = _dt(dt.year, dt.month, dt.day, 12, 0, 0)
+                        except Exception:
+                            raise ValueError("'fecha' con formato inválido (use dd/mm/yyyy o yyyy-mm-dd)")
+
+                    # Upsert Cliente
+                    cliente_existente = None
+                    try:
+                        cliente_existente = self.api_client.get_cliente(identificacion)
+                    except Exception:
+                        cliente_existente = None
+                    if not cliente_existente:
+                        try:
+                            creado = self.api_client.create_cliente({
+                                "identificacion": identificacion,
+                                "nombre": nombre,
+                                "apellido": apellido,
+                                "telefono": telefono,
+                                "direccion": direccion,
+                            })
+                            if not (isinstance(creado, dict) and creado.get("identificacion") == identificacion):
+                                # Si la API devolvió algo inesperado, verificar si ya existe ahora
+                                try:
+                                    chk = self.api_client.get_cliente(identificacion)
+                                except Exception:
+                                    chk = None
+                                if chk and isinstance(chk, dict) and chk.get("identificacion") == identificacion:
+                                    # Considerar como existente y continuar
+                                    pass
+                                else:
+                                    raise RuntimeError("No se pudo crear el cliente")
+                            else:
+                                resumen["clientes_creados"] += 1
+                        except Exception as ce:
+                            # Si falló por duplicado (cliente ya existe), intentar continuar
+                            try:
+                                chk = self.api_client.get_cliente(identificacion)
+                            except Exception:
+                                chk = None
+                            if chk and isinstance(chk, dict) and chk.get("identificacion") == identificacion:
+                                # Cliente ya existente: continuar sin contar como error
+                                pass
+                            else:
+                                raise
+
+                    # Crear Tarjeta
+                    nueva_tarjeta = self.api_client.create_tarjeta({
+                        "cliente_identificacion": identificacion,
+                        "empleado_identificacion": empleado_id,
+                        "monto": float(monto_prestado),
+                        "cuotas": int(cuotas),
+                        "interes": int(interes),
+                        "numero_ruta": float(numero_ruta) if numero_ruta is not None else None,
+                        "observaciones": None,
+                        "fecha_creacion": fecha_creacion,
+                    })
+                    codigo_tarjeta = nueva_tarjeta.get("codigo") if isinstance(nueva_tarjeta, dict) else None
+                    if not codigo_tarjeta:
+                        raise RuntimeError("No se pudo crear la tarjeta")
+                    resumen["tarjetas_creadas"] += 1
+
+                    # Actualizar estado si viene definido y es distinto a 'activas'
+                    if estado_norm and estado_norm != "activas":
+                        try:
+                            self.api_client.update_tarjeta(codigo_tarjeta, {"estado": estado_norm})
+                        except Exception:
+                            # No bloquear por fallo de estado
+                            pass
+
+                    # Crear abono inicial si aplica
+                    if abonado > 0:
+                        try:
+                            _ = self.api_client.create_abono({
+                                "tarjeta_codigo": codigo_tarjeta,
+                                "monto": float(abonado),
+                                "metodo_pago": "efectivo",
+                            })
+                            resumen["abonos_creados"] += 1
+                        except Exception:
+                            errores_detalle.append(f"Fila {idx}: abono falló para tarjeta {codigo_tarjeta}")
+                            resumen["errores"] += 1
+
+                except Exception as e:
+                    resumen["errores"] += 1
+                    if len(errores_detalle) < 10:
+                        errores_detalle.append(f"Fila {idx}: {e}")
+
+            # Actualizar UI
+            self.mostrar_tabla_tarjetas()
+
+            # Mostrar resumen
+            detalle_txt = "\n".join(errores_detalle)
+            mensaje = (
+                f"Clientes creados: {resumen['clientes_creados']}\n"
+                f"Tarjetas creadas: {resumen['tarjetas_creadas']}\n"
+                f"Abonos creados: {resumen['abonos_creados']}\n"
+                f"Errores: {resumen['errores']}"
+            )
+            if detalle_txt:
+                mensaje += f"\n\nDetalles (primeros 10):\n{detalle_txt}"
+            messagebox.showinfo("Importación finalizada", mensaje)
+
+        except Exception as e:
+            logger.error(f"Error en importación masiva: {e}")
+            messagebox.showerror("Error", f"Error en importación: {e}")
+
+    def _leer_archivo_importacion(self, path: str) -> list:
+        """Lee un archivo CSV o XLSX y devuelve una lista de dicts con claves normalizadas.
+        Claves esperadas: ruta, identificacion, nombre, apellido, fecha, monto, cuotas, abonado, estado, telefono, direccion, interes
+        """
+        import os
+        ext = os.path.splitext(path)[1].lower()
+        if ext == ".csv":
+            return self._leer_csv(path)
+        elif ext == ".xlsx":
+            # Requiere openpyxl
+            try:
+                import openpyxl  # noqa: F401
+            except Exception as e:
+                raise ImportError("openpyxl no disponible")
+            return self._leer_xlsx(path)
+        else:
+            raise ValueError("Formato no soportado. Use CSV o XLSX")
+
+    def _normalizar_headers(self, headers: list) -> list:
+        norm = []
+        for h in headers:
+            if h is None:
+                norm.append("")
+                continue
+            s = str(h).strip().lower()
+            norm.append(s)
+        return norm
+
+    def _leer_csv(self, path: str) -> list:
+        import csv
+        rows = []
+        with open(path, "r", encoding="utf-8-sig", newline="") as f:
+            reader = csv.reader(f)
+            headers = next(reader, None)
+            if not headers:
+                return []
+            headers = self._normalizar_headers(headers)
+            for r in reader:
+                if not any(str(c or "").strip() for c in r):
+                    continue
+                row = {}
+                for i, h in enumerate(headers):
+                    if not h:
+                        continue
+                    row[h] = r[i] if i < len(r) else None
+                rows.append(row)
+        return rows
+
+    def _leer_xlsx(self, path: str) -> list:
+        import openpyxl
+        wb = openpyxl.load_workbook(path, data_only=True, read_only=True)
+        ws = wb.active
+        rows = []
+        headers = None
+        for ridx, row in enumerate(ws.iter_rows(values_only=True), start=1):
+            if ridx == 1:
+                headers = self._normalizar_headers(list(row or []))
+                continue
+            if not headers:
+                break
+            if not any(str(c or "").strip() for c in (row or [])):
+                continue
+            d = {}
+            for i, h in enumerate(headers):
+                if not h:
+                    continue
+                val = row[i] if i < len(row or []) else None
+                d[h] = val
+            rows.append(d)
+        return rows
+
+    def _to_decimal(self, value, name: str = "valor", allow_empty: bool = False):
+        from decimal import Decimal as _Dec, InvalidOperation
+        if value is None or (isinstance(value, str) and value.strip() == ""):
+            if allow_empty:
+                return None
+            raise ValueError(f"'{name}' vacío")
+        if isinstance(value, (int, float)):
+            return _Dec(str(value))
+        s = str(value).replace("$", "").replace(",", "").replace(" ", "").replace(".", "", 0)
+        # Conserva último punto como separador decimal si aplica
+        try:
+            return _Dec(str(value).replace("$", "").replace(",", "").replace(" ", ""))
+        except InvalidOperation:
+            raise ValueError(f"'{name}' no es numérico")
+
+    def _to_int(self, value, name: str = "valor") -> int:
+        if value is None or (isinstance(value, str) and value.strip() == ""):
+            raise ValueError(f"'{name}' vacío")
+        try:
+            if isinstance(value, float):
+                return int(round(value))
+            return int(str(value).strip())
+        except Exception:
+            raise ValueError(f"'{name}' no es entero válido")
+
+    def _parse_ruta(self, ruta_raw: str):
+        try:
+            if not ruta_raw:
+                return None
+            r = str(ruta_raw).strip()
+            if r.isdigit():
+                return int(r)
+            # Intentar float entero
+            return int(float(r))
+        except Exception:
+            return None
+
+    def _normalizar_estado(self, estado: str) -> str:
+        e = (estado or "").strip().lower()
+        if e in ("activa", "activas"):
+            return "activas"
+        if e in ("cancelada", "canceladas"):
+            return "cancelada"
+        if e in ("pendiente", "pendientes"):
+            return "pendiente"
+        return "activas"
