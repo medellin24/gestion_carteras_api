@@ -325,46 +325,50 @@ def crear_tarjeta(
         with DatabasePool.get_cursor() as cursor:
             # Fecha efectiva para código y registro
             target_dt = fecha_creacion or datetime.now()
-            target_date = target_dt.date()
-            # Generar código único: AAMMDD-XXXX-NNN (formato más corto)
-            fecha = target_dt.strftime('%y%m%d')  # Formato de año con 2 dígitos
-            ultimos_digitos = cliente_identificacion[-4:]  # Últimos 4 dígitos de la identificación
-            
-            # Obtener último número secuencial del día para este cliente
-            cursor.execute("""
-                SELECT COUNT(*) + 1
-                FROM tarjetas
-                WHERE cliente_identificacion = %s
-                AND DATE(fecha_creacion) = %s
-            """, (cliente_identificacion, target_date))
-            secuencial = cursor.fetchone()[0]
-            
-            # Crear código único con formato simplificado
-            codigo = f"{fecha}-{ultimos_digitos}-{secuencial:03d}"
-            
-            # Preparar los valores para la inserción usando fecha local
-            query = '''
-                INSERT INTO tarjetas (
-                    codigo, cliente_identificacion, empleado_identificacion,
-                    numero_ruta, monto, cuotas, interes,
-                    estado, observaciones, fecha_creacion
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, 'activas', %s, %s)
-                RETURNING codigo
-            '''
-            
-            cursor.execute(query, (
-                codigo,
-                cliente_identificacion,
-                empleado_identificacion,
-                numero_ruta,  # Guardamos como float en la base de datos
-                monto,
-                cuotas,
-                interes,
-                observaciones,
-                target_dt  # Usar fecha/hora efectiva
-            ))
-            
-            codigo_tarjeta = cursor.fetchone()[0]
+            # Prefijo AAMMDD-XXXX-
+            fecha_pref = target_dt.strftime('%y%m%d')
+            ultimos = cliente_identificacion[-4:]
+            prefix = f"{fecha_pref}-{ultimos}-"
+
+            # Calcular punto de inicio consultando el máximo existente con ese prefijo
+            try:
+                cursor.execute("SELECT MAX(codigo) FROM tarjetas WHERE codigo LIKE %s", (prefix + '%',))
+                row = cursor.fetchone()
+                start_n = int(row[0][-3:]) + 1 if row and row[0] else 1
+            except Exception:
+                start_n = 1
+
+            # Intentar insertar de forma atómica evitando colisiones de PK
+            for n in range(start_n, 1000):
+                codigo_try = f"{prefix}{n:03d}"
+                query = '''
+                    INSERT INTO tarjetas (
+                        codigo, cliente_identificacion, empleado_identificacion,
+                        numero_ruta, monto, cuotas, interes,
+                        estado, observaciones, fecha_creacion
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, 'activas', %s, %s)
+                    ON CONFLICT (codigo) DO NOTHING
+                    RETURNING codigo
+                '''
+                cursor.execute(query, (
+                    codigo_try,
+                    cliente_identificacion,
+                    empleado_identificacion,
+                    numero_ruta,
+                    monto,
+                    cuotas,
+                    interes,
+                    observaciones,
+                    target_dt
+                ))
+                got = cursor.fetchone()
+                if got and got[0]:
+                    codigo_tarjeta = got[0]
+                    break
+            else:
+                # no se pudo encontrar un código libre
+                logger.error("No hay secuencias disponibles para prefijo %s", prefix)
+                return None
             
             # Limpiar el caché después de crear la tarjeta
             _cache.clear()
