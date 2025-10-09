@@ -299,7 +299,8 @@ def crear_tarjeta(
     numero_ruta: Optional[Decimal] = None,
     observaciones: Optional[str] = None,
     posicion_anterior: Optional[Decimal] = None,
-    posicion_siguiente: Optional[Decimal] = None
+    posicion_siguiente: Optional[Decimal] = None,
+    fecha_creacion: Optional[datetime] = None
 ) -> Optional[str]:
     try:
         # Validar campos requeridos
@@ -322,8 +323,11 @@ def crear_tarjeta(
             )
 
         with DatabasePool.get_cursor() as cursor:
+            # Fecha efectiva para código y registro
+            target_dt = fecha_creacion or datetime.now()
+            target_date = target_dt.date()
             # Generar código único: AAMMDD-XXXX-NNN (formato más corto)
-            fecha = datetime.now().strftime('%y%m%d')  # Formato de año con 2 dígitos
+            fecha = target_dt.strftime('%y%m%d')  # Formato de año con 2 dígitos
             ultimos_digitos = cliente_identificacion[-4:]  # Últimos 4 dígitos de la identificación
             
             # Obtener último número secuencial del día para este cliente
@@ -332,7 +336,7 @@ def crear_tarjeta(
                 FROM tarjetas
                 WHERE cliente_identificacion = %s
                 AND DATE(fecha_creacion) = %s
-            """, (cliente_identificacion, date.today()))
+            """, (cliente_identificacion, target_date))
             secuencial = cursor.fetchone()[0]
             
             # Crear código único con formato simplificado
@@ -357,7 +361,7 @@ def crear_tarjeta(
                 cuotas,
                 interes,
                 observaciones,
-                datetime.now()  # Usar fecha/hora local
+                target_dt  # Usar fecha/hora efectiva
             ))
             
             codigo_tarjeta = cursor.fetchone()[0]

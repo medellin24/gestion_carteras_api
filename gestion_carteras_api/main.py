@@ -1257,23 +1257,15 @@ def create_tarjeta_endpoint(tarjeta: TarjetaCreate, principal: dict = Depends(ge
             numero_ruta=Decimal(str(tarjeta.numero_ruta)) if tarjeta.numero_ruta is not None else None,
             observaciones=tarjeta.observaciones,
             posicion_anterior=Decimal(str(tarjeta.posicion_anterior)) if tarjeta.posicion_anterior is not None else None,
-            posicion_siguiente=Decimal(str(tarjeta.posicion_siguiente)) if tarjeta.posicion_siguiente is not None else None
+            posicion_siguiente=Decimal(str(tarjeta.posicion_siguiente)) if tarjeta.posicion_siguiente is not None else None,
+            fecha_creacion=tarjeta.fecha_creacion
         )
         if not codigo:
             raise HTTPException(status_code=400, detail="No se pudo crear la tarjeta.")
         db_tarjeta = obtener_tarjeta_por_codigo(codigo)
         if db_tarjeta is None:
             raise HTTPException(status_code=500, detail="Tarjeta creada pero no encontrada.")
-        # Si se solicitó una fecha_creacion específica, actualizar inmediatamente
-        try:
-            if tarjeta.fecha_creacion is not None:
-                _ = actualizar_tarjeta(
-                    tarjeta_codigo=codigo,
-                    fecha_creacion=tarjeta.fecha_creacion,
-                )
-                db_tarjeta = obtener_tarjeta_por_codigo(codigo) or db_tarjeta
-        except Exception:
-            pass
+        # Nota: fecha_creacion ya fue aplicada en crear_tarjeta si vino en el payload
         # Adaptar a esquema Tarjeta (añadir cliente anidado si aplica)
         db_tarjeta["cliente"] = {
             "identificacion": db_tarjeta.get("cliente_identificacion", tarjeta.cliente_identificacion),
