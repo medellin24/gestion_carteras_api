@@ -32,19 +32,13 @@ jobs:
         run: |
           aws ecr get-login-password --region "$AWS_REGION" | docker login --username AWS --password-stdin "${ECR_URI%/*}"
 
-      - name: Set image tags (prod)
+      - name: Build Docker image (:prod)
         run: |
-          echo "IMAGE_TAG=${GITHUB_SHA}" >> $GITHUB_ENV
-          echo "ALIAS_TAG=prod" >> $GITHUB_ENV
+          docker build -t "$ECR_URI:prod" .
 
-      - name: Build Docker image
+      - name: Push to ECR (:prod)
         run: |
-          docker build -t "$ECR_URI:$IMAGE_TAG" -t "$ECR_URI:$ALIAS_TAG" .
-
-      - name: Push to ECR
-        run: |
-          docker push "$ECR_URI:$IMAGE_TAG"
-          docker push "$ECR_URI:$ALIAS_TAG"
+          docker push "$ECR_URI:prod"
 
       - name: Update App Runner service to prod tag
         run: |
@@ -52,7 +46,7 @@ jobs:
             --service-arn "$APP_RUNNER_SERVICE_ARN" \
             --source-configuration '{
               "ImageRepository": {
-                "ImageIdentifier": "'"$ECR_URI:$ALIAS_TAG"'",
+                "ImageIdentifier": "'"$ECR_URI:prod"'",
                 "ImageRepositoryType": "ECR",
                 "ImageConfiguration": {"Port": "8000"}
               }
