@@ -1,12 +1,11 @@
-name: Backend - Build to ECR and Update App Runner
+name: Backend (staging) - Build to ECR and Update App Runner
 
 on:
   push:
-    branches: [ main ]
+    branches: [ develop ]
     paths:
       - 'Dockerfile'
       - 'gestion_carteras_api/**'
-  workflow_dispatch:
 
 jobs:
   build-and-deploy:
@@ -15,8 +14,8 @@ jobs:
       contents: read
     env:
       AWS_REGION: ${{ secrets.AWS_REGION }}
-      ECR_URI: ${{ secrets.ECR_URI }} # prod
-      APP_RUNNER_SERVICE_ARN: ${{ secrets.APP_RUNNER_SERVICE_ARN }} # prod
+      ECR_URI: ${{ secrets.ECR_URI_STAGING }}
+      APP_RUNNER_SERVICE_ARN: ${{ secrets.APP_RUNNER_SERVICE_ARN_STAGING }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -32,10 +31,10 @@ jobs:
         run: |
           aws ecr get-login-password --region "$AWS_REGION" | docker login --username AWS --password-stdin "${ECR_URI%/*}"
 
-      - name: Set image tags (prod)
+      - name: Set image tags (staging)
         run: |
           echo "IMAGE_TAG=${GITHUB_SHA}" >> $GITHUB_ENV
-          echo "ALIAS_TAG=prod" >> $GITHUB_ENV
+          echo "ALIAS_TAG=staging" >> $GITHUB_ENV
 
       - name: Build Docker image
         run: |
@@ -46,7 +45,7 @@ jobs:
           docker push "$ECR_URI:$IMAGE_TAG"
           docker push "$ECR_URI:$ALIAS_TAG"
 
-      - name: Update App Runner service to prod tag
+      - name: Update App Runner service to staging tag
         run: |
           aws apprunner update-service \
             --service-arn "$APP_RUNNER_SERVICE_ARN" \
@@ -57,4 +56,5 @@ jobs:
                 "ImageConfiguration": {"Port": "8000"}
               }
             }'
+
 
