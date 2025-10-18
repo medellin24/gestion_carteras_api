@@ -33,6 +33,10 @@ jobs:
         with:
           mask-password: true
 
+      - name: Normalize ECR repo to lowercase
+        run: |
+          echo "ECR_REPO=$(echo \"$ECR_URI\" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')" >> $GITHUB_ENV
+
       - name: Set image tags (staging)
         run: |
           echo "IMAGE_TAG=${GITHUB_SHA}" >> $GITHUB_ENV
@@ -40,12 +44,12 @@ jobs:
 
       - name: Build Docker image
         run: |
-          docker build -t "$ECR_URI:$IMAGE_TAG" -t "$ECR_URI:$ALIAS_TAG" .
+          docker build -t "$ECR_REPO:$IMAGE_TAG" -t "$ECR_REPO:$ALIAS_TAG" .
 
       - name: Push to ECR
         run: |
-          docker push "$ECR_URI:$IMAGE_TAG"
-          docker push "$ECR_URI:$ALIAS_TAG"
+          docker push "$ECR_REPO:$IMAGE_TAG"
+          docker push "$ECR_REPO:$ALIAS_TAG"
 
       - name: Update App Runner service to staging tag
         run: |
@@ -53,7 +57,7 @@ jobs:
             --service-arn "$APP_RUNNER_SERVICE_ARN" \
             --source-configuration '{
               "ImageRepository": {
-                "ImageIdentifier": "'"$ECR_URI:$ALIAS_TAG"'",
+                "ImageIdentifier": "'"$ECR_REPO:$ALIAS_TAG"'",
                 "ImageRepositoryType": "ECR",
                 "ImageConfiguration": {"Port": "8000"}
               }
