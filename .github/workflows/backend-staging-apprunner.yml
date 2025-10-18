@@ -33,9 +33,18 @@ jobs:
         with:
           mask-password: true
 
-      - name: Normalize ECR repo to lowercase
+      - name: Sanitize and validate ECR URI
         run: |
-          echo "ECR_REPO=$(echo \"$ECR_URI\" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')" >> $GITHUB_ENV
+          RAW="$ECR_URI"
+          # minúsculas
+          RAW=$(echo "$RAW" | tr '[:upper:]' '[:lower:]')
+          # quitar comillas simples y dobles
+          RAW=$(echo "$RAW" | sed 's/\"//g; s/'"'"'//g')
+          # trim espacios
+          RAW=$(echo "$RAW" | xargs)
+          # validar formato repo ECR
+          echo "$RAW" | grep -Eq '^[a-z0-9]+\.dkr\.ecr\.[a-z0-9-]+\.amazonaws\.com/.+' || { echo "ECR_URI inválida: valor no parece un repositorio ECR"; exit 1; }
+          echo "ECR_REPO=$RAW" >> $GITHUB_ENV
 
       - name: Set image tags (staging)
         run: |
