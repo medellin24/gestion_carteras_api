@@ -29,8 +29,9 @@ jobs:
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Login to Amazon ECR
-        run: |
-          aws ecr get-login-password --region "$AWS_REGION" | docker login --username AWS --password-stdin "${ECR_URI%/*}"
+        uses: aws-actions/amazon-ecr-login@v2
+        with:
+          mask-password: true
 
       - name: Set image tags (staging)
         run: |
