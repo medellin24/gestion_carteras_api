@@ -5,6 +5,7 @@ from typing import List, Optional
 import logging
 from decimal import Decimal
 from datetime import date
+from zoneinfo import ZoneInfo
 from time import perf_counter as _pc
 
 """Importaciones del paquete interno (usar rutas relativas del paquete)."""
@@ -82,12 +83,34 @@ def _enforce_empleado_scope(principal: dict, empleado_id: str):
         return
     raise HTTPException(status_code=403, detail="Acceso denegado para este empleado")
 
+def _day_bounds_utc_str(fecha_str: str, tz_name: str):
+    """Devuelve (inicio_utc, fin_utc) como strings ISO para filtrar un día local en UTC."""
+    try:
+        from datetime import datetime as _dt, timezone as _tz
+        tz = ZoneInfo(tz_name or 'UTC')
+        d = _dt.strptime(fecha_str, '%Y-%m-%d').date()
+        start_local = _dt(d.year, d.month, d.day, 0, 0, 0, tzinfo=tz)
+        end_local = _dt(d.year, d.month, d.day, 23, 59, 59, 999000, tzinfo=tz)
+        start_utc = start_local.astimezone(_tz.utc)
+        end_utc = end_local.astimezone(_tz.utc)
+        return (start_utc, end_utc)
+    except Exception:
+        # Fallback seguro a día UTC si falla el parseo
+        from datetime import datetime as _dt, timezone as _tz
+        d = _dt.strptime(fecha_str, '%Y-%m-%d').date()
+        start_utc = _dt(d.year, d.month, d.day, 0, 0, 0, tzinfo=_tz.utc)
+        end_utc = _dt(d.year, d.month, d.day, 23, 59, 59, 999000, tzinfo=_tz.utc)
+        return (start_utc, end_utc)
+
 # --- Evento de Arranque (Startup) ---
 @app.on_event("startup")
 def startup_event():
     logger.info("Iniciando la aplicación y el pool de conexiones a la base de datos...")
     try:
-        DatabasePool.initialize(**DB_CONFIG)
+        # Permitir configurar tamaño del pool por entorno
+        _minconn = int(os.getenv("POOL_MINCONN", "1"))
+        _maxconn = int(os.getenv("POOL_MAXCONN", "10"))
+        DatabasePool.initialize(minconn=_minconn, maxconn=_maxconn, **DB_CONFIG)
         logger.info("Pool de conexiones a la base de datos inicializado con éxito.")
     except Exception as e:
         logger.critical(f"Error crítico al inicializar el pool de conexiones: {e}", exc_info=True)
@@ -202,6 +225,9 @@ def get_empleado_permissions_endpoint(identificacion: str, principal: dict = Dep
     _enforce_empleado_scope(principal, identificacion)
     try:
         logger.info(f"GET permisos empleado: {identificacion}")
+        tz_name = principal.get("timezone") or "UTC"
+        from datetime import datetime as _dt
+        today_local = _dt.now(ZoneInfo(tz_name)).date()
         with DatabasePool.get_cursor() as cur:
             cur.execute(
                 """
@@ -214,10 +240,18 @@ def get_empleado_permissions_endpoint(identificacion: str, principal: dict = Dep
             row = cur.fetchone()
             if not row:
                 raise HTTPException(status_code=404, detail="Empleado no encontrado")
+            descargar = bool(row[0])
+            subir = bool(row[1])
+            fecha_accion = row[2]
+            # Derivados por zona: se puede subir si tiene flag subir y no ha subido hoy local
+            puede_subir = bool(subir and (not fecha_accion or fecha_accion < today_local))
+            puede_descargar = bool(descargar)
             return {
-                "descargar": bool(row[0]),
-                "subir": bool(row[1]),
-                "fecha_accion": row[2].isoformat() if row[2] else None,
+                "descargar": descargar,
+                "subir": subir,
+                "fecha_accion": fecha_accion.isoformat() if fecha_accion else None,
+                "puede_subir": puede_subir,
+                "puede_descargar": puede_descargar,
             }
     except HTTPException:
         raise
@@ -231,6 +265,9 @@ def set_empleado_permissions_endpoint(identificacion: str, body: EmpleadoPermsUp
     _enforce_empleado_scope(principal, identificacion)
     try:
         logger.info(f"POST permisos empleado: {identificacion} body={body.dict()}")
+        tz_name = principal.get("timezone") or "UTC"
+        from datetime import datetime as _dt
+        today_local = _dt.now(ZoneInfo(tz_name)).date()
         sets = []
         params = []
         if body.descargar is not None:
@@ -260,10 +297,13 @@ def set_empleado_permissions_endpoint(identificacion: str, body: EmpleadoPermsUp
             )
             row = cur.fetchone()
             logger.info(f"Permisos actualizados {identificacion}: descargar={row[0]}, subir={row[1]}, fecha_accion={row[2]}")
+            descargar = bool(row[0]); subir = bool(row[1]); fecha_accion = row[2]
             return {
-                "descargar": bool(row[0]),
-                "subir": bool(row[1]),
-                "fecha_accion": row[2].isoformat() if row[2] else None,
+                "descargar": descargar,
+                "subir": subir,
+                "fecha_accion": fecha_accion.isoformat() if fecha_accion else None,
+                "puede_subir": bool(subir and (not fecha_accion or fecha_accion < today_local)),
+                "puede_descargar": bool(descargar),
             }
     except HTTPException:
         raise
@@ -598,6 +638,9 @@ def read_base_by_empleado_fecha_endpoint(empleado_id: str, fecha: str, principal
     Obtiene la base de un empleado en una fecha específica.
     """
     try:
+        tz_name = principal.get('timezone') or 'UTC'
+        start_utc, end_utc = _day_bounds_utc_str(fecha, tz_name)
+        # La tabla bases guarda fecha (date) y/o fecha_creacion (timestamp). Usar la función actual por date exacta.
         from datetime import datetime as _dt
         fecha_obj = _dt.strptime(fecha, '%Y-%m-%d').date()
         base = obtener_base(empleado_id, fecha_obj)
@@ -789,11 +832,21 @@ def read_gastos_by_empleado_fecha_endpoint(empleado_id: str, fecha: str, princip
     Obtiene todos los gastos de un empleado en una fecha específica.
     """
     try:
-        from datetime import datetime
-        fecha_obj = datetime.strptime(fecha, '%Y-%m-%d').date()
-        
-        from .database.gastos_db import obtener_gastos_por_fecha_empleado
-        gastos_tuplas = obtener_gastos_por_fecha_empleado(fecha_obj, empleado_id)
+        tz_name = principal.get('timezone') or 'UTC'
+        start_utc, end_utc = _day_bounds_utc_str(fecha, tz_name)
+        from .database.connection_pool import DatabasePool as _DB
+        gastos_tuplas = []
+        with _DB.get_cursor() as cur:
+            cur.execute(
+                '''
+                SELECT id, tipo, valor, observacion, fecha_creacion
+                FROM gastos
+                WHERE empleado_identificacion = %s
+                  AND fecha_creacion >= %s AND fecha_creacion <= %s
+                ORDER BY fecha_creacion DESC
+                ''', (empleado_id, start_utc, end_utc)
+            )
+            gastos_tuplas = cur.fetchall() or []
         
         # Convertir tuplas a diccionarios para FastAPI
         gastos = []
@@ -806,7 +859,7 @@ def read_gastos_by_empleado_fecha_endpoint(empleado_id: str, fecha: str, princip
                 'observacion': row[3],
                 'fecha_creacion': row[4],
                 'empleado_identificacion': empleado_id,
-                'fecha': fecha_obj
+                'fecha': fecha
             }
             gastos.append(gasto)
         return gastos
@@ -825,8 +878,8 @@ def read_tarjetas_canceladas_del_dia_endpoint(empleado_id: str, fecha: str, prin
     Lista las tarjetas canceladas en la fecha indicada para un empleado.
     """
     try:
-        from datetime import datetime as _dt
-        fecha_obj = _dt.strptime(fecha, '%Y-%m-%d').date()
+        tz_name = principal.get('timezone') or 'UTC'
+        start_utc, end_utc = _day_bounds_utc_str(fecha, tz_name)
         tarjetas: List[dict] = []
         with DatabasePool.get_cursor() as cursor:
             cursor.execute(
@@ -849,9 +902,9 @@ def read_tarjetas_canceladas_del_dia_endpoint(empleado_id: str, fecha: str, prin
                 JOIN clientes c ON c.identificacion = t.cliente_identificacion
                 WHERE t.empleado_identificacion = %s
                   AND t.estado = 'cancelada'
-                  AND DATE(t.fecha_cancelacion) = %s
+                  AND t.fecha_cancelacion >= %s AND t.fecha_cancelacion <= %s
                 ORDER BY t.numero_ruta
-                ''', (empleado_id, fecha_obj)
+                ''', (empleado_id, start_utc, end_utc)
             )
             for row in cursor.fetchall() or []:
                 tarjeta = {
@@ -887,8 +940,8 @@ def read_tarjetas_nuevas_del_dia_endpoint(empleado_id: str, fecha: str, principa
     Lista las tarjetas creadas en la fecha indicada para un empleado.
     """
     try:
-        from datetime import datetime as _dt
-        fecha_obj = _dt.strptime(fecha, '%Y-%m-%d').date()
+        tz_name = principal.get('timezone') or 'UTC'
+        start_utc, end_utc = _day_bounds_utc_str(fecha, tz_name)
         tarjetas: List[dict] = []
         with DatabasePool.get_cursor() as cursor:
             cursor.execute(
@@ -910,9 +963,9 @@ def read_tarjetas_nuevas_del_dia_endpoint(empleado_id: str, fecha: str, principa
                 FROM tarjetas t
                 JOIN clientes c ON c.identificacion = t.cliente_identificacion
                 WHERE t.empleado_identificacion = %s
-                  AND DATE(t.fecha_creacion) = %s
+                  AND t.fecha_creacion >= %s AND t.fecha_creacion <= %s
                 ORDER BY t.numero_ruta
-                ''', (empleado_id, fecha_obj)
+                ''', (empleado_id, start_utc, end_utc)
             )
             for row in cursor.fetchall() or []:
                 tarjeta = {
@@ -948,8 +1001,8 @@ def read_abonos_del_dia_endpoint(empleado_id: str, fecha: str, principal: dict =
     Lista los abonos del día para un empleado (join abonos + tarjetas).
     """
     try:
-        from datetime import datetime as _dt
-        fecha_obj = _dt.strptime(fecha, '%Y-%m-%d').date()
+        tz_name = principal.get('timezone') or 'UTC'
+        start_utc, end_utc = _day_bounds_utc_str(fecha, tz_name)
         abonos: List[dict] = []
         with DatabasePool.get_cursor() as cursor:
             cursor.execute(
@@ -960,9 +1013,9 @@ def read_abonos_del_dia_endpoint(empleado_id: str, fecha: str, principal: dict =
                 JOIN tarjetas t ON a.tarjeta_codigo = t.codigo
                 JOIN clientes c ON t.cliente_identificacion = c.identificacion
                 WHERE t.empleado_identificacion = %s
-                  AND DATE(a.fecha) = %s
+                  AND a.fecha >= %s AND a.fecha <= %s
                 ORDER BY a.fecha, a.id
-                ''', (empleado_id, fecha_obj)
+                ''', (empleado_id, start_utc, end_utc)
             )
             for row in cursor.fetchall() or []:
                 abono = {
@@ -983,22 +1036,30 @@ def read_abonos_del_dia_endpoint(empleado_id: str, fecha: str, principal: dict =
         raise HTTPException(status_code=500, detail="Error interno al consultar abonos del día.")
 
 @app.get("/empleados/{empleado_id}/gastos/{fecha}/resumen", response_model=List[ResumenGasto])
-def read_resumen_gastos_by_empleado_fecha_endpoint(empleado_id: str, fecha: str):
+def read_resumen_gastos_by_empleado_fecha_endpoint(empleado_id: str, fecha: str, principal: dict = Depends(get_current_principal)):
     """
     Obtiene el resumen de gastos de un empleado en una fecha específica.
     """
     try:
-        from datetime import datetime
-        fecha_obj = datetime.strptime(fecha, '%Y-%m-%d').date()
-        
-        from .database.gastos_db import obtener_total_gastos_fecha_empleado, obtener_conteo_gastos_fecha_empleado
-        total = obtener_total_gastos_fecha_empleado(fecha_obj, empleado_id)
-        conteo = obtener_conteo_gastos_fecha_empleado(fecha_obj, empleado_id)
+        tz_name = principal.get('timezone') or 'UTC'
+        start_utc, end_utc = _day_bounds_utc_str(fecha, tz_name)
+        from .database.connection_pool import DatabasePool as _DB
+        with _DB.get_cursor() as cur:
+            cur.execute(
+                '''SELECT COALESCE(SUM(valor),0) FROM gastos WHERE empleado_identificacion=%s AND fecha_creacion >= %s AND fecha_creacion <= %s''',
+                (empleado_id, start_utc, end_utc)
+            )
+            total = cur.fetchone()[0] or 0
+            cur.execute(
+                '''SELECT COUNT(*) FROM gastos WHERE empleado_identificacion=%s AND fecha_creacion >= %s AND fecha_creacion <= %s''',
+                (empleado_id, start_utc, end_utc)
+            )
+            conteo = cur.fetchone()[0] or 0
         
         # Crear resumen
         resumen = [{
             'empleado_identificacion': empleado_id,
-            'fecha': fecha_obj,
+            'fecha': fecha,
             'total_gastos': total,
             'cantidad_gastos': conteo
         }]
@@ -1505,7 +1566,8 @@ def read_liquidacion_diaria_endpoint(empleado_id: str, fecha: str, principal: di
     try:
         from datetime import datetime as _dt
         fecha_obj = _dt.strptime(fecha, '%Y-%m-%d').date()
-        datos = obtener_datos_liquidacion(empleado_id, fecha_obj)
+        tz_name = principal.get('timezone') or 'UTC'
+        datos = obtener_datos_liquidacion(empleado_id, fecha_obj, tz_name)
         # Adaptar tipos a float/int donde aplique
         adaptado = {
             'empleado': datos.get('empleado', empleado_id),
@@ -1978,7 +2040,10 @@ def sync_endpoint(payload: SyncRequest, principal: dict = Depends(get_current_pr
         try:
             if empleado_ids:
                 emp_id = next(iter(empleado_ids))  # El único empleado
-                hoy_local = date.today()
+                from datetime import datetime as _dt
+                from zoneinfo import ZoneInfo as _ZI
+                tz_name = principal.get('timezone') or 'UTC'
+                hoy_local = _dt.now(_ZI(tz_name)).date()
                 with DatabasePool.get_cursor() as cur2:
                     cur2.execute(
                         "UPDATE empleados SET fecha_accion=%s, subir=FALSE, descargar=TRUE WHERE identificacion=%s RETURNING identificacion",

@@ -86,7 +86,7 @@ class VentanaLogin(tk.Toplevel):
                 pass
             # Guardar preferencias
             self._save_prefs(username, password)
-            self.result = (tokens, tokens.get('role'))
+            self.result = (tokens, tokens.get('role'), username)
             messagebox.showinfo("Éxito", f"Sesión iniciada como {tokens.get('role')}")
             self.destroy()
         except APIError as e:

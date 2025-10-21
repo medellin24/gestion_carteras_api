@@ -1,6 +1,8 @@
 from typing import Optional, Literal
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
+from zoneinfo import ZoneInfo
+from datetime import datetime as _dt
 
 from ..security import (
     verify_password,
@@ -23,6 +25,7 @@ class TokenResponse(BaseModel):
     refresh_token: str
     token_type: Literal["bearer"] = "bearer"
     role: Literal["admin", "cobrador"]
+    timezone: Optional[str] = None
 
 
 @router.post("/login", response_model=TokenResponse)
@@ -40,7 +43,7 @@ def login(body: LoginRequest):
     # Enforzar suscripción vigente solo para admin y cobrador que dependan de la cuenta
     if cuenta_id:
         from ..database.connection_pool import DatabasePool
-        from datetime import date as _date, datetime as _dt, timedelta
+        from datetime import timedelta
         with DatabasePool.get_cursor() as cur:
             cur.execute("SELECT estado_suscripcion, trial_until, fecha_fin, fecha_inicio FROM cuentas_admin WHERE id=%s", (cuenta_id,))
             row = cur.fetchone()
@@ -52,15 +55,19 @@ def login(body: LoginRequest):
                     fin = fin.date()
                 if not fin and fecha_inicio:
                     fin = fecha_inicio + timedelta(days=30)
-                if fin and _date.today() > fin:
+                tz = (user.get("timezone") or "UTC")
+                today_local = _dt.now(ZoneInfo(tz)).date()
+                if fin and today_local > fin:
                     raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Suscripción vencida. Contacte al administrador para reactivar.")
 
+    tz = user.get("timezone") or "UTC"
     access_token = create_token(
         subject=str(user["id"]),
         token_type="access",
         role=role,
         cuenta_id=cuenta_id,
         empleado_identificacion=empleado_identificacion,
+        timezone_name=tz,
     )
     refresh_token = create_token(
         subject=str(user["id"]),
@@ -68,12 +75,14 @@ def login(body: LoginRequest):
         role=role,
         cuenta_id=cuenta_id,
         empleado_identificacion=empleado_identificacion,
+        timezone_name=tz,
     )
 
     return TokenResponse(
         access_token=access_token,
         refresh_token=refresh_token,
         role=role,
+        timezone=tz,
     )
 
 
@@ -115,17 +124,19 @@ def refresh_tokens(body: RefreshRequest):
                 if not row or not row[0]:  # No existe o está inactivo
                     raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Usuario cobrador desactivado. Token expirado.")
 
+    tz = payload.get("timezone") or "UTC"
     access_token = create_token(
-        subject=str(subject), token_type="access", role=role, cuenta_id=cuenta_id, empleado_identificacion=empleado_identificacion
+        subject=str(subject), token_type="access", role=role, cuenta_id=cuenta_id, empleado_identificacion=empleado_identificacion, timezone_name=tz
     )
     new_refresh_token = create_token(
-        subject=str(subject), token_type="refresh", role=role, cuenta_id=cuenta_id, empleado_identificacion=empleado_identificacion
+        subject=str(subject), token_type="refresh", role=role, cuenta_id=cuenta_id, empleado_identificacion=empleado_identificacion, timezone_name=tz
     )
 
     return TokenResponse(
         access_token=access_token,
         refresh_token=new_refresh_token,
         role=role,
+        timezone=tz,
     )
 
 

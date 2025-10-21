@@ -36,6 +36,7 @@ def create_token(
     role: Literal["admin", "cobrador"],
     cuenta_id: Optional[int] = None,
     empleado_identificacion: Optional[str] = None,
+    timezone_name: Optional[str] = None,
     expires_delta: Optional[timedelta] = None,
 ) -> str:
     now = datetime.utcnow()
@@ -56,6 +57,8 @@ def create_token(
         to_encode["cuenta_id"] = cuenta_id
     if empleado_identificacion is not None:
         to_encode["empleado_identificacion"] = empleado_identificacion
+    if timezone_name:
+        to_encode["timezone"] = timezone_name
     return jwt.encode(to_encode, JWT_SECRET_KEY, algorithm=JWT_ALGORITHM)
 
 

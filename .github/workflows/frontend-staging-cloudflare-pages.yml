@@ -1,11 +1,10 @@
-name: Frontend - Deploy to Cloudflare Pages
+name: Frontend (staging) - Deploy to Cloudflare Pages
 
 on:
   push:
-    branches: [ main ]
+    branches: [ develop ]
     paths:
       - 'gestion_carteras_frontend/**'
-  workflow_dispatch:
 
 jobs:
   deploy:
@@ -27,19 +26,20 @@ jobs:
         working-directory: gestion_carteras_frontend
         run: npm ci
 
-      - name: Build
+      - name: Build (staging)
         working-directory: gestion_carteras_frontend
         env:
-          VITE_API_BASE_URL: ${{ secrets.VITE_API_BASE_URL }}
+          VITE_API_BASE_URL: ${{ secrets.VITE_API_BASE_URL_STAGING }}
           VITE_HTTP_TIMEOUT_MS: 120000
         run: npm run build
 
-      - name: Publish to Cloudflare Pages
+      - name: Publish to Cloudflare Pages (staging)
         uses: cloudflare/pages-action@v1
         with:
           apiToken: ${{ secrets.CF_API_TOKEN }}
           accountId: ${{ secrets.CF_ACCOUNT_ID }}
-          projectName: ${{ secrets.CF_PAGES_PROJECT }}
+          projectName: ${{ secrets.CF_PAGES_PROJECT_STAGING }}
           directory: gestion_carteras_frontend/dist
           gitHubToken: ${{ secrets.GITHUB_TOKEN }}
+
 

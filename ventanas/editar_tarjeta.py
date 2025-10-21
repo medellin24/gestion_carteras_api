@@ -18,8 +18,8 @@ class VentanaEditarTarjeta:
         # Crear ventana
         self.ventana = tk.Toplevel(parent)
         self.ventana.title(f"Editar Tarjeta - {tarjeta_codigo}")
-        self.ventana.geometry("780x640")
-        self.ventana.minsize(740, 600)
+        self.ventana.geometry("720x540")
+        self.ventana.minsize(680, 500)
         self.ventana.resizable(True, True)
         
         # Hacer la ventana modal
@@ -79,12 +79,12 @@ class VentanaEditarTarjeta:
         
         # Frame principal
         main_frame = ttk.Frame(self.ventana)
-        main_frame.pack(fill='both', expand=True, padx=15, pady=15)
+        main_frame.pack(fill='both', expand=True, padx=8, pady=8)
         
         # Título
         titulo = ttk.Label(main_frame, text=f"Editar Tarjeta: {self.tarjeta_codigo}", 
                           style='Title.TLabel')
-        titulo.pack(pady=(0, 15))
+        titulo.pack(pady=(0, 8))
         
         # Frame contenedor horizontal (usa grid para mejor control de tamaños)
         container = ttk.Frame(main_frame)
@@ -113,65 +113,65 @@ class VentanaEditarTarjeta:
 
     def setup_seccion_prestamo(self, parent):
         """Configura la sección de datos del préstamo"""
-        frame_prestamo = ttk.LabelFrame(parent, text="Datos del Préstamo", padding=15)
+        frame_prestamo = ttk.LabelFrame(parent, text="Datos del Préstamo", padding=8)
         frame_prestamo.grid(row=0, column=0, sticky='nsew', padx=(0, 5))
         parent.rowconfigure(0, weight=1)
         parent.columnconfigure(0, weight=1)
         
         # Número de Ruta
-        ttk.Label(frame_prestamo, text="Número de Ruta (1-4 enteros):").grid(row=0, column=0, sticky='w', pady=8)
+        ttk.Label(frame_prestamo, text="Número de Ruta (1-4 enteros):").grid(row=0, column=0, sticky='w', pady=4)
         self.entry_numero_ruta = ttk.Entry(frame_prestamo, width=18, font=('Arial', 10))
         # Validación en tiempo real: 1 a 4 enteros
         vcmd_ruta = (frame_prestamo.register(self.validar_ruta_enteros), '%P')
         self.entry_numero_ruta.configure(validate='key', validatecommand=vcmd_ruta)
-        self.entry_numero_ruta.grid(row=0, column=1, sticky='ew', padx=(10, 0), pady=8)
+        self.entry_numero_ruta.grid(row=0, column=1, sticky='ew', padx=(10, 0), pady=4)
 
         # Monto
-        ttk.Label(frame_prestamo, text="Monto del Préstamo:").grid(row=1, column=0, sticky='w', pady=8)
+        ttk.Label(frame_prestamo, text="Monto del Préstamo:").grid(row=1, column=0, sticky='w', pady=4)
         self.entry_monto = ttk.Entry(frame_prestamo, width=18, font=('Arial', 10))
-        self.entry_monto.grid(row=1, column=1, sticky='ew', padx=(10, 0), pady=8)
+        self.entry_monto.grid(row=1, column=1, sticky='ew', padx=(10, 0), pady=4)
         
         # Interés
-        ttk.Label(frame_prestamo, text="Interés (%):").grid(row=2, column=0, sticky='w', pady=8)
+        ttk.Label(frame_prestamo, text="Interés (%):").grid(row=2, column=0, sticky='w', pady=4)
         self.entry_interes = ttk.Entry(frame_prestamo, width=18, font=('Arial', 10))
-        self.entry_interes.grid(row=2, column=1, sticky='ew', padx=(10, 0), pady=8)
+        self.entry_interes.grid(row=2, column=1, sticky='ew', padx=(10, 0), pady=4)
         
         # Cuotas
-        ttk.Label(frame_prestamo, text="Número de Cuotas:").grid(row=3, column=0, sticky='w', pady=8)
+        ttk.Label(frame_prestamo, text="Número de Cuotas:").grid(row=3, column=0, sticky='w', pady=4)
         self.entry_cuotas = ttk.Entry(frame_prestamo, width=18, font=('Arial', 10))
-        self.entry_cuotas.grid(row=3, column=1, sticky='ew', padx=(10, 0), pady=8)
+        self.entry_cuotas.grid(row=3, column=1, sticky='ew', padx=(10, 0), pady=4)
         
         # Fecha de creación con calendario
-        ttk.Label(frame_prestamo, text="Fecha de Creación:").grid(row=4, column=0, sticky='w', pady=8)
+        ttk.Label(frame_prestamo, text="Fecha de Creación:").grid(row=4, column=0, sticky='w', pady=4)
         self.date_entry = DateEntry(frame_prestamo, width=15, background='darkblue',
                                    foreground='white', borderwidth=2, date_pattern='dd/mm/yyyy',
                                    font=('Arial', 10))
-        self.date_entry.grid(row=4, column=1, sticky='ew', padx=(10, 0), pady=8)
+        self.date_entry.grid(row=4, column=1, sticky='ew', padx=(10, 0), pady=4)
         
         # Estado
-        ttk.Label(frame_prestamo, text="Estado:").grid(row=5, column=0, sticky='w', pady=8)
+        ttk.Label(frame_prestamo, text="Estado:").grid(row=5, column=0, sticky='w', pady=4)
         self.combo_estado = ttk.Combobox(frame_prestamo, width=15, 
                                         values=['activas', 'cancelada', 'pendiente'],
                                         state="readonly", font=('Arial', 10))
-        self.combo_estado.grid(row=5, column=1, sticky='ew', padx=(10, 0), pady=8)
+        self.combo_estado.grid(row=5, column=1, sticky='ew', padx=(10, 0), pady=4)
         
         # Observaciones
-        ttk.Label(frame_prestamo, text="Observaciones:").grid(row=6, column=0, sticky='nw', pady=8)
-        self.text_observaciones = tk.Text(frame_prestamo, width=25, height=4, font=('Arial', 9),
+        ttk.Label(frame_prestamo, text="Observaciones:").grid(row=6, column=0, sticky='nw', pady=4)
+        self.text_observaciones = tk.Text(frame_prestamo, width=25, height=3, font=('Arial', 9),
                                          wrap=tk.WORD, relief='solid', borderwidth=1)
-        self.text_observaciones.grid(row=6, column=1, sticky='ew', padx=(10, 0), pady=8)
+        self.text_observaciones.grid(row=6, column=1, sticky='ew', padx=(10, 0), pady=4)
         
         # Separador
         ttk.Separator(frame_prestamo, orient='horizontal').grid(row=7, column=0, columnspan=2, 
-                                                               sticky='ew', pady=15)
+                                                               sticky='ew', pady=8)
         
         # Información calculada
         ttk.Label(frame_prestamo, text="Información Calculada:", 
-                 style='Section.TLabel').grid(row=8, column=0, columnspan=2, sticky='w', pady=(0, 8))
+                 style='Section.TLabel').grid(row=8, column=0, columnspan=2, sticky='w', pady=(0, 4))
         
         # Frame para información calculada
         info_frame = ttk.Frame(frame_prestamo)
-        info_frame.grid(row=9, column=0, columnspan=2, sticky='ew', pady=5)
+        info_frame.grid(row=9, column=0, columnspan=2, sticky='ew', pady=2)
         
         # Monto total
         ttk.Label(info_frame, text="Monto Total:", style='Info.TLabel').grid(row=0, column=0, sticky='w')
@@ -223,64 +223,64 @@ class VentanaEditarTarjeta:
 
     def setup_seccion_cliente(self, parent):
         """Configura la sección de datos del cliente"""
-        frame_cliente = ttk.LabelFrame(parent, text="Datos del Cliente", padding=15)
+        frame_cliente = ttk.LabelFrame(parent, text="Datos del Cliente", padding=8)
         frame_cliente.grid(row=0, column=0, sticky='nsew', padx=(5, 0))
         parent.rowconfigure(0, weight=1)
         parent.columnconfigure(0, weight=1)
         
         # Identificación (SOLO LECTURA - NO EDITABLE)
-        ttk.Label(frame_cliente, text="Identificación:").grid(row=0, column=0, sticky='w', pady=8)
+        ttk.Label(frame_cliente, text="Identificación:").grid(row=0, column=0, sticky='w', pady=4)
         self.lbl_identificacion = ttk.Label(frame_cliente, text="", foreground='#666666', 
                                            font=('Arial', 10), relief='solid', borderwidth=1,
                                            padding=5, background='#f0f0f0')
-        self.lbl_identificacion.grid(row=0, column=1, sticky='ew', padx=(10, 0), pady=8)
+        self.lbl_identificacion.grid(row=0, column=1, sticky='ew', padx=(10, 0), pady=4)
         
         # Advertencia sobre por qué no se puede cambiar
         warning_frame = ttk.Frame(frame_cliente)
-        warning_frame.grid(row=1, column=0, columnspan=2, sticky='ew', pady=5)
+        warning_frame.grid(row=1, column=0, columnspan=2, sticky='ew', pady=2)
         
         ttk.Label(warning_frame, text="🔒 La identificación no se puede cambiar para proteger el historial", 
                  style='Info.TLabel', foreground='#d63384').pack()
         
         # Nombre
-        ttk.Label(frame_cliente, text="Nombre:").grid(row=2, column=0, sticky='w', pady=8)
+        ttk.Label(frame_cliente, text="Nombre:").grid(row=2, column=0, sticky='w', pady=4)
         self.entry_nombre = ttk.Entry(frame_cliente, width=25, font=('Arial', 10))
-        self.entry_nombre.grid(row=2, column=1, sticky='ew', padx=(10, 0), pady=8)
+        self.entry_nombre.grid(row=2, column=1, sticky='ew', padx=(10, 0), pady=4)
         
         # Apellido
-        ttk.Label(frame_cliente, text="Apellido:").grid(row=3, column=0, sticky='w', pady=8)
+        ttk.Label(frame_cliente, text="Apellido:").grid(row=3, column=0, sticky='w', pady=4)
         self.entry_apellido = ttk.Entry(frame_cliente, width=25, font=('Arial', 10))
-        self.entry_apellido.grid(row=3, column=1, sticky='ew', padx=(10, 0), pady=8)
+        self.entry_apellido.grid(row=3, column=1, sticky='ew', padx=(10, 0), pady=4)
         
         # Teléfono
-        ttk.Label(frame_cliente, text="Teléfono:").grid(row=4, column=0, sticky='w', pady=8)
+        ttk.Label(frame_cliente, text="Teléfono:").grid(row=4, column=0, sticky='w', pady=4)
         self.entry_telefono = ttk.Entry(frame_cliente, width=25, font=('Arial', 10))
-        self.entry_telefono.grid(row=4, column=1, sticky='ew', padx=(10, 0), pady=8)
+        self.entry_telefono.grid(row=4, column=1, sticky='ew', padx=(10, 0), pady=4)
         
         # Dirección
-        ttk.Label(frame_cliente, text="Dirección:").grid(row=5, column=0, sticky='nw', pady=8)
-        self.text_direccion = tk.Text(frame_cliente, width=25, height=4, font=('Arial', 9),
+        ttk.Label(frame_cliente, text="Dirección:").grid(row=5, column=0, sticky='nw', pady=4)
+        self.text_direccion = tk.Text(frame_cliente, width=25, height=3, font=('Arial', 9),
                                      wrap=tk.WORD, relief='solid', borderwidth=1)
-        self.text_direccion.grid(row=5, column=1, sticky='ew', padx=(10, 0), pady=8)
+        self.text_direccion.grid(row=5, column=1, sticky='ew', padx=(10, 0), pady=4)
         
         # Configurar expansión de columnas
         frame_cliente.columnconfigure(1, weight=1)
         
         # (El botón de actualización individual se elimina; se usará "Guardar Cambios")
-        ttk.Label(frame_cliente, text="").grid(row=6, column=0, columnspan=2, pady=5)
+        ttk.Label(frame_cliente, text="").grid(row=6, column=0, columnspan=2, pady=2)
         
         # Separador para funciones avanzadas
         ttk.Separator(frame_cliente, orient='horizontal').grid(row=7, column=0, columnspan=2, 
-                                                              sticky='ew', pady=10)
+                                                              sticky='ew', pady=5)
         
         # Sección de funciones avanzadas
         ttk.Label(frame_cliente, text="Funciones Avanzadas:", 
-                 style='Section.TLabel').grid(row=8, column=0, columnspan=2, sticky='w', pady=(0, 5))
+                 style='Section.TLabel').grid(row=8, column=0, columnspan=2, sticky='w', pady=(0, 2))
         
         # Botón para cambio de identificación (casos extremos)
         self.btn_cambiar_id = ttk.Button(frame_cliente, text="⚠️ Cambiar Identificación", 
                                         command=self.cambiar_identificacion_cliente)
-        self.btn_cambiar_id.grid(row=9, column=0, columnspan=2, pady=5, sticky='ew')
+        self.btn_cambiar_id.grid(row=9, column=0, columnspan=2, pady=2, sticky='ew')
         
         # Advertencia adicional
         ttk.Label(frame_cliente, text="Solo usar en casos de error grave en la identificación", 
@@ -292,12 +292,15 @@ class VentanaEditarTarjeta:
         ttk.Separator(parent, orient='horizontal').pack(side='bottom', fill='x', pady=(8, 0))
 
         frame_botones = ttk.Frame(parent)
-        frame_botones.pack(side='bottom', fill='x', pady=(12, 12))
+        frame_botones.pack(side='bottom', fill='x', pady=(8, 8))
 
         # Estilos más estéticos para botones
         style = ttk.Style(self.ventana)
-        style.configure('Primary.TButton', font=('Arial', 10, 'bold'), padding=(14, 8))
-        style.configure('Cancel.TButton', font=('Arial', 10), padding=(12, 8))
+        style.configure('Primary.TButton', font=('Arial', 10, 'bold'), padding=(10, 6), background='#4CAF50', foreground='white')
+        style.configure('Cancel.TButton', font=('Arial', 10), padding=(8, 6), background='#F44336', foreground='white')
+        # Hover effects
+        style.map('Primary.TButton', background=[('active', '#45a049')])
+        style.map('Cancel.TButton', background=[('active', '#da190b')])
 
         # Contenedor centrado
         center = ttk.Frame(frame_botones)

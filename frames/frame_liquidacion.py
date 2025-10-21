@@ -13,6 +13,9 @@ import unicodedata
 # Importar el cliente de la API desde la nueva ruta raíz
 from api_client.client import api_client
 
+# Importar ventana de edición de tarjeta
+from ventanas.editar_tarjeta import VentanaEditarTarjeta
+
 logger = logging.getLogger(__name__)
 
 class FrameLiquidacion(ttk.Frame):
@@ -28,6 +31,11 @@ class FrameLiquidacion(ttk.Frame):
         self.gasto_seleccionado = None
         self.empleado_actual_id = None
         self.fecha_actual = date.today()
+        
+        # Cachés para enriquecer datos sin repetir llamadas
+        self._abono_cache = {}
+        self._tarjeta_cache = {}
+        self._detalles_abiertos = {}
         
         self.setup_ui()
         self.cargar_empleados()
@@ -45,13 +53,31 @@ class FrameLiquidacion(ttk.Frame):
         style.configure('Value.TLabel', font=('Segoe UI', 10, 'bold'), foreground='#2563EB')
         style.configure('Money.TLabel', font=('Segoe UI', 11, 'bold'), foreground='#059669')
         style.configure('Total.TLabel', font=('Segoe UI', 14, 'bold'), foreground='#DC2626')
+        # Estilo Ocre robusto para Combobox y estilos extra
+        style.configure('Ocre.TCombobox', fieldbackground='#F2C97D', background='#F2C97D', foreground='black')
+        style.map('Ocre.TCombobox', fieldbackground=[('readonly', '#F2C97D')], background=[('readonly', '#F2C97D')], foreground=[('readonly', 'black')])
+        style.configure('OcreRobust.TCombobox', fieldbackground='#F2C97D', background='#F2C97D', foreground='black', padding=(8, 6))
+        style.map('OcreRobust.TCombobox', fieldbackground=[('readonly', '#F2C97D')], background=[('readonly', '#F2C97D')], foreground=[('readonly', 'black')])
+        # Variante con fuente más grande para el Combobox de empleado
+        style.configure('OcreRobustBig.TCombobox', fieldbackground='#F2C97D', background='#F2C97D', foreground='black', padding=(8, 6), font=('Segoe UI', 14))
+        style.map('OcreRobustBig.TCombobox', fieldbackground=[('readonly', '#F2C97D')], background=[('readonly', '#F2C97D')], foreground=[('readonly', 'black')])
+        # Labelframes blancos para stats y cálculos
+        style.configure('White.TLabelframe', background='#FFFFFF')
+        style.configure('White.TLabelframe.Label', background='#FFFFFF', foreground='#111827')
+        # Treeview de gastos con fuente más bonita y tamaño mayor
+        style.configure('Gastos.Treeview', font=('Segoe UI', 10))
+        style.configure('Gastos.Treeview.Heading', font=('Segoe UI', 10, 'bold'))
+        # Estilo para tablas de detalle (encabezado rojo cereza, filas alternadas, scrollbar delgado)
+        style.configure('Detalle.Treeview', font=('Segoe UI', 10), rowheight=24)
+        style.configure('Detalle.Treeview.Heading', font=('Segoe UI', 10, 'bold'), background='#C2185B', foreground='white')
+        style.map('Detalle.Treeview', background=[('selected', '#0078d4')], foreground=[('selected', 'white')])
         
         # Container principal con padding
         main_container = ttk.Frame(self, padding=15)
         main_container.pack(fill='both', expand=True)
         
         # SECCIÓN SUPERIOR: Selección de empleado y fecha
-        header_frame = ttk.LabelFrame(main_container, text="Selección de Empleado y Fecha", padding=10)
+        header_frame = ttk.LabelFrame(main_container, text="Selección de Empleado y Fecha", padding=8)
         header_frame.pack(fill='x', pady=(0, 15))
         
         # Configurar grid del header
@@ -61,8 +87,12 @@ class FrameLiquidacion(ttk.Frame):
         # Empleado
         ttk.Label(header_frame, text="Empleado:", style='Header.TLabel').grid(
             row=0, column=0, sticky='w', padx=(0, 10))
-        self.combo_empleado = ttk.Combobox(header_frame, width=30, state='readonly')
+        self.combo_empleado = ttk.Combobox(header_frame, width=9, state='readonly', style='OcreRobustBig.TCombobox')
         self.combo_empleado.grid(row=0, column=1, sticky='ew', padx=(0, 20))
+        try:
+            self.combo_empleado.set('▼ Elige empleado')
+        except Exception:
+            pass
         self.combo_empleado.bind('<<ComboboxSelected>>', self.on_empleado_seleccionado)
         # Recargar empleados al abrir el combo para reflejar cambios recientes
         self.combo_empleado.bind('<Button-1>', lambda e: self.cargar_empleados())
@@ -78,12 +108,13 @@ class FrameLiquidacion(ttk.Frame):
         
         # Usar DateEntry para mostrar un calendario
         self.date_picker = DateEntry(fecha_frame, 
-                                   width=12, 
+                                   width=14, 
                                    background='darkblue',
                                    foreground='white', 
                                    borderwidth=2,
                                    date_pattern='dd/mm/yyyy',
-                                   locale='es_ES')
+                                   locale='es_ES',
+                                   font=('Segoe UI', 11))
         self.date_picker.pack(side='left', padx=(0, 10))
         self.date_picker.set_date(self.fecha_actual)
         self.date_picker.bind('<<DateEntrySelected>>', self.on_fecha_cambio)
@@ -99,7 +130,7 @@ class FrameLiquidacion(ttk.Frame):
         main_panel.grid_rowconfigure(0, weight=1)
         
         # COLUMNA 1: Estadísticas de Tarjetas
-        stats_frame = ttk.LabelFrame(main_panel, text="Estadísticas de Tarjetas", padding=15)
+        stats_frame = ttk.LabelFrame(main_panel, text="Estadísticas de Tarjetas", padding=15, style='White.TLabelframe')
         stats_frame.grid(row=0, column=0, sticky='nsew', padx=(0, 10))
         
         # Estadísticas con mejor espaciado
@@ -113,26 +144,21 @@ class FrameLiquidacion(ttk.Frame):
         self.labels_estadisticas = {}
         
         for i, (texto, key) in enumerate(stats_data):
-            frame_row = ttk.Frame(stats_frame)
-            frame_row.pack(fill='x', pady=8)
-            
-            ttk.Label(frame_row, text=texto, style='Header.TLabel').pack(side='left')
-            
-            lbl_valor = ttk.Label(frame_row, text="0", style='Value.TLabel')
+            row_bg = '#E6F4FA' if (i % 2) else '#FFFFFF'
+            frame_row = tk.Frame(stats_frame, bg=row_bg)
+            frame_row.pack(fill='x', pady=2)
+            tk.Label(frame_row, text=texto, font=('Segoe UI', 10, 'bold'), bg=row_bg).pack(side='left')
+            lbl_valor = tk.Label(frame_row, text="0", font=('Segoe UI', 10, 'bold'), fg='#2563EB', bg=row_bg)
             lbl_valor.pack(side='right')
-            
-            # Hacer clickeable solo para ciertas estadísticas (no tarjetas activas)
             if key != 'tarjetas_activas':
                 lbl_valor.configure(cursor='hand2')
                 lbl_valor.bind('<Button-1>', lambda e, stat_key=key: self.mostrar_detalle_estadistica(stat_key))
-                # Efecto hover
-                lbl_valor.bind('<Enter>', lambda e, lbl=lbl_valor: lbl.configure(foreground='#1E40AF'))
-                lbl_valor.bind('<Leave>', lambda e, lbl=lbl_valor: lbl.configure(foreground='#2563EB'))
-            
+                lbl_valor.bind('<Enter>', lambda e, lbl=lbl_valor: lbl.configure(fg='#1E40AF'))
+                lbl_valor.bind('<Leave>', lambda e, lbl=lbl_valor: lbl.configure(fg='#2563EB'))
             self.labels_estadisticas[key] = lbl_valor
         
         # COLUMNA 2: Cálculos Financieros (la más ancha)
-        calc_frame = ttk.LabelFrame(main_panel, text="Cálculos Financieros", padding=15)
+        calc_frame = ttk.LabelFrame(main_panel, text="Cálculos Financieros", padding=15, style='White.TLabelframe')
         calc_frame.grid(row=0, column=1, sticky='nsew', padx=(0, 10))
         
         # Cálculos financieros con mejor presentación
@@ -146,39 +172,47 @@ class FrameLiquidacion(ttk.Frame):
         self.labels_calculos = {}
         
         for i, (texto, key) in enumerate(calc_data):
-            frame_row = ttk.Frame(calc_frame)
-            frame_row.pack(fill='x', pady=8)
-            
-            ttk.Label(frame_row, text=texto, style='Header.TLabel').pack(side='left')
-            
-            lbl_valor = ttk.Label(frame_row, text="$ 0", style='Money.TLabel')
+            row_bg = '#E6F4FA' if (i % 2) else '#FFFFFF'
+            frame_row = tk.Frame(calc_frame, bg=row_bg)
+            frame_row.pack(fill='x', pady=2)
+            tk.Label(frame_row, text=texto, font=('Segoe UI', 10, 'bold'), bg=row_bg).pack(side='left')
+            lbl_valor = tk.Label(frame_row, text="$ 0", font=('Segoe UI', 11, 'bold'), fg='#059669', bg=row_bg)
             lbl_valor.pack(side='right')
-            
             self.labels_calculos[key] = lbl_valor
 
             # Agregar desglose bajo Total Recaudado
             if key == 'total_recaudado':
                 # Efectivo
-                fila_efectivo = ttk.Frame(calc_frame)
-                fila_efectivo.pack(fill='x', pady=4, padx=(16, 0))
-                ttk.Label(fila_efectivo, text="Efectivo:", style='Header.TLabel').pack(side='left')
-                lbl_efectivo = ttk.Label(fila_efectivo, text="$ 0", style='Money.TLabel')
+                fila_efectivo = tk.Frame(calc_frame, bg='#E6F4FA') # Alternar color
+                fila_efectivo.pack(fill='x', pady=2, padx=(16, 0))
+                tk.Label(fila_efectivo, text="Efectivo:", font=('Segoe UI', 10, 'bold'), bg='#E6F4FA').pack(side='left')
+                lbl_efectivo = tk.Label(fila_efectivo, text="$ 0", font=('Segoe UI', 11, 'bold'), fg='#059669', bg='#E6F4FA')
                 lbl_efectivo.pack(side='right')
                 self.labels_calculos['recaudado_efectivo'] = lbl_efectivo
+                # Abrir detalle de efectivo al hacer clic
+                lbl_efectivo.configure(cursor='hand2')
+                lbl_efectivo.bind('<Button-1>', lambda e: self.mostrar_detalle_recaudos_metodo('efectivo'))
+                lbl_efectivo.bind('<Enter>', lambda e, lbl=lbl_efectivo: lbl.configure(fg='#047857'))
+                lbl_efectivo.bind('<Leave>', lambda e, lbl=lbl_efectivo: lbl.configure(fg='#059669'))
 
                 # Consignación
-                fila_consig = ttk.Frame(calc_frame)
-                fila_consig.pack(fill='x', pady=2, padx=(16, 0))
-                ttk.Label(fila_consig, text="Consignación:", style='Header.TLabel').pack(side='left')
-                lbl_consig = ttk.Label(fila_consig, text="$ 0", style='Money.TLabel')
+                fila_consig = tk.Frame(calc_frame, bg='#FFFFFF') # Alternar color
+                fila_consig.pack(fill='x', pady=1, padx=(16, 0))
+                tk.Label(fila_consig, text="Consignación:", font=('Segoe UI', 10, 'bold'), bg='#FFFFFF').pack(side='left')
+                lbl_consig = tk.Label(fila_consig, text="$ 0", font=('Segoe UI', 11, 'bold'), fg='#059669', bg='#FFFFFF')
                 lbl_consig.pack(side='right')
                 self.labels_calculos['recaudado_consignacion'] = lbl_consig
+                # Abrir detalle de consignación al hacer clic
+                lbl_consig.configure(cursor='hand2')
+                lbl_consig.bind('<Button-1>', lambda e: self.mostrar_detalle_recaudos_metodo('consignacion'))
+                lbl_consig.bind('<Enter>', lambda e, lbl=lbl_consig: lbl.configure(fg='#047857'))
+                lbl_consig.bind('<Leave>', lambda e, lbl=lbl_consig: lbl.configure(fg='#059669'))
         
         # Línea separadora y total final
-        ttk.Separator(calc_frame, orient='horizontal').pack(fill='x', pady=15)
+        ttk.Separator(calc_frame, orient='horizontal').pack(fill='x', pady=8)
         
         total_frame = ttk.Frame(calc_frame)
-        total_frame.pack(fill='x', pady=10)
+        total_frame.pack(fill='x', pady=6)
         
         ttk.Label(total_frame, text="TOTAL FINAL:", 
                 font=('Segoe UI', 12, 'bold')).pack(side='left')
@@ -190,65 +224,36 @@ class FrameLiquidacion(ttk.Frame):
         # (Depuración eliminada)
         
         # COLUMNA 3: Gestión de Base
-        base_frame = ttk.LabelFrame(main_panel, text="Gestión de Base", padding=15)
+        base_frame = ttk.LabelFrame(main_panel, text="Gestión de Base", padding=10)
         base_frame.grid(row=0, column=2, sticky='nsew')
         
         # Frame para contenido dinámico de la base
         self.base_frame = base_frame
         self.base_content_frame = ttk.Frame(base_frame)
-        self.base_content_frame.pack(fill='both', expand=True, pady=(0, 15))
+        self.base_content_frame.pack(fill='both', expand=True, pady=(0, 10))
         
         # Botón de generar liquidación (mismas dimensiones que asignar base)
         self.btn_generar_liquidacion = tk.Button(base_frame, text="💰 Generar Liquidación",
                                                bg='#10B981', fg='white', font=('Segoe UI', 10, 'bold'),
                                                command=self.generar_liquidacion)
-        self.btn_generar_liquidacion.pack(fill='x', pady=10)
+        self.btn_generar_liquidacion.pack(fill='x', pady=6)
         
-        # SECCIÓN INFERIOR: Gestión de Gastos (simplificada)
+        # SECCIÓN INFERIOR: Gestión de Gastos (dos columnas)
         gastos_frame = ttk.LabelFrame(main_container, text="Gestión de Gastos", padding=10)
         gastos_frame.pack(fill='both', expand=True)
         
-        # Panel de control de gastos
-        control_frame = ttk.Frame(gastos_frame)
-        control_frame.pack(fill='x', pady=(0, 10))
-        
-        # Botones de gestión
-        btn_frame = ttk.Frame(control_frame)
-        btn_frame.pack(side='left')
-        
-        self.btn_agregar_gasto = tk.Button(btn_frame, text="Agregar Gasto", 
-                                         bg='#059669', fg='white', font=('Arial', 10, 'bold'),
-                                         command=self.agregar_gasto_nuevo)
-        self.btn_agregar_gasto.pack(side='left', padx=(0, 10))
-        
-        self.btn_editar_gasto = tk.Button(btn_frame, text="Editar", 
-                                        bg='#F59E0B', fg='white', font=('Arial', 10, 'bold'),
-                                        command=self.editar_gasto_seleccionado)
-        self.btn_editar_gasto.pack(side='left', padx=(0, 10))
-        
-        self.btn_eliminar_gasto = tk.Button(btn_frame, text="Eliminar", 
-                                          bg='#DC2626', fg='white', font=('Arial', 10, 'bold'),
-                                          command=self.eliminar_gasto_seleccionado)
-        self.btn_eliminar_gasto.pack(side='left')
-        
-        # Total de gastos del día
-        total_gastos_frame = ttk.Frame(control_frame)
-        total_gastos_frame.pack(side='right')
-        
-        ttk.Label(total_gastos_frame, text="Total Gastos:", 
-                style='Header.TLabel').pack(side='left', padx=(0, 10))
-        
-        self.lbl_total_gastos_dia = ttk.Label(total_gastos_frame, text="$ 0", 
-                                            style='Money.TLabel')
-        self.lbl_total_gastos_dia.pack(side='right')
-        
-        # Tabla de gastos
-        tree_frame = ttk.Frame(gastos_frame)
-        tree_frame.pack(fill='both', expand=True)
-        
+        gastos_content = ttk.Frame(gastos_frame)
+        gastos_content.pack(fill='both', expand=True)
+        gastos_content.grid_columnconfigure(0, weight=3)
+        gastos_content.grid_columnconfigure(1, weight=1)
+        gastos_content.grid_rowconfigure(0, weight=1)
+
+        # Tabla de gastos (izquierda)
+        tree_frame = ttk.Frame(gastos_content)
+        tree_frame.grid(row=0, column=0, sticky='nsew', padx=(0, 10))
         # Configurar Treeview
         columns = ('Tipo', 'Descripción', 'Valor')
-        self.tree_gastos = ttk.Treeview(tree_frame, columns=columns, show='headings', height=8)
+        self.tree_gastos = ttk.Treeview(tree_frame, columns=columns, show='headings', height=10, style='Gastos.Treeview')
         
         # Configurar columnas
         self.tree_gastos.heading('Tipo', text='Tipo de Gasto')
@@ -258,14 +263,30 @@ class FrameLiquidacion(ttk.Frame):
         self.tree_gastos.column('Tipo', width=150)
         self.tree_gastos.column('Descripción', width=250)
         self.tree_gastos.column('Valor', width=100)
-        
-        # Scrollbar para la tabla
         scrollbar_gastos = ttk.Scrollbar(tree_frame, orient='vertical', command=self.tree_gastos.yview)
         self.tree_gastos.configure(yscrollcommand=scrollbar_gastos.set)
-        
-        # Empaquetar tabla y scrollbar
         self.tree_gastos.pack(side='left', fill='both', expand=True)
         scrollbar_gastos.pack(side='right', fill='y')
+
+        # Acciones y total (derecha)
+        actions_frame = ttk.Frame(gastos_content)
+        actions_frame.grid(row=0, column=1, sticky='ns')
+        self.btn_agregar_gasto = tk.Button(actions_frame, text="Agregar Gasto", 
+                                         bg='#059669', fg='white', font=('Arial', 10, 'bold'),
+                                         command=self.agregar_gasto_nuevo)
+        self.btn_agregar_gasto.pack(fill='x', pady=(0, 8))
+        self.btn_editar_gasto = tk.Button(actions_frame, text="Editar", 
+                                        bg='#F59E0B', fg='white', font=('Arial', 10, 'bold'),
+                                        command=self.editar_gasto_seleccionado)
+        self.btn_editar_gasto.pack(fill='x', pady=(0, 8))
+        self.btn_eliminar_gasto = tk.Button(actions_frame, text="Eliminar", 
+                                          bg='#DC2626', fg='white', font=('Arial', 10, 'bold'),
+                                          command=self.eliminar_gasto_seleccionado)
+        self.btn_eliminar_gasto.pack(fill='x')
+        ttk.Separator(actions_frame, orient='horizontal').pack(fill='x', pady=10)
+        ttk.Label(actions_frame, text="Total Gastos:", style='Header.TLabel').pack(anchor='w')
+        self.lbl_total_gastos_dia = ttk.Label(actions_frame, text="$ 0", style='Money.TLabel')
+        self.lbl_total_gastos_dia.pack(anchor='w')
         
         # Eventos
         self.tree_gastos.bind('<<TreeviewSelect>>', self.on_gasto_seleccionado)
@@ -793,77 +814,325 @@ class FrameLiquidacion(ttk.Frame):
             if tipo_estadistica == 'tarjetas_canceladas':
                 items = self.api_client.list_tarjetas_canceladas_del_dia(self.empleado_actual_id, fecha_str)
                 titulo = "Tarjetas canceladas del día"
-                cols = ("Código", "Cliente", "Ruta", "Monto")
-                filas = [
-                    (
-                        t.get('codigo', ''),
-                        f"{(t.get('cliente') or {}).get('apellido','').upper()} {(t.get('cliente') or {}).get('nombre','').upper()}".strip(),
-                        str(t.get('numero_ruta', '')),
-                        f"$ {Decimal(t.get('monto', 0)):,}"
-                    ) for t in items
-                ]
+                cols = ("Cliente", "Cancelado", "Monto", "Ruta")
+                filas = []
+                abonos_idx = self._build_abonos_index_por_tarjeta(fecha_str)
+                for t in items:
+                    cliente_dict = t.get('cliente') or {}
+                    apellido = str(cliente_dict.get('apellido') or t.get('cliente_apellido') or '')
+                    nombre = str(cliente_dict.get('nombre') or t.get('cliente_nombre') or '')
+                    cliente = f"{apellido} {nombre}".strip().upper()
+                    cancelado = self._first_number(t, ('valor_cancelado', 'total_abonos', 'abonado_total', 'total_pagado', 'pagado', 'abonos'))
+                    if cancelado == 0:
+                        codigo_tarjeta = self._get_tarjeta_codigo_from_data(t)
+                        abono_final = abonos_idx.get(codigo_tarjeta)
+                        if abono_final:
+                            cancelado = self._first_number(abono_final, ('monto', 'valor'))
+                    monto = self._first_number(t, ('monto', 'valor_prestamo', 'monto_prestamo'))
+                    ruta = str(t.get('numero_ruta') or t.get('ruta') or t.get('numeroRuta') or '')
+                    filas.append((cliente, f"$ {cancelado:,.0f}", f"$ {monto:,.0f}", ruta))
             elif tipo_estadistica == 'tarjetas_nuevas':
                 items = self.api_client.list_tarjetas_nuevas_del_dia(self.empleado_actual_id, fecha_str)
                 titulo = "Tarjetas nuevas del día"
-                cols = ("Código", "Cliente", "Ruta", "Monto")
-                filas = [
-                    (
-                        t.get('codigo', ''),
-                        f"{(t.get('cliente') or {}).get('apellido','').upper()} {(t.get('cliente') or {}).get('nombre','').upper()}".strip(),
-                        str(t.get('numero_ruta', '')),
-                        f"$ {Decimal(t.get('monto', 0)):,}"
-                    ) for t in items
-                ]
+                cols = ("Cliente", "Teléfono", "Dirección", "Monto", "Fecha", "Interés", "Cuotas", "Ruta")
+                filas = []
+                for t in items:
+                    c = t.get('cliente') or {}
+                    apellido = str(c.get('apellido') or t.get('cliente_apellido') or '')
+                    nombre = str(c.get('nombre') or t.get('cliente_nombre') or '')
+                    cliente = f"{apellido} {nombre}".strip().upper()
+                    telefono = self._get_first_str(c, ('telefono', 'celular', 'telefono1', 'movil')) or self._get_first_str(t, ('telefono', 'celular'))
+                    direccion = self._get_first_str(c, ('direccion', 'direccion_residencia')) or self._get_first_str(t, ('direccion',))
+                    if not (telefono and direccion):
+                        t_codigo = self._get_tarjeta_codigo_from_data(t)
+                        t_id = self._get_tarjeta_id_from_data(t)
+                        tarjeta_full = self._get_tarjeta_with_cache(codigo=t_codigo, tarjeta_id=t_id)
+                        if tarjeta_full:
+                            tel2, dir2 = self._extract_contacto_from_tarjeta(tarjeta_full)
+                            if not telefono:
+                                telefono = tel2
+                            if not direccion:
+                                direccion = dir2
+                    monto = self._first_number(t, ('monto', 'valor_prestamo', 'monto_prestamo'))
+                    fecha_txt = self._parse_iso_date_only(t.get('fecha') or t.get('fecha_creacion') or t.get('created_at'))
+                    interes = self._first_number(t, ('interes', 'tasa', 'tasa_interes'))
+                    interes_txt = f"{interes}%" if interes else ''
+                    cuotas = str(t.get('cuotas') or t.get('num_cuotas') or '')
+                    ruta = str(t.get('numero_ruta') or t.get('ruta') or '')
+                    filas.append((cliente, telefono, direccion, f"$ {monto:,.0f}", fecha_txt, interes_txt, cuotas, ruta))
             elif tipo_estadistica == 'total_registros':
                 items = self.api_client.list_abonos_del_dia(self.empleado_actual_id, fecha_str)
                 titulo = "Abonos del día"
-                cols = ("ID", "Cliente", "Fecha", "Monto")
-                filas = [
-                    (
-                        a.get('id', ''),
-                        f"{str(a.get('cliente_apellido','') or '').upper()} {str(a.get('cliente_nombre','') or '').upper()}".strip(),
-                        str(a.get('fecha', '')),
-                        f"$ {Decimal(a.get('monto', 0)):,}"
-                    ) for a in items
-                ]
+                cols = ("Cliente", "Abonado", "Método", "Monto", "Fecha")
+                filas = []
+                for a in items:
+                    apellido = str(a.get('cliente_apellido') or a.get('apellido') or '')
+                    nombre = str(a.get('cliente_nombre') or a.get('nombre') or '')
+                    cliente = f"{apellido} {nombre}".strip().upper()
+                    abonado = self._first_number(a, ('monto', 'valor'))
+                    metodo_raw = self._obtener_metodo_pago(a)
+                    if not (metodo_raw and str(metodo_raw).strip()):
+                        a_id = a.get('id') or a.get('abono_id')
+                        if a_id:
+                            a_full = self._get_abono_with_cache(a_id)
+                            if a_full:
+                                metodo_raw = self._obtener_metodo_pago(a_full) or metodo_raw
+                                if self._first_number(a_full, ('monto', 'valor')) and abonado == 0:
+                                    abonado = self._first_number(a_full, ('monto', 'valor'))
+                                if self._extraer_monto_prestamo_de_abono(a_full) is not None:
+                                    monto_prestamo = self._extraer_monto_prestamo_de_abono(a_full)
+                                else:
+                                    t_codigo = self._get_tarjeta_codigo_from_data(a_full)
+                                    t_id = self._get_tarjeta_id_from_data(a_full)
+                                    t_full = self._get_tarjeta_with_cache(codigo=t_codigo, tarjeta_id=t_id)
+                                    monto_prestamo = self._first_number(t_full or {}, ('monto', 'monto_prestamo')) if t_full else None
+                            else:
+                                monto_prestamo = self._extraer_monto_prestamo_de_abono(a)
+                    else:
+                        monto_prestamo = self._extraer_monto_prestamo_de_abono(a)
+                        if monto_prestamo is None:
+                            t_codigo = self._get_tarjeta_codigo_from_data(a)
+                            t_id = self._get_tarjeta_id_from_data(a)
+                            t_full = self._get_tarjeta_with_cache(codigo=t_codigo, tarjeta_id=t_id)
+                            monto_prestamo = self._first_number(t_full or {}, ('monto', 'monto_prestamo')) if t_full else None
+                    metodo_norm = self._normalizar_texto(metodo_raw).lower()
+                    metodo_txt = 'Consignación' if 'consignacion' in metodo_norm else ('Efectivo' if 'efectivo' in metodo_norm else (metodo_raw or ''))
+                    fecha_txt = self._parse_iso_date_only(a.get('fecha') or a.get('created_at'))
+                    filas.append((cliente, f"$ {abonado:,.0f}", metodo_txt, f"$ {monto_prestamo:,.0f}" if monto_prestamo else "", fecha_txt))
             else:
                 messagebox.showinfo("Info", "Detalle no disponible para esta estadística.")
                 return
 
-            self._mostrar_tabla_detalle(titulo, cols, filas)
+            self._mostrar_tabla_detalle(titulo, cols, filas, raw_items=items, contexto=('abonos_dia' if tipo_estadistica == 'total_registros' else tipo_estadistica))
         except Exception as e:
             logger.error(f"Error al cargar detalle de {tipo_estadistica}: {e}")
             messagebox.showerror("Error", f"No se pudo cargar el detalle: {e}")
 
-    def _mostrar_tabla_detalle(self, titulo, columnas, filas):
+    def _mostrar_tabla_detalle(self, titulo, columnas, filas, raw_items=None, contexto=None):
         ventana = tk.Toplevel(self)
         ventana.title(titulo)
-        ventana.geometry("700x400")
+        # Registrar ventana abierta por contexto
+        try:
+            if contexto:
+                self._detalles_abiertos[contexto] = ventana
+        except Exception:
+            pass
+        # Tamaño dinámico: si son 2 columnas (efectivo/consignación), usar ventana compacta
+        ancho, alto = (360, 320) if len(columnas) <= 2 else (700, 400)
+        ventana.geometry(f"{ancho}x{alto}")
         ventana.resizable(True, True)
         ventana.transient(self.winfo_toplevel())
         ventana.grab_set()
         try:
             ventana.update_idletasks()
-            x = (ventana.winfo_screenwidth() // 2) - (700 // 2)
-            y = (ventana.winfo_screenheight() // 2) - (400 // 2)
-            ventana.geometry("700x400+%d+%d" % (x, y))
+            x = (ventana.winfo_screenwidth() // 2) - (ancho // 2)
+            y = (ventana.winfo_screenheight() // 2) - (alto // 2)
+            ventana.geometry(f"{ancho}x{alto}+%d+%d" % (x, y))
         except Exception:
             pass
+
+        def _on_close():
+            try:
+                if contexto and contexto in self._detalles_abiertos and self._detalles_abiertos[contexto] is ventana:
+                    del self._detalles_abiertos[contexto]
+            except Exception:
+                pass
+            ventana.destroy()
+        ventana.protocol("WM_DELETE_WINDOW", _on_close)
 
         cont = ttk.Frame(ventana, padding=10)
         cont.pack(fill='both', expand=True)
 
-        tree = ttk.Treeview(cont, columns=columnas, show='headings')
-        for col in columnas:
+        tree = ttk.Treeview(cont, columns=columnas, show='headings', style='Detalle.Treeview')
+        for idx, col in enumerate(columnas):
             tree.heading(col, text=col)
-            tree.column(col, width=150)
-        vs = ttk.Scrollbar(cont, orient='vertical', command=tree.yview)
-        tree.configure(yscrollcommand=vs.set)
-        tree.pack(side='left', fill='both', expand=True)
+            if len(columnas) <= 2:
+                # Ventanas compactas (Efectivo/Consignación)
+                if idx == 0:
+                    tree.column(col, width=200, anchor='w', stretch=False)
+                else:
+                    tree.column(col, width=120, anchor='e', stretch=False)
+            else:
+                base_width = 140 if len(columnas) < 6 else 120
+                if idx == 0:
+                    tree.column(col, width=base_width + 80, anchor='w', stretch=True)
+                else:
+                    tree.column(col, width=base_width, anchor='center', stretch=True)
+        vs = tk.Scrollbar(cont, orient='vertical', command=tree.yview, width=8)
+        hs = tk.Scrollbar(cont, orient='horizontal', command=tree.xview, width=8)
+        tree.configure(yscrollcommand=vs.set, xscrollcommand=hs.set)
+        tree.pack(side='top', fill='both', expand=True)
         vs.pack(side='right', fill='y')
+        hs.pack(side='bottom', fill='x')
 
-        for fila in filas:
-            tree.insert('', 'end', values=fila)
+        tree.tag_configure('row_even', background='#FFFFFF')
+        tree.tag_configure('row_odd', background='#E6F4FA')
+
+        # Insertar filas y mapear iids a índices de raw_items
+        iid_to_index = {}
+        for i, fila in enumerate(filas):
+            tag = 'row_odd' if (i % 2) else 'row_even'
+            iid = f"row-{i}"
+            tree.insert('', 'end', iid=iid, values=fila, tags=(tag,))
+            iid_to_index[iid] = i
+
+        # Menú contextual
+        menu = tk.Menu(ventana, tearoff=0)
+        menu.add_command(label="Modificar", command=lambda: on_modificar())
+        menu.add_command(label="Eliminar", command=lambda: on_eliminar())
+
+        def get_selected_raw():
+            sel = tree.selection()
+            if not sel:
+                return None
+            idx = iid_to_index.get(sel[0])
+            if idx is None:
+                return None
+            if raw_items and 0 <= idx < len(raw_items):
+                return raw_items[idx]
+            return None
+
+        def on_modificar():
+            try:
+                raw = get_selected_raw()
+                if not raw:
+                    messagebox.showinfo("Info", "Seleccione un registro")
+                    return
+                if contexto in ("tarjetas_nuevas", "tarjetas_canceladas"):
+                    codigo = self._get_tarjeta_codigo_from_data(raw)
+                    if not codigo:
+                        messagebox.showerror("Error", "No se pudo determinar el código de la tarjeta.")
+                        return
+                    VentanaEditarTarjeta(self.winfo_toplevel(), codigo)
+                    # Nota: VentanaEditarTarjeta maneja su propio guardado; tras cerrarse refrescamos
+                    self._abono_cache.clear(); self._tarjeta_cache.clear(); self._refrescar_ventanas_detalle()
+                else:
+                    # Abonos: abrir editor simple
+                    abono_id = raw.get('id') or raw.get('abono_id')
+                    if not abono_id:
+                        messagebox.showerror("Error", "No se pudo determinar el ID del abono.")
+                        return
+                    editar_abono(abono_id)
+            except Exception as e:
+                messagebox.showerror("Error", f"No se pudo modificar: {e}")
+
+        def on_eliminar():
+            try:
+                raw = get_selected_raw()
+                if not raw:
+                    messagebox.showinfo("Info", "Seleccione un registro")
+                    return
+                # Solo permitir eliminar en tarjetas nuevas y abonos (según indicación)
+                if contexto == "tarjetas_nuevas":
+                    codigo = self._get_tarjeta_codigo_from_data(raw)
+                    if not codigo:
+                        messagebox.showerror("Error", "No se pudo determinar el código de la tarjeta.")
+                        return
+                    if messagebox.askyesno("Confirmar", f"¿Eliminar tarjeta {codigo}?"):
+                        resp = self.api_client.delete_tarjeta(codigo)
+                        messagebox.showinfo("Resultado", "Tarjeta eliminada" if resp else "Acción completada")
+                        # Quitar del Treeview
+                        sel = tree.selection()
+                        if sel:
+                            tree.delete(sel[0])
+                        self._abono_cache.clear(); self._tarjeta_cache.clear(); self._refrescar_ventanas_detalle()
+                elif contexto in ("abonos_dia", "efectivo", "consignacion"):
+                    abono_id = raw.get('id') or raw.get('abono_id')
+                    if not abono_id:
+                        messagebox.showerror("Error", "No se pudo determinar el ID del abono.")
+                        return
+                    if messagebox.askyesno("Confirmar", f"¿Eliminar abono #{abono_id}?"):
+                        resp = self.api_client.delete_abono(int(abono_id))
+                        messagebox.showinfo("Resultado", "Abono eliminado" if resp else "Acción completada")
+                        sel = tree.selection()
+                        if sel:
+                            tree.delete(sel[0])
+                        self._abono_cache.clear(); self._tarjeta_cache.clear(); self._refrescar_ventanas_detalle()
+                else:
+                    messagebox.showinfo("Info", "Eliminación no disponible para esta vista.")
+            except Exception as e:
+                messagebox.showerror("Error", f"No se pudo eliminar: {e}")
+
+        def editar_abono(abono_id):
+            # Cargar abono para mostrar valores actuales
+            ab = self._get_abono_with_cache(abono_id) or {}
+            dlg = tk.Toplevel(ventana)
+            dlg.title(f"Editar Abono #{abono_id}")
+            dlg.geometry("300x200")
+            dlg.resizable(False, False)
+            dlg.transient(ventana)
+            dlg.grab_set()
+            frame = ttk.Frame(dlg, padding=12)
+            frame.pack(fill='both', expand=True)
+            ttk.Label(frame, text="Monto:").grid(row=0, column=0, sticky='w', pady=6)
+            entry_monto = ttk.Entry(frame, width=18)
+            try:
+                monto_actual = ab.get('monto') or ab.get('valor') or ''
+                entry_monto.insert(0, str(monto_actual))
+            except Exception:
+                pass
+            entry_monto.grid(row=0, column=1, sticky='ew', pady=6)
+            ttk.Label(frame, text="Método:").grid(row=1, column=0, sticky='w', pady=6)
+            combo_metodo = ttk.Combobox(frame, state='readonly', values=["Efectivo", "Consignación"], width=16)
+            metodo_raw = self._obtener_metodo_pago(ab)
+            metodo_norm = self._normalizar_texto(metodo_raw).lower()
+            if 'consignacion' in metodo_norm:
+                combo_metodo.set('Consignación')
+            elif 'efectivo' in metodo_norm:
+                combo_metodo.set('Efectivo')
+            else:
+                combo_metodo.set('Efectivo')
+            combo_metodo.grid(row=1, column=1, sticky='ew', pady=6)
+            frame.grid_columnconfigure(1, weight=1)
+
+            def guardar():
+                try:
+                    monto_str = entry_monto.get().strip()
+                    monto = float(str(monto_str).replace(',', '').replace('$', '')) if monto_str else None
+                    metodo_sel = combo_metodo.get()
+                    metodo_api = 'efectivo' if metodo_sel.lower().startswith('efec') else 'consignacion'
+                    payload = {}
+                    if monto is not None:
+                        payload['monto'] = monto
+                    payload['metodo_pago'] = metodo_api
+                    if not payload:
+                        messagebox.showinfo("Info", "Sin cambios que guardar")
+                        return
+                    resp = self.api_client.update_abono(int(abono_id), payload)
+                    # Actualizar fila seleccionada
+                    sel = tree.selection()
+                    if sel:
+                        # Recalcular valores visibles según columnas
+                        vals = list(tree.item(sel[0], 'values'))
+                        try:
+                            # Abonado es col 1, Método col 2
+                            vals[1] = f"$ {Decimal(str(monto)):,.0f}" if monto is not None else vals[1]
+                            vals[2] = 'Efectivo' if metodo_api == 'efectivo' else 'Consignación'
+                        except Exception:
+                            pass
+                        tree.item(sel[0], values=tuple(vals))
+                    messagebox.showinfo("Éxito", "Abono actualizado")
+                    self._abono_cache.clear(); self._tarjeta_cache.clear(); self._refrescar_ventanas_detalle()
+                    dlg.destroy()
+                except Exception as e:
+                    messagebox.showerror("Error", f"No se pudo actualizar: {e}")
+
+            btns = ttk.Frame(frame)
+            btns.grid(row=2, column=0, columnspan=2, pady=(10, 0))
+            ttk.Button(btns, text="Guardar", command=guardar).pack(side='left', padx=5)
+            ttk.Button(btns, text="Cancelar", command=dlg.destroy).pack(side='left', padx=5)
+
+        def mostrar_menu(event):
+            try:
+                row_id = tree.identify_row(event.y)
+                if row_id:
+                    tree.selection_set(row_id)
+                menu.tk_popup(event.x_root, event.y_root)
+            finally:
+                menu.grab_release()
+
+        # Bind botón derecho
+        tree.bind('<Button-3>', mostrar_menu)
 
     def mostrar_detalle_tarjetas_canceladas(self):
         """[DESACTIVADO] Muestra ventana con lista de tarjetas canceladas"""
@@ -891,6 +1160,54 @@ class FrameLiquidacion(ttk.Frame):
         """[DESACTIVADO] Muestra el detalle de abonos del día"""
         messagebox.showinfo("Función en Desarrollo",
                           "Las vistas de detalles se están actualizando.")
+
+    def mostrar_detalle_recaudos_metodo(self, metodo: str):
+        """Muestra ventana emergente con abonos del día filtrados por método (efectivo/consignacion)."""
+        if not self.empleado_actual_id:
+            messagebox.showwarning("Advertencia", "Seleccione un empleado")
+            return
+        metodo_norm = (self._normalizar_texto(metodo) or '').strip().lower()
+        titulo = "Recaudos en Efectivo (día)" if 'efectivo' in metodo_norm else "Recaudos en Consignación (día)"
+        fecha_str = self.fecha_actual.strftime('%Y-%m-%d')
+        try:
+            items = self.api_client.list_abonos_del_dia(self.empleado_actual_id, fecha_str)
+            columnas = ("Cliente", "Abono")
+            filas = []
+            raw_filtrados = []
+            for a in items:
+                m_raw = self._obtener_metodo_pago(a)
+                m_norm = self._normalizar_texto(m_raw).lower()
+                if not m_norm:
+                    # Fallback: enriquecer por ID si existe
+                    a_id = a.get('id') or a.get('abono_id')
+                    try:
+                        if a_id:
+                            a_full = self._get_abono_with_cache(a_id)
+                            if a_full:
+                                m_raw = self._obtener_metodo_pago(a_full)
+                                m_norm = self._normalizar_texto(m_raw).lower()
+                                a = a_full
+                    except Exception:
+                        pass
+                coincide_efectivo = ('efectivo' in metodo_norm and 'efectivo' in m_norm)
+                coincide_consig = ('consignacion' in metodo_norm and 'consignacion' in m_norm)
+                if coincide_efectivo or coincide_consig:
+                    cliente = self._extract_cliente_nombre(a)
+                    if not cliente:
+                        # Intentar enriquecer con tarjeta si aún vacío
+                        t_codigo = self._get_tarjeta_codigo_from_data(a)
+                        t_id = self._get_tarjeta_id_from_data(a)
+                        t_full = self._get_tarjeta_with_cache(codigo=t_codigo, tarjeta_id=t_id)
+                        if t_full:
+                            cliente = self._extract_cliente_nombre(t_full)
+                    abonado = self._first_number(a, ('monto', 'valor'))
+                    filas.append((cliente or '—', f"$ {abonado:,.0f}"))
+                    raw_filtrados.append(a)
+            ctx = 'efectivo' if 'efectivo' in metodo_norm else 'consignacion'
+            self._mostrar_tabla_detalle(titulo, columnas, filas, raw_items=raw_filtrados, contexto=ctx)
+        except Exception as e:
+            logger.error(f"Error al cargar detalle por método {metodo}: {e}")
+            messagebox.showerror("Error", f"No se pudo cargar el detalle por método: {e}")
 
     def actualizar_interfaz_base(self):
         """Actualiza la interfaz de base según si ya existe una base asignada, usando la API."""
@@ -1114,4 +1431,236 @@ class FrameLiquidacion(ttk.Frame):
         except Exception:
             return str(texto)
 
-    # (Depuración eliminada)
+    def _first_number(self, data: dict, key_candidates: tuple) -> Decimal:
+        """Devuelve el primer valor numérico encontrado entre varias claves, como Decimal."""
+        for key in key_candidates:
+            value = data.get(key)
+            if value is None:
+                continue
+            try:
+                return Decimal(str(value))
+            except Exception:
+                continue
+        return Decimal(0)
+
+    def _parse_iso_date_only(self, fecha) -> str:
+        """Convierte ISO o tipo datetime a 'dd/mm/YYYY' sin hora."""
+        if not fecha:
+            return ""
+        try:
+            if isinstance(fecha, str):
+                dt = datetime.fromisoformat(str(fecha).replace('Z', '+00:00'))
+            else:
+                dt = fecha
+            return dt.strftime('%d/%m/%Y')
+        except Exception:
+            return str(fecha)
+
+    def _extraer_monto_prestamo_de_abono(self, abono: dict):
+        """Intenta extraer el monto del préstamo asociado al abono, si está disponible."""
+        try:
+            for key in ('monto_prestamo', 'monto_tarjeta', 'tarjeta_monto'):
+                if key in abono:
+                    return Decimal(str(abono.get(key)))
+            tarjeta = abono.get('tarjeta') or {}
+            for key in ('monto', 'monto_prestamo'):
+                if key in tarjeta:
+                    return Decimal(str(tarjeta.get(key)))
+        except Exception:
+            return None
+        return None
+
+    def _get_tarjeta_codigo_from_data(self, data: dict) -> str:
+        """Intenta extraer el código de tarjeta desde varias claves posibles."""
+        try:
+            for key in (
+                'tarjeta_codigo', 'codigo_tarjeta', 'codigo', 'tarjetaCodigo'
+            ):
+                val = data.get(key)
+                if val is not None and str(val).strip() != "":
+                    return str(val)
+            # También desde anidado 'tarjeta'
+            tarjeta = data.get('tarjeta') or {}
+            if isinstance(tarjeta, dict):
+                val = tarjeta.get('codigo') or tarjeta.get('tarjeta_codigo')
+                if val:
+                    return str(val)
+        except Exception:
+            pass
+        return ""
+
+    def _get_tarjeta_id_from_data(self, data: dict):
+        """Intenta extraer el ID de la tarjeta desde varias claves posibles."""
+        try:
+            for key in ('tarjeta_id', 'id_tarjeta', 'idTarjeta'):
+                val = data.get(key)
+                if val is not None and str(val).strip() != "":
+                    return val
+            tarjeta = data.get('tarjeta') or {}
+            if isinstance(tarjeta, dict):
+                val = tarjeta.get('id') or tarjeta.get('tarjeta_id')
+                if val is not None:
+                    return val
+        except Exception:
+            pass
+        return None
+
+    def _try_fetch_tarjeta(self, codigo: str = None, tarjeta_id=None):
+        """Intenta obtener datos de tarjeta por código o ID usando varias rutas del cliente API."""
+        try:
+            if codigo:
+                try:
+                    return self.api_client.get_tarjeta_by_codigo(codigo)
+                except Exception:
+                    pass
+            if tarjeta_id is not None:
+                try:
+                    return self.api_client.get_tarjeta(int(tarjeta_id))
+                except Exception:
+                    pass
+            if codigo and tarjeta_id is None:
+                # último intento: algunos backends usan un único get_tarjeta para código
+                try:
+                    return self.api_client.get_tarjeta(codigo)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        return None
+
+    def _extract_contacto_from_tarjeta(self, tarjeta: dict) -> tuple:
+        """Extrae (telefono, direccion) desde tarjeta->cliente con múltiples claves fallback."""
+        try:
+            cliente = tarjeta.get('cliente') or {}
+            telefono = (
+                cliente.get('telefono') or cliente.get('celular') or cliente.get('telefono1') or
+                tarjeta.get('cliente_telefono') or tarjeta.get('telefono_cliente') or tarjeta.get('telefono')
+            )
+            direccion = (
+                cliente.get('direccion') or cliente.get('direccion_residencia') or
+                tarjeta.get('cliente_direccion') or tarjeta.get('direccion_cliente') or tarjeta.get('direccion')
+            )
+            return str(telefono or ''), str(direccion or '')
+        except Exception:
+            return '', ''
+
+    def _get_first_str(self, data: dict, key_candidates: tuple) -> str:
+        """Devuelve el primer valor de texto encontrado entre varias claves."""
+        for key in key_candidates:
+            try:
+                val = data.get(key)
+            except Exception:
+                val = None
+            if val is not None and str(val).strip() != "":
+                return str(val)
+        return ""
+
+    def _parse_iso_dt(self, fecha) -> datetime:
+        """Parsea ISO (con Z o +00:00) o datetime a objeto datetime."""
+        if not fecha:
+            return None
+        try:
+            if isinstance(fecha, str):
+                return datetime.fromisoformat(str(fecha).replace('Z', '+00:00').replace('z', '+00:00'))
+            return fecha
+        except Exception:
+            return None
+
+    def _build_abonos_index_por_tarjeta(self, fecha_str: str) -> dict:
+        """Construye índice {codigo_tarjeta: abono_dict_ultimo_del_dia} para búsquedas rápidas."""
+        index = {}
+        try:
+            items = self.api_client.list_abonos_del_dia(self.empleado_actual_id, fecha_str)
+            for a in items:
+                codigo = (
+                    a.get('tarjeta_codigo') or a.get('codigo_tarjeta') or (
+                        (a.get('tarjeta') or {}).get('codigo') if isinstance(a.get('tarjeta'), dict) else None
+                    ) or a.get('tarjetaCodigo') or a.get('codigo')
+                )
+                if not codigo:
+                    continue
+                dt = self._parse_iso_dt(a.get('fecha') or a.get('created_at'))
+                prev = index.get(codigo)
+                if not prev:
+                    index[codigo] = a
+                else:
+                    prev_dt = self._parse_iso_dt(prev.get('fecha') or prev.get('created_at'))
+                    if (dt and not prev_dt) or (dt and prev_dt and dt > prev_dt):
+                        index[codigo] = a
+        except Exception:
+            pass
+        return index
+
+    def _get_abono_with_cache(self, abono_id):
+        try:
+            if abono_id in self._abono_cache:
+                return self._abono_cache[abono_id]
+            ab = self.api_client.get_abono(int(abono_id))
+            self._abono_cache[abono_id] = ab
+            return ab
+        except Exception:
+            return None
+
+    def _get_tarjeta_with_cache(self, codigo: str = None, tarjeta_id=None):
+        key = (codigo or '') + '|' + (str(tarjeta_id) if tarjeta_id is not None else '')
+        try:
+            if key in self._tarjeta_cache:
+                return self._tarjeta_cache[key]
+            t = self._try_fetch_tarjeta(codigo=codigo, tarjeta_id=tarjeta_id)
+            if t:
+                self._tarjeta_cache[key] = t
+            return t
+        except Exception:
+            return None
+
+    def _refrescar_ventanas_detalle(self):
+        try:
+            # Cerrar y reabrir para forzar reconstrucción completa
+            to_reopen = []
+            for ctx, win in list(self._detalles_abiertos.items()):
+                try:
+                    if win and win.winfo_exists():
+                        win.destroy()
+                    to_reopen.append(ctx)
+                except Exception:
+                    pass
+            # Limpiar registro
+            self._detalles_abiertos.clear()
+            # Reabrir según contexto
+            for ctx in to_reopen:
+                if ctx == 'abonos_dia':
+                    self.mostrar_detalle_estadistica('total_registros')
+                elif ctx == 'efectivo':
+                    self.mostrar_detalle_recaudos_metodo('efectivo')
+                elif ctx == 'consignacion':
+                    self.mostrar_detalle_recaudos_metodo('consignacion')
+                elif ctx == 'tarjetas_canceladas':
+                    self.mostrar_detalle_estadistica('tarjetas_canceladas')
+                elif ctx == 'tarjetas_nuevas':
+                    self.mostrar_detalle_estadistica('tarjetas_nuevas')
+        except Exception:
+            pass
+
+    def _extract_cliente_nombre(self, data: dict) -> str:
+        """Construye 'APELLIDO NOMBRE' desde varias estructuras posibles en data.
+        Busca en nivel actual, en 'cliente' y en 'tarjeta'->'cliente'."""
+        try:
+            # Nivel actual
+            ap = str(data.get('cliente_apellido') or data.get('apellido') or '')
+            no = str(data.get('cliente_nombre') or data.get('nombre') or '')
+            if not (ap or no):
+                # Subdict 'cliente'
+                cli = data.get('cliente') or {}
+                ap = str(cli.get('apellido') or ap or '')
+                no = str(cli.get('nombre') or no or '')
+            if not (ap or no):
+                # Subdict 'tarjeta'->'cliente'
+                tarj = data.get('tarjeta') or {}
+                if isinstance(tarj, dict):
+                    cli2 = tarj.get('cliente') or {}
+                    ap = str(cli2.get('apellido') or ap or '')
+                    no = str(cli2.get('nombre') or no or '')
+            nombre = f"{ap} {no}".strip().upper()
+            return nombre
+        except Exception:
+            return ""

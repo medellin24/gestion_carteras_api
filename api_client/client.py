@@ -123,6 +123,14 @@ class APIClient:
             "email": email,
             "password_admin": password_admin,
         }
+        # Detectar zona horaria local del sistema para guardar en el admin
+        try:
+            import tzlocal  # type: ignore
+            tz_name = tzlocal.get_localzone_name()
+            if isinstance(tz_name, str) and tz_name:
+                payload["timezone"] = tz_name
+        except Exception:
+            pass
         if plan_max_empleados is not None:
             payload["plan_max_empleados"] = int(plan_max_empleados)
         return self._make_request('POST', '/public/signup', data=payload)

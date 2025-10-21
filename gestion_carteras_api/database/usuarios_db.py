@@ -10,7 +10,7 @@ def get_user_by_username(username: str) -> Optional[Dict]:
         with DatabasePool.get_cursor() as cursor:
             cursor.execute(
                 """
-                SELECT id, username, password_hash, role, cuenta_id, empleado_identificacion, is_active
+                SELECT id, username, password_hash, role, cuenta_id, empleado_identificacion, is_active, timezone
                 FROM usuarios
                 WHERE username = %s
                 """,
@@ -27,6 +27,7 @@ def get_user_by_username(username: str) -> Optional[Dict]:
                 "cuenta_id": row[4],
                 "empleado_identificacion": row[5],
                 "is_active": row[6],
+                "timezone": row[7] if len(row) > 7 else None,
             }
     except Exception as e:
         logger.error(f"Error al obtener usuario: {e}")

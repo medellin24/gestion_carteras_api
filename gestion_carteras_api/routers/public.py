@@ -16,6 +16,7 @@ class SignupRequest(BaseModel):
     contacto: Optional[str] = None
     plan_max_empleados: Optional[int] = None  # si None => trial 1 empleado
     password_admin: str
+    timezone: Optional[str] = None  # IANA, ej: 'America/Bogota'
 
 
 class SignupResponse(BaseModel):
@@ -56,15 +57,15 @@ def signup(body: SignupRequest):
         )
         cuenta_id = cur.fetchone()[0]
 
-        # crear admin
+        # crear admin (guardar timezone si se envía, default UTC)
         pwd_hash = get_password_hash(body.password_admin)
         cur.execute(
             """
-            INSERT INTO usuarios (username, password_hash, role, cuenta_id, is_active)
-            VALUES (%s, %s, 'admin', %s, TRUE)
+            INSERT INTO usuarios (username, password_hash, role, cuenta_id, is_active, timezone)
+            VALUES (%s, %s, 'admin', %s, TRUE, %s)
             RETURNING id
             """,
-            (body.email, pwd_hash, cuenta_id),
+            (body.email, pwd_hash, cuenta_id, (body.timezone or 'UTC')),
         )
 
     return SignupResponse(cuenta_id=cuenta_id, trial=trial, max_empleados=max_emp)
