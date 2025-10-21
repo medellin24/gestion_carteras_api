@@ -8,11 +8,10 @@ const BASE_URL = (() => {
   if (raw) {
     return raw.endsWith('/') ? raw.slice(0, -1) : raw
   }
-  // Solo permitir fallback local en modo desarrollo
+  // En desarrollo, permitir localhost por conveniencia
   if (import.meta.env.DEV) return 'http://127.0.0.1:8000'
-  // Último recurso en prod: usar la URL pública conocida si no se definieron variables
-  const prodFallback = 'https://asjiz6txe3.us-east-2.awsapprunner.com'
-  return prodFallback
+  // En producción/staging, fallar explícitamente si no está configurada
+  throw new Error('VITE_API_BASE_URL no está configurada en el entorno de despliegue')
 })()
 
 class ApiError extends Error {
