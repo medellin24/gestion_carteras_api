@@ -1,7 +1,7 @@
 from typing import Optional, Literal
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
-from zoneinfo import ZoneInfo
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from datetime import datetime as _dt
 
 from ..security import (
@@ -56,7 +56,10 @@ def login(body: LoginRequest):
                 if not fin and fecha_inicio:
                     fin = fecha_inicio + timedelta(days=30)
                 tz = (user.get("timezone") or "UTC")
-                today_local = _dt.now(ZoneInfo(tz)).date()
+                try:
+                    today_local = _dt.now(ZoneInfo(tz)).date()
+                except ZoneInfoNotFoundError:
+                    today_local = _dt.now(ZoneInfo("UTC")).date()
                 if fin and today_local > fin:
                     raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Suscripción vencida. Contacte al administrador para reactivar.")
 

@@ -1787,9 +1787,12 @@ def sync_endpoint(payload: SyncRequest, principal: dict = Depends(get_current_pr
                     descargar, subir, fecha_accion = row
                     # Comparar contra el día LOCAL del usuario para evitar desfaces por huso
                     from datetime import datetime as _dt
-                    from zoneinfo import ZoneInfo as _ZI
+                    from zoneinfo import ZoneInfo as _ZI, ZoneInfoNotFoundError as _ZINF
                     tz_name = principal.get('timezone') or 'UTC'
-                    today = _dt.now(_ZI(tz_name)).date()
+                    try:
+                        today = _dt.now(_ZI(tz_name)).date()
+                    except _ZINF:
+                        today = _dt.now(_ZI('UTC')).date()
                     
                     # Verificar permiso de subida
                     if not subir:
