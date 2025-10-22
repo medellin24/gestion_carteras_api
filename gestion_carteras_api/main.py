@@ -1785,7 +1785,11 @@ def sync_endpoint(payload: SyncRequest, principal: dict = Depends(get_current_pr
                         raise HTTPException(status_code=404, detail=f"Empleado {emp_id} no encontrado")
                     
                     descargar, subir, fecha_accion = row
-                    today = date.today()
+                    # Comparar contra el día LOCAL del usuario para evitar desfaces por huso
+                    from datetime import datetime as _dt
+                    from zoneinfo import ZoneInfo as _ZI
+                    tz_name = principal.get('timezone') or 'UTC'
+                    today = _dt.now(_ZI(tz_name)).date()
                     
                     # Verificar permiso de subida
                     if not subir:
