@@ -74,6 +74,7 @@ class RenewRequest(BaseModel):
     max_empleados: int
     dias: int
     es_renovacion: bool = True  # True para renovación, False para cambio de plan
+    max_daily_routes: Optional[int] = None  # Si no viene, se iguala a max_empleados
 
 
 @router.get("/limits", response_model=LimitsResponse)
@@ -577,6 +578,11 @@ def renew_subscription(body: RenewRequest, principal: dict = Depends(require_adm
     cuenta_id = principal.get("cuenta_id")
     
     with DatabasePool.get_cursor() as cur:
+        # Asegurar columna max_daily_routes
+        cur.execute("""
+            ALTER TABLE cuentas_admin
+            ADD COLUMN IF NOT EXISTS max_daily_routes INTEGER
+        """)
         # 1. Guardar qué usuarios estaban activos ANTES de la renovación
         usuarios_para_reactivar = []
         if body.es_renovacion:
@@ -588,11 +594,16 @@ def renew_subscription(body: RenewRequest, principal: dict = Depends(require_adm
             usuarios_para_reactivar = [row[0] for row in cur.fetchall()]
         
         # 2. Actualizar plan
-        cur.execute("""
+        cur.execute(
+            """
             UPDATE cuentas_admin 
-            SET max_empleados=%s, fecha_fin=CURRENT_DATE + INTERVAL '%s days'
-            WHERE id=%s
-        """, (body.max_empleados, body.dias, cuenta_id))
+               SET max_empleados=%s,
+                   max_daily_routes=COALESCE(%s, %s),
+                   fecha_fin=CURRENT_DATE + INTERVAL '%s days'
+             WHERE id=%s
+            """,
+            (body.max_empleados, body.max_daily_routes, body.max_empleados, body.dias, cuenta_id),
+        )
         
         # 3. Si es RENOVACIÓN: reactivar automáticamente hasta el límite
         reactivados = 0
