@@ -271,7 +271,7 @@ export const apiClient = {
   },
   // Intento de descarga: valida límite diario por plan y registra empleado del día
   attemptDownload: async (empleadoId) => {
-    return request(`/admin/users/cobradores/downloads/attempt`, { method: 'POST', body: { empleado_identificacion: empleadoId } })
+    return request(`/admin/downloads/attempt`, { method: 'POST', body: { empleado_identificacion: empleadoId } })
   },
 }
 export { request }
