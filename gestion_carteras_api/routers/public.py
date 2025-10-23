@@ -38,11 +38,16 @@ def signup(body: SignupRequest):
         if cur.fetchone():
             raise HTTPException(status_code=409, detail="Email ya registrado. Inicia sesión o usa otro email.")
 
-        # crear cuenta
+        # crear cuenta (guardar timezone_default si se envía)
         cur.execute(
             """
-            INSERT INTO cuentas_admin (nombre, estado_suscripcion, plan, fecha_inicio, fecha_fin, max_empleados, trial_until)
-            VALUES (%s, %s, %s, %s, %s, %s, %s)
+            ALTER TABLE cuentas_admin ADD COLUMN IF NOT EXISTS timezone_default TEXT
+            """
+        )
+        cur.execute(
+            """
+            INSERT INTO cuentas_admin (nombre, estado_suscripcion, plan, fecha_inicio, fecha_fin, max_empleados, trial_until, timezone_default)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
             RETURNING id
             """,
             (
@@ -53,6 +58,7 @@ def signup(body: SignupRequest):
                 (hoy + timedelta(days=30)) if not trial else trial_until,  # fecha_fin para planes pagos (placeholder 30 días) o None en trial
                 max_emp,
                 trial_until,
+                (body.timezone or 'UTC'),
             ),
         )
         cuenta_id = cur.fetchone()[0]

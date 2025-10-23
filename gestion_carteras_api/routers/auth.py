@@ -63,7 +63,16 @@ def login(body: LoginRequest):
                 if fin and today_local > fin:
                     raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Suscripción vencida. Contacte al administrador para reactivar.")
 
+    # Timezone: preferir la del usuario; si no, usar la default de la cuenta
     tz = user.get("timezone") or "UTC"
+    try:
+        with DatabasePool.get_cursor() as cur:
+            cur.execute("SELECT timezone_default FROM cuentas_admin WHERE id=%s", (cuenta_id,))
+            row = cur.fetchone()
+            if row and row[0] and not user.get("timezone"):
+                tz = row[0]
+    except Exception:
+        pass
     access_token = create_token(
         subject=str(user["id"]),
         token_type="access",
@@ -127,7 +136,21 @@ def refresh_tokens(body: RefreshRequest):
                 if not row or not row[0]:  # No existe o está inactivo
                     raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Usuario cobrador desactivado. Token expirado.")
 
+    # Refrescar timezone desde usuario o default de cuenta si no viene en el token
     tz = payload.get("timezone") or "UTC"
+    try:
+        with DatabasePool.get_cursor() as cur:
+            cur.execute("SELECT timezone FROM usuarios WHERE id=%s", (subject,))
+            row_u = cur.fetchone()
+            if row_u and row_u[0]:
+                tz = row_u[0]
+            else:
+                cur.execute("SELECT timezone_default FROM cuentas_admin WHERE id=%s", (cuenta_id,))
+                row_c = cur.fetchone()
+                if row_c and row_c[0]:
+                    tz = row_c[0]
+    except Exception:
+        pass
     access_token = create_token(
         subject=str(subject), token_type="access", role=role, cuenta_id=cuenta_id, empleado_identificacion=empleado_identificacion, timezone_name=tz
     )
