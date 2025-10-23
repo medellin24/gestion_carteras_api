@@ -66,6 +66,17 @@ export default function DescargarPage() {
   }
 
   async function descargarParaEmpleado(id) {
+    // Validación de límite por plan (empleados distintos por día)
+    try {
+      const attempt = await apiClient.attemptDownload(id)
+      if (!attempt?.allowed) {
+        setError(`Límite diario alcanzado: ya descargaron ${attempt?.used || 0} empleados (plan permite ${attempt?.limit || 1}).`)
+        return
+      }
+    } catch (e) {
+      // Si el endpoint no está disponible o falla, no bloquear la descarga previa
+      console.warn('attemptDownload falló (no bloquea):', e)
+    }
     const hoy = formatDateYYYYMMDD()
     try { 
       localStorage.setItem('empleado_identificacion', String(id))

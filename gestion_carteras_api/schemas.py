@@ -239,3 +239,15 @@ class SyncResponse(BaseModel):
     created_abonos: List[dict] = []    # {id_temporal, id}
     created_gastos: int = 0
     created_bases: int = 0
+
+# --- Control de descargas diarias por plan ---
+
+class AttemptDownloadRequest(BaseModel):
+    empleado_identificacion: str
+
+class AttemptDownloadResponse(BaseModel):
+    allowed: bool
+    used: int
+    limit: int
+    already_registered: bool = False
+    message: str = ""

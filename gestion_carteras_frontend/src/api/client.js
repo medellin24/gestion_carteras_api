@@ -269,5 +269,9 @@ export const apiClient = {
     // perms: { descargar?: boolean, subir?: boolean, fecha_accion?: string(YYYY-MM-DD) }
     return request(`/empleados/${encodeURIComponent(empleadoId)}/permissions`, { method: 'POST', body: perms })
   },
+  // Intento de descarga: valida límite diario por plan y registra empleado del día
+  attemptDownload: async (empleadoId) => {
+    return request(`/admin/users/cobradores/downloads/attempt`, { method: 'POST', body: { empleado_identificacion: empleadoId } })
+  },
 }
 export { request }

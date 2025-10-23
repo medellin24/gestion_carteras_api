@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
 from ..security import require_admin, get_password_hash
+from ..schemas import AttemptDownloadRequest, AttemptDownloadResponse
 from ..database.connection_pool import DatabasePool
 
 router = APIRouter()
@@ -653,6 +654,70 @@ def activate_available_cobradores(principal: dict = Depends(require_admin)):
             "mensaje": f"Se activaron {len(activados)} usuarios cobrador"
         }
 
+
+@router.post("/downloads/attempt", response_model=AttemptDownloadResponse)
+def attempt_download(body: AttemptDownloadRequest, principal: dict = Depends(require_admin)):
+    """
+    Registra un intento de descarga para un empleado y valida límite por plan:
+    - Cuenta cuántos empleados distintos han descargado hoy para la cuenta del admin.
+    - Permite múltiples descargas del MISMO empleado en el día.
+    - Bloquea si el empleado es nuevo en el día y ya se alcanzó el límite de empleados del plan.
+    """
+    from datetime import date as _date
+    cuenta_id = principal.get("cuenta_id")
+    empleado_id = str(body.empleado_identificacion)
+    hoy = _date.today()
+    with DatabasePool.get_cursor() as cur:
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS admin_daily_downloads (
+                cuenta_id TEXT NOT NULL,
+                fecha DATE NOT NULL,
+                empleado_identificacion TEXT NOT NULL,
+                PRIMARY KEY (cuenta_id, fecha, empleado_identificacion)
+            )
+            """
+        )
+        cur.execute("SELECT COALESCE(max_empleados,1) FROM cuentas_admin WHERE id=%s", (cuenta_id,))
+        limit_emp = cur.fetchone()[0] or 1
+        cur.execute(
+            """
+            SELECT 1 FROM admin_daily_downloads
+            WHERE cuenta_id=%s AND fecha=%s AND empleado_identificacion=%s
+            """,
+            (cuenta_id, hoy, empleado_id),
+        )
+        ya = cur.fetchone() is not None
+        if ya:
+            cur.execute(
+                """
+                SELECT COUNT(*) FROM admin_daily_downloads
+                WHERE cuenta_id=%s AND fecha=%s
+                """,
+                (cuenta_id, hoy),
+            )
+            used = cur.fetchone()[0] or 0
+            return AttemptDownloadResponse(allowed=True, used=used, limit=limit_emp, already_registered=True, message="Redescarga del mismo empleado permitida")
+        cur.execute(
+            """
+            SELECT COUNT(*) FROM admin_daily_downloads
+            WHERE cuenta_id=%s AND fecha=%s
+            """,
+            (cuenta_id, hoy),
+        )
+        used = cur.fetchone()[0] or 0
+        if used >= limit_emp:
+            return AttemptDownloadResponse(allowed=False, used=used, limit=limit_emp, already_registered=False, message="Límite diario de empleados distintos alcanzado para el plan")
+        cur.execute(
+            """
+            INSERT INTO admin_daily_downloads (cuenta_id, fecha, empleado_identificacion)
+            VALUES (%s, %s, %s)
+            ON CONFLICT DO NOTHING
+            """,
+            (cuenta_id, hoy, empleado_id),
+        )
+        used2 = used + 1
+        return AttemptDownloadResponse(allowed=True, used=used2, limit=limit_emp, already_registered=False, message="Descarga registrada")
 
 @router.get("/users/cobradores/activos")
 def get_cobradores_activos(principal: dict = Depends(require_admin)):
