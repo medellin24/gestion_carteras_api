@@ -4,7 +4,7 @@ from datetime import date, timedelta
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
-from ..security import require_admin, get_password_hash
+from ..security import require_admin, get_password_hash, get_current_principal
 from ..schemas import AttemptDownloadRequest, AttemptDownloadResponse
 from ..database.connection_pool import DatabasePool
 
@@ -656,68 +656,91 @@ def activate_available_cobradores(principal: dict = Depends(require_admin)):
 
 
 @router.post("/downloads/attempt", response_model=AttemptDownloadResponse)
-def attempt_download(body: AttemptDownloadRequest, principal: dict = Depends(require_admin)):
+def attempt_download(body: AttemptDownloadRequest, principal: dict = Depends(get_current_principal)):
     """
-    Registra un intento de descarga para un empleado y valida límite por plan:
-    - Cuenta cuántos empleados distintos han descargado hoy para la cuenta del admin.
-    - Permite múltiples descargas del MISMO empleado en el día.
-    - Bloquea si el empleado es nuevo en el día y ya se alcanzó el límite de empleados del plan.
+    Registra un intento de descarga para un empleado y valida límite por plan (sin histórico):
+    - Usa campos volátiles en cuentas_admin: daily_routes_date (DATE local) y daily_routes_empleados (JSONB-set)
+    - Acepta admin y cobrador; siempre suma a la cuenta (cuenta_id del token)
+    - Permite múltiples descargas del MISMO empleado en el día
+    - Bloquea si el empleado es nuevo en el día y ya se alcanzó el límite (max_daily_routes || max_empleados)
     """
-    from datetime import date as _date
+    from datetime import datetime as _dt
+    from zoneinfo import ZoneInfo as _ZI, ZoneInfoNotFoundError as _ZINF
+    role = principal.get("role")
+    if role not in ("admin", "cobrador"):
+        raise HTTPException(status_code=403, detail="Rol no autorizado")
     cuenta_id = principal.get("cuenta_id")
     empleado_id = str(body.empleado_identificacion)
-    hoy = _date.today()
+    # Si es cobrador, solo puede registrar su propio empleado
+    if role == "cobrador":
+        if str(principal.get("empleado_identificacion")) != empleado_id:
+            raise HTTPException(status_code=403, detail="Cobrador no puede registrar otro empleado")
+    # Calcular día LOCAL según timezone del token
+    tz_name = principal.get('timezone') or 'UTC'
+    try:
+        hoy_local = _dt.now(_ZI(tz_name)).date()
+    except _ZINF:
+        hoy_local = _dt.now(_ZI('UTC')).date()
     with DatabasePool.get_cursor() as cur:
+        # Asegurar columnas volátiles
+        cur.execute("""
+            ALTER TABLE cuentas_admin
+            ADD COLUMN IF NOT EXISTS daily_routes_date DATE,
+            ADD COLUMN IF NOT EXISTS daily_routes_empleados JSONB DEFAULT '{}'::jsonb,
+            ADD COLUMN IF NOT EXISTS max_daily_routes INTEGER
+        """)
+        # Validar pertenencia del empleado a la cuenta cuando el rol es admin (opcional pero recomendable)
+        if role == 'admin':
+            cur.execute("SELECT 1 FROM empleados WHERE identificacion=%s AND cuenta_id=%s", (empleado_id, cuenta_id))
+            if cur.fetchone() is None:
+                raise HTTPException(status_code=403, detail="Empleado no pertenece a la cuenta")
+        # Lock de la fila de cuenta para consistencia
         cur.execute(
             """
-            CREATE TABLE IF NOT EXISTS admin_daily_downloads (
-                cuenta_id TEXT NOT NULL,
-                fecha DATE NOT NULL,
-                empleado_identificacion TEXT NOT NULL,
-                PRIMARY KEY (cuenta_id, fecha, empleado_identificacion)
-            )
-            """
-        )
-        cur.execute("SELECT COALESCE(max_empleados,1) FROM cuentas_admin WHERE id=%s", (cuenta_id,))
-        limit_emp = cur.fetchone()[0] or 1
-        cur.execute(
-            """
-            SELECT 1 FROM admin_daily_downloads
-            WHERE cuenta_id=%s AND fecha=%s AND empleado_identificacion=%s
+            SELECT daily_routes_date, daily_routes_empleados, COALESCE(max_daily_routes, max_empleados, 1) AS lim
+            FROM cuentas_admin
+            WHERE id=%s
+            FOR UPDATE
             """,
-            (cuenta_id, hoy, empleado_id),
+            (cuenta_id,),
         )
-        ya = cur.fetchone() is not None
-        if ya:
+        row = cur.fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Cuenta no encontrada")
+        d_date, d_json, limit_emp = row
+        if not isinstance(d_json, dict):
+            # psycopg2 convierte jsonb a dict; si no, normalizar
+            try:
+                import json as _json
+                d_json = _json.loads(d_json) if d_json else {}
+            except Exception:
+                d_json = {}
+        # Reset diario si cambió de día local
+        if d_date != hoy_local:
             cur.execute(
-                """
-                SELECT COUNT(*) FROM admin_daily_downloads
-                WHERE cuenta_id=%s AND fecha=%s
-                """,
-                (cuenta_id, hoy),
+                "UPDATE cuentas_admin SET daily_routes_date=%s, daily_routes_empleados='{}'::jsonb WHERE id=%s",
+                (hoy_local, cuenta_id),
             )
-            used = cur.fetchone()[0] or 0
-            return AttemptDownloadResponse(allowed=True, used=used, limit=limit_emp, already_registered=True, message="Redescarga del mismo empleado permitida")
+            d_json = {}
+        # Si el empleado ya está registrado hoy, permitir redescarga
+        if empleado_id in d_json.keys():
+            used = len(d_json)
+            return AttemptDownloadResponse(allowed=True, used=used, limit=limit_emp, already_registered=True, message="Redescarga permitida")
+        # Límite
+        used = len(d_json)
+        if used >= int(limit_emp or 1):
+            return AttemptDownloadResponse(allowed=False, used=used, limit=int(limit_emp or 1), already_registered=False, message="Límite diario alcanzado para el plan")
+        # Registrar empleado en set JSONB
         cur.execute(
             """
-            SELECT COUNT(*) FROM admin_daily_downloads
-            WHERE cuenta_id=%s AND fecha=%s
+            UPDATE cuentas_admin
+               SET daily_routes_empleados = COALESCE(daily_routes_empleados, '{}'::jsonb) || jsonb_build_object(%s, true),
+                   daily_routes_date = %s
+             WHERE id=%s
             """,
-            (cuenta_id, hoy),
+            (empleado_id, hoy_local, cuenta_id),
         )
-        used = cur.fetchone()[0] or 0
-        if used >= limit_emp:
-            return AttemptDownloadResponse(allowed=False, used=used, limit=limit_emp, already_registered=False, message="Límite diario de empleados distintos alcanzado para el plan")
-        cur.execute(
-            """
-            INSERT INTO admin_daily_downloads (cuenta_id, fecha, empleado_identificacion)
-            VALUES (%s, %s, %s)
-            ON CONFLICT DO NOTHING
-            """,
-            (cuenta_id, hoy, empleado_id),
-        )
-        used2 = used + 1
-        return AttemptDownloadResponse(allowed=True, used=used2, limit=limit_emp, already_registered=False, message="Descarga registrada")
+        return AttemptDownloadResponse(allowed=True, used=used+1, limit=int(limit_emp or 1), already_registered=False, message="Descarga registrada")
 
 @router.get("/users/cobradores/activos")
 def get_cobradores_activos(principal: dict = Depends(require_admin)):
