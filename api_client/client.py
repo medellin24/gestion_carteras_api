@@ -2,6 +2,7 @@ import json
 import time
 import logging
 from typing import Dict, List, Optional, Any, Union
+import base64 as _b64
 from datetime import date, datetime
 from decimal import Decimal
 
@@ -101,6 +102,11 @@ class APIClient:
         self.session.headers['Authorization'] = f"Bearer {access}"
         self._refresh_token = tokens.get('refresh_token')
         self._role = tokens.get('role')
+        # Capturar timezone desde el JWT si está disponible
+        try:
+            self._set_timezone_from_token(access)
+        except Exception:
+            pass
         return tokens
 
     def refresh(self) -> Dict:
@@ -114,7 +120,30 @@ class APIClient:
         self.session.headers['Authorization'] = f"Bearer {access}"
         self._refresh_token = tokens.get('refresh_token')
         self._role = tokens.get('role')
+        try:
+            self._set_timezone_from_token(access)
+        except Exception:
+            pass
         return tokens
+
+    # --- Utilidades JWT/timezone ---
+    def _set_timezone_from_token(self, jwt_token: str) -> None:
+        """Decodifica el payload del JWT (sin verificar firma) para leer 'timezone'."""
+        if not jwt_token or '.' not in jwt_token:
+            return
+        try:
+            payload_b64 = jwt_token.split('.')[1]
+            pad = '=' * (-len(payload_b64) % 4)
+            payload_json = _b64.urlsafe_b64decode((payload_b64 + pad).encode('utf-8')).decode('utf-8')
+            payload = json.loads(payload_json)
+            tz = payload.get('timezone')
+            if isinstance(tz, str) and tz:
+                self._timezone = tz
+        except Exception:
+            pass
+
+    def get_user_timezone(self) -> Optional[str]:
+        return getattr(self, '_timezone', None)
 
     # --- Registro público (signup/trial o con plan) ---
     def signup_public(self, nombre_negocio: str, email: str, password_admin: str, plan_max_empleados: Optional[int] = None) -> Dict:

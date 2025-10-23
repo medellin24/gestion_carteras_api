@@ -93,6 +93,7 @@ def _day_bounds_utc_str(fecha_str: str, tz_name: str):
         end_local = _dt(d.year, d.month, d.day, 23, 59, 59, 999000, tzinfo=tz)
         start_utc = start_local.astimezone(_tz.utc)
         end_utc = end_local.astimezone(_tz.utc)
+        # debug removido
         return (start_utc, end_utc)
     except Exception:
         # Fallback seguro a día UTC si falla el parseo
@@ -879,7 +880,11 @@ def read_tarjetas_canceladas_del_dia_endpoint(empleado_id: str, fecha: str, prin
     """
     try:
         tz_name = principal.get('timezone') or 'UTC'
-        start_utc, end_utc = _day_bounds_utc_str(fecha, tz_name)
+        # Para columnas DATE como fecha_cancelacion, comparar por fecha local directamente
+        from datetime import datetime as _dt
+        from zoneinfo import ZoneInfo as _ZI
+        d_local = _dt.strptime(fecha, '%Y-%m-%d').date()
+        # debug removido
         tarjetas: List[dict] = []
         with DatabasePool.get_cursor() as cursor:
             cursor.execute(
@@ -902,9 +907,9 @@ def read_tarjetas_canceladas_del_dia_endpoint(empleado_id: str, fecha: str, prin
                 JOIN clientes c ON c.identificacion = t.cliente_identificacion
                 WHERE t.empleado_identificacion = %s
                   AND t.estado = 'cancelada'
-                  AND t.fecha_cancelacion >= %s AND t.fecha_cancelacion <= %s
+                  AND t.fecha_cancelacion = %s
                 ORDER BY t.numero_ruta
-                ''', (empleado_id, start_utc, end_utc)
+                ''', (empleado_id, d_local)
             )
             for row in cursor.fetchall() or []:
                 tarjeta = {
@@ -925,6 +930,7 @@ def read_tarjetas_canceladas_del_dia_endpoint(empleado_id: str, fecha: str, prin
                     'observaciones': row[11],
                     'fecha_cancelacion': row[12]
                 }
+                # debug removido
                 tarjetas.append(tarjeta)
         return tarjetas
     except ValueError:
@@ -941,7 +947,9 @@ def read_tarjetas_nuevas_del_dia_endpoint(empleado_id: str, fecha: str, principa
     """
     try:
         tz_name = principal.get('timezone') or 'UTC'
+        # Para tarjetas nuevas usamos fecha_creacion (timestamp UTC) → BETWEEN por día local
         start_utc, end_utc = _day_bounds_utc_str(fecha, tz_name)
+        # debug removido
         tarjetas: List[dict] = []
         with DatabasePool.get_cursor() as cursor:
             cursor.execute(
@@ -967,7 +975,8 @@ def read_tarjetas_nuevas_del_dia_endpoint(empleado_id: str, fecha: str, principa
                 ORDER BY t.numero_ruta
                 ''', (empleado_id, start_utc, end_utc)
             )
-            for row in cursor.fetchall() or []:
+            rows = cursor.fetchall() or []
+            for row in rows:
                 tarjeta = {
                     'codigo': row[0],
                     'monto': row[1],
@@ -986,6 +995,18 @@ def read_tarjetas_nuevas_del_dia_endpoint(empleado_id: str, fecha: str, principa
                     'observaciones': row[11],
                     'fecha_cancelacion': row[12]
                 }
+                # Añadir fecha local (día) para UI consistente
+                try:
+                    from datetime import timezone as _tz
+                    from zoneinfo import ZoneInfo as _ZI
+                    dt = row[8]
+                    if dt is not None:
+                        if getattr(dt, 'tzinfo', None) is None:
+                            dt = dt.replace(tzinfo=_tz.utc)
+                        local_dt = dt.astimezone(_ZI(tz_name))
+                        tarjeta['fecha'] = local_dt.date().isoformat()
+                except Exception:
+                    pass
                 tarjetas.append(tarjeta)
         return tarjetas
     except ValueError:

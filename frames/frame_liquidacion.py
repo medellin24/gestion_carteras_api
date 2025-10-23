@@ -1,6 +1,7 @@
 import tkinter as tk
 from tkinter import ttk, messagebox
-from datetime import datetime, date
+from datetime import datetime, date, timezone
+from zoneinfo import ZoneInfo
 import logging
 from decimal import Decimal
 from tkcalendar import DateEntry
@@ -24,13 +25,29 @@ class FrameLiquidacion(ttk.Frame):
         
         # Usar cliente global con token de sesión
         self.api_client = api_client
+        # Timezone del usuario desde el token (fuente de verdad para día local)
+        try:
+            # Intentar obtener tz del cliente global (post-login)
+            tz1 = self.api_client.get_user_timezone()
+            if not tz1:
+                # Fallback: leer de tokens guardados si existiera
+                tz1 = getattr(getattr(self.api_client, 'config', None), 'timezone', None)
+            self.token_tz = tz1 or 'UTC'
+        except Exception:
+            self.token_tz = 'UTC'
+        # debug removido
         
         # Variables
         self.empleados_dict = {}
         self.tipos_gastos_dict = {}
         self.gasto_seleccionado = None
         self.empleado_actual_id = None
-        self.fecha_actual = date.today()
+        # Definir "hoy" según la timezone del token
+        try:
+            self.fecha_actual = datetime.now(ZoneInfo(self.token_tz)).date()
+        except Exception:
+            self.fecha_actual = date.today()
+        # debug removido
         
         # Cachés para enriquecer datos sin repetir llamadas
         self._abono_cache = {}
@@ -116,8 +133,14 @@ class FrameLiquidacion(ttk.Frame):
                                    locale='es_ES',
                                    font=('Segoe UI', 11))
         self.date_picker.pack(side='left', padx=(0, 10))
+        # Mostrar zona horaria de referencia
+        try:
+            tk.Label(fecha_frame, text=f"Zona: {self.token_tz}", font=('Segoe UI', 9), fg='#6B7280').pack(side='left')
+        except Exception:
+            pass
         self.date_picker.set_date(self.fecha_actual)
         self.date_picker.bind('<<DateEntrySelected>>', self.on_fecha_cambio)
+        # debug removido
         
         # PANEL PRINCIPAL: 3 columnas según la imagen
         main_panel = ttk.Frame(main_container)
@@ -336,6 +359,7 @@ class FrameLiquidacion(ttk.Frame):
         try:
             # Obtener fecha del DateEntry
             self.fecha_actual = self.date_picker.get_date()
+            # debug removido
             
             # ✅ SOLO limpiar datos y cargar gastos, NO calcular liquidación
             if self.empleado_actual_id:
@@ -854,7 +878,25 @@ class FrameLiquidacion(ttk.Frame):
                             if not direccion:
                                 direccion = dir2
                     monto = self._first_number(t, ('monto', 'valor_prestamo', 'monto_prestamo'))
-                    fecha_txt = self._parse_iso_date_only(t.get('fecha') or t.get('fecha_creacion') or t.get('created_at'))
+                    # Mostrar fecha del día local del usuario. Si no viene 'fecha' desde backend,
+                    # convertir 'fecha_creacion' (UTC) a la timezone del token.
+                    fecha_txt = ''
+                    raw_fecha = t.get('fecha') or None
+                    if raw_fecha:
+                        fecha_txt = self._parse_iso_date_only(raw_fecha)
+                    else:
+                        try:
+                            from datetime import timezone as _tz
+                            from zoneinfo import ZoneInfo as _ZI
+                            dt_raw = t.get('fecha_creacion') or t.get('created_at')
+                            if dt_raw:
+                                dt = datetime.fromisoformat(str(dt_raw).replace('Z', '+00:00')) if isinstance(dt_raw, str) else dt_raw
+                                if dt and dt.tzinfo is None:
+                                    dt = dt.replace(tzinfo=_tz.utc)
+                                tz = _ZI(self.token_tz)
+                                fecha_txt = dt.astimezone(tz).strftime('%d/%m/%Y')
+                        except Exception:
+                            fecha_txt = self._parse_iso_date_only(t.get('fecha_creacion') or t.get('created_at'))
                     interes = self._first_number(t, ('interes', 'tasa', 'tasa_interes'))
                     interes_txt = f"{interes}%" if interes else ''
                     cuotas = str(t.get('cuotas') or t.get('num_cuotas') or '')
@@ -897,7 +939,16 @@ class FrameLiquidacion(ttk.Frame):
                             monto_prestamo = self._first_number(t_full or {}, ('monto', 'monto_prestamo')) if t_full else None
                     metodo_norm = self._normalizar_texto(metodo_raw).lower()
                     metodo_txt = 'Consignación' if 'consignacion' in metodo_norm else ('Efectivo' if 'efectivo' in metodo_norm else (metodo_raw or ''))
-                    fecha_txt = self._parse_iso_date_only(a.get('fecha') or a.get('created_at'))
+                    # Formatear fecha del abono según timezone del token
+                    fecha_raw = a.get('fecha') or a.get('created_at')
+                    try:
+                        dt = datetime.fromisoformat(str(fecha_raw).replace('Z', '+00:00')) if fecha_raw else None
+                        if dt and dt.tzinfo is None:
+                            dt = dt.replace(tzinfo=timezone.utc)
+                        tz = ZoneInfo(self.token_tz)
+                        fecha_txt = dt.astimezone(tz).strftime('%d/%m/%Y') if dt else ''
+                    except Exception:
+                        fecha_txt = self._parse_iso_date_only(fecha_raw)
                     filas.append((cliente, f"$ {abonado:,.0f}", metodo_txt, f"$ {monto_prestamo:,.0f}" if monto_prestamo else "", fecha_txt))
             else:
                 messagebox.showinfo("Info", "Detalle no disponible para esta estadística.")

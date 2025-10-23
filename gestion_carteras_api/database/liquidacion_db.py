@@ -30,7 +30,7 @@ def obtener_datos_liquidacion(empleado_identificacion: str, fecha: date, tz_name
             'total_final': Decimal('0')
         }
         
-        # Calcular límites UTC del día local
+        # Calcular límites UTC del día local y la fecha local (DATE)
         try:
             tz = ZoneInfo(tz_name or 'UTC')
         except Exception:
@@ -39,6 +39,8 @@ def obtener_datos_liquidacion(empleado_identificacion: str, fecha: date, tz_name
         end_local = datetime(fecha.year, fecha.month, fecha.day, 23, 59, 59, 999000, tzinfo=tz)
         start_utc = start_local.astimezone(timezone.utc)
         end_utc = end_local.astimezone(timezone.utc)
+        fecha_local = fecha
+        # debug removido
 
         with DatabasePool.get_cursor() as cursor:
             # 1. Contar tarjetas activas (todas las activas)
@@ -50,16 +52,17 @@ def obtener_datos_liquidacion(empleado_identificacion: str, fecha: date, tz_name
             
             datos['tarjetas_activas'] = cursor.fetchone()[0]
             
-            # 2. Contar tarjetas canceladas EN LA FECHA específica
+            # 2. Contar tarjetas canceladas EN LA FECHA local (fecha_cancelacion es DATE)
             cursor.execute('''
                 SELECT COUNT(*) 
                 FROM tarjetas 
                 WHERE empleado_identificacion = %s 
                 AND estado = 'cancelada'
-                AND fecha_cancelacion >= %s AND fecha_cancelacion <= %s
-            ''', (empleado_identificacion, start_utc, end_utc))
+                AND fecha_cancelacion = %s
+            ''', (empleado_identificacion, fecha_local))
             
             datos['tarjetas_canceladas'] = cursor.fetchone()[0]
+            # debug removido
             
             # 3. Contar tarjetas nuevas del día
             cursor.execute('''
@@ -70,6 +73,7 @@ def obtener_datos_liquidacion(empleado_identificacion: str, fecha: date, tz_name
             ''', (empleado_identificacion, start_utc, end_utc))
             
             datos['tarjetas_nuevas'] = cursor.fetchone()[0]
+            # debug removido
             
             # 4. Total de registros (abonos del día)
             cursor.execute('''

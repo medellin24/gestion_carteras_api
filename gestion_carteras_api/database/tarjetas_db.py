@@ -323,8 +323,12 @@ def crear_tarjeta(
             )
 
         with DatabasePool.get_cursor() as cursor:
-            # Fecha efectiva para código y registro
-            target_dt = fecha_creacion or datetime.now()
+            # Fecha efectiva para código y registro (FORZAR UTC NAIVE)
+            from datetime import timezone as _tz
+            target_dt_raw = fecha_creacion or datetime.now(_tz.utc)
+            # Normalizar a UTC naive (DB TIMESTAMP sin TZ)
+            target_dt = target_dt_raw.astimezone(_tz.utc).replace(tzinfo=None)
+            # debug removido
             # Prefijo AAMMDD-XXXX-
             fecha_pref = target_dt.strftime('%y%m%d')
             ultimos = cliente_identificacion[-4:]
@@ -364,6 +368,7 @@ def crear_tarjeta(
                 got = cursor.fetchone()
                 if got and got[0]:
                     codigo_tarjeta = got[0]
+                    # debug removido
                     break
             else:
                 # no se pudo encontrar un código libre

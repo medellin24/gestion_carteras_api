@@ -84,6 +84,13 @@ class VentanaLogin(tk.Toplevel):
                 global_api_client._role = tokens.get('role')
             except Exception:
                 pass
+            # Propagar timezone al cliente global para que los frames lo lean correctamente
+            try:
+                tz_post = self.api.get_user_timezone() or global_api_client.get_user_timezone()
+                if tz_post:
+                    global_api_client._timezone = tz_post
+            except Exception:
+                pass
             # Guardar preferencias
             self._save_prefs(username, password)
             self.result = (tokens, tokens.get('role'), username)
