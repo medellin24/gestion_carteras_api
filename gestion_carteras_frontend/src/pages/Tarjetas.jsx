@@ -1,7 +1,7 @@
 import React, { useMemo, useState, useEffect, useRef } from 'react'
 import { tarjetasStore } from '../state/store.js'
 import { offlineDB } from '../offline/db.js'
-import { formatDateYYYYMMDD, getLocalDateString } from '../utils/date.js'
+import { formatDateYYYYMMDD, getLocalDateString, parseISODateToLocal } from '../utils/date.js'
 import { computeDerived } from '../utils/derive.js'
 import { useNavigate, Outlet, useLocation } from 'react-router-dom'
 import { Check, RotateCw, X, Plus } from 'lucide-react'
@@ -73,7 +73,7 @@ export default function TarjetasPage() {
           try {
             const ab = await offlineDB.getAbonos(tar.codigo)
             const { totHoy, countHoy } = (ab||[]).reduce((acc,a)=>{
-              const d = a?.fecha ? new Date(a.fecha) : (a?.ts ? new Date(a.ts): null)
+              const d = a?.fecha ? parseISODateToLocal(String(a.fecha)) : (a?.ts ? new Date(a.ts): null)
               if (d && formatDateYYYYMMDD(d) === today) {
                 acc.totHoy += Number(a?.monto||0)
                 acc.countHoy += 1
@@ -207,7 +207,7 @@ function RecaudosOverlay({ tarjetas, onClose }){
           // Convertir fecha a string local para comparar
           const fecha = fechaCreacion instanceof Date ? 
             formatDateYYYYMMDD(fechaCreacion) : 
-            formatDateYYYYMMDD(new Date(fechaCreacion))
+            formatDateYYYYMMDD(parseISODateToLocal(String(fechaCreacion)))
           return fecha === today
         }).map(t => ({
           codigo: t.codigo,
@@ -228,7 +228,7 @@ function RecaudosOverlay({ tarjetas, onClose }){
         const entries = await Promise.all((tarjetas||[]).map(async (t)=>{
           const list = await offlineDB.getAbonos(t.codigo).catch(()=>[])
           const sum = (list||[]).reduce((s,a)=>{
-            const d = a?.fecha ? new Date(a.fecha) : (a?.ts ? new Date(a.ts): null)
+            const d = a?.fecha ? parseISODateToLocal(String(a.fecha)) : (a?.ts ? new Date(a.ts): null)
             return d && formatDateYYYYMMDD(d) === today ? s + Number(a?.monto||0) : s
           }, 0)
           
@@ -549,7 +549,7 @@ function SwipeableTarjeta({ tarjeta, barraColor, nombre, telefono, direccion, sa
         const existing = await offlineDB.getAbonos(tarjeta.codigo)
         const filtered = (existing||[]).filter(a => {
           const isIdRemoved = a && a.id && ids.has(a.id)
-          const d = a?.fecha ? new Date(a.fecha) : (a?.ts ? new Date(a.ts) : null)
+          const d = a?.fecha ? parseISODateToLocal(String(a.fecha)) : (a?.ts ? new Date(a.ts) : null)
           const isToday = d && formatDateYYYYMMDD(d) === today
           // quitar los del día que correspondían a outbox (por id) o todos los del día si no hay id
           return !(isIdRemoved || isToday)

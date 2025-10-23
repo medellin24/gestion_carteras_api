@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { apiClient } from '../api/client.js'
 import { getCurrentRoleAndEmpleado } from '../utils/jwt.js'
-import { formatDateYYYYMMDD, getLocalDateString } from '../utils/date.js'
+import { formatDateYYYYMMDD, getLocalDateString, parseISODateToLocal } from '../utils/date.js'
 import { tarjetasStore } from '../state/store.js'
 import { offlineDB } from '../offline/db.js'
 import { computeDerived } from '../utils/derive.js'
@@ -120,12 +120,12 @@ export default function DescargarPage() {
             const today = hoy
             const ymd = String(today)
             const totalHoy = (list||[]).reduce((s,a)=>{
-              const d = a?.fecha ? new Date(a.fecha) : (a?.ts ? new Date(a.ts): null)
+              const d = a?.fecha ? parseISODateToLocal(String(a.fecha)) : (a?.ts ? new Date(a.ts): null)
               const isToday = d && formatDateYYYYMMDD(d) === hoy
               return isToday ? s + Number(a?.monto||0) : s
             }, 0)
             const countHoy = (list||[]).filter(a=>{
-              const d = a?.fecha ? new Date(a.fecha) : (a?.ts ? new Date(a.ts): null)
+              const d = a?.fecha ? parseISODateToLocal(String(a.fecha)) : (a?.ts ? new Date(a.ts): null)
               return d && formatDateYYYYMMDD(d) === hoy
             }).length
             return { monto: totalHoy, abonos: countHoy }
