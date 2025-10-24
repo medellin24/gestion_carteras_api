@@ -42,5 +42,4 @@ jobs:
           accountId: ${{ secrets.CF_ACCOUNT_ID }}
           projectName: ${{ secrets.CF_PAGES_PROJECT }}
           directory: gestion_carteras_frontend/dist
-          gitHubToken: ${{ secrets.GITHUB_TOKEN }}
 
