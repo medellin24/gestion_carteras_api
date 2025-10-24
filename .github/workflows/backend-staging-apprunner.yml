@@ -75,7 +75,7 @@ jobs:
               break
             fi
             sleep 15
-          end
+          done
           if [[ "$STATUS" != "RUNNING" && "$STATUS" != "PAUSED" ]]; then
             echo "Service not idle after wait. Status=$STATUS"; exit 1
           fi
