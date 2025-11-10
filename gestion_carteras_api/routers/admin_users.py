@@ -13,8 +13,9 @@ router = APIRouter()
 
 def enforce_account_state(cuenta_id: str) -> bool:
     """
-    Valida el estado de la cuenta y desactiva todos los cobradores si está vencida.
+    Valida el estado de la cuenta.
     Retorna True si la cuenta está activa, False si está vencida.
+    Nota: No cambia estados de usuarios; la suscripción se hace cumplir a nivel de cuenta.
     """
     with DatabasePool.get_cursor() as cur:
         # Obtener información de la cuenta
@@ -42,15 +43,7 @@ def enforce_account_state(cuenta_id: str) -> bool:
             vencida = True
         elif trial_until and hoy > trial_until and not fecha_fin:
             vencida = True
-        
-        # Si está vencida, desactivar todos los cobradores
-        if vencida:
-            cur.execute("""
-                UPDATE usuarios 
-                SET is_active = FALSE 
-                WHERE role='cobrador' AND cuenta_id=%s AND is_active=TRUE
-            """, (cuenta_id,))
-        
+
         return not vencida
 
 
@@ -572,8 +565,8 @@ def activate_cobrador(empleado_id: str, principal: dict = Depends(require_admin)
 def renew_subscription(body: RenewRequest, principal: dict = Depends(require_admin)):
     """
     Renueva o cambia el plan de suscripción.
-    Si es renovación (es_renovacion=True), reactiva automáticamente los usuarios que estaban activos.
-    Si es cambio de plan (es_renovacion=False), no reactiva automáticamente.
+    No reactiva ni desactiva usuarios; el cumplimiento del plan se hace
+    a nivel de límites de creación/descarga.
     """
     cuenta_id = principal.get("cuenta_id")
     
@@ -583,17 +576,7 @@ def renew_subscription(body: RenewRequest, principal: dict = Depends(require_adm
             ALTER TABLE cuentas_admin
             ADD COLUMN IF NOT EXISTS max_daily_routes INTEGER
         """)
-        # 1. Guardar qué usuarios estaban activos ANTES de la renovación
-        usuarios_para_reactivar = []
-        if body.es_renovacion:
-            cur.execute("""
-                SELECT empleado_identificacion 
-                FROM usuarios 
-                WHERE role='cobrador' AND cuenta_id=%s AND is_active=FALSE
-            """, (cuenta_id,))
-            usuarios_para_reactivar = [row[0] for row in cur.fetchall()]
-        
-        # 2. Actualizar plan
+        # 1. Actualizar plan
         cur.execute(
             """
             UPDATE cuentas_admin 
@@ -604,23 +587,11 @@ def renew_subscription(body: RenewRequest, principal: dict = Depends(require_adm
             """,
             (body.max_empleados, body.max_daily_routes, body.max_empleados, body.dias, cuenta_id),
         )
-        
-        # 3. Si es RENOVACIÓN: reactivar automáticamente hasta el límite
-        reactivados = 0
-        if body.es_renovacion and usuarios_para_reactivar:
-            limite = min(len(usuarios_para_reactivar), body.max_empleados)
-            for i in range(limite):
-                cur.execute("""
-                    UPDATE usuarios 
-                    SET is_active=TRUE 
-                    WHERE role='cobrador' AND cuenta_id=%s AND empleado_identificacion=%s
-                """, (cuenta_id, usuarios_para_reactivar[i]))
-            reactivados = limite
     
     return {
         "ok": True, 
-        "reactivados": reactivados,
-        "mensaje": f"Plan actualizado. Se reactivaron {reactivados} usuarios cobrador." if body.es_renovacion else "Plan actualizado. Active manualmente los usuarios que necesite."
+        "reactivados": 0,
+        "mensaje": "Plan actualizado. Los usuarios existentes podrán operar según el límite del plan."
     }
 
 

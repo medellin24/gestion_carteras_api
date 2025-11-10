@@ -149,6 +149,10 @@ export const apiClient = {
   refresh: async (refreshToken) => {
     return request('/auth/refresh', { method: 'POST', body: { refresh_token: refreshToken } })
   },
+  // Estado y límites de la suscripción de la cuenta (admin)
+  getLimits: async () => {
+    return request('/admin/limits', { method: 'GET' })
+  },
   getEmpleados: async () => {
     return request('/empleados/', { method: 'GET' })
   },

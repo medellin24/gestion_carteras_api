@@ -66,6 +66,22 @@ export default function DescargarPage() {
   }
 
   async function descargarParaEmpleado(id) {
+    // Verificar estado de suscripción de la cuenta (bloquear si vencida)
+    try {
+      const limits = await apiClient.getLimits()
+      const remaining = Number(limits?.days_remaining || 0)
+      if (remaining <= 0) {
+        setError('Suscripción vencida. Renueva tu plan para continuar.')
+        return
+      }
+    } catch (e) {
+      // Si el backend devuelve 403, informar claramente el motivo
+      if (e && e.status === 403) {
+        setError('Suscripción vencida o no activa. Renueva para continuar.')
+        return
+      }
+      // Otros errores: mantener mensaje existente de validación de plan
+    }
     // Validación de límite por plan (empleados distintos por día)
     try {
       const attempt = await apiClient.attemptDownload(id)
@@ -74,8 +90,9 @@ export default function DescargarPage() {
         return
       }
     } catch (e) {
-      // Si el endpoint no está disponible o falla, no bloquear la descarga previa
-      console.warn('attemptDownload falló (no bloquea):', e)
+      // Bloquear si no se pudo validar el límite del plan
+      setError('No se pudo validar el límite del plan. Inténtalo de nuevo más tarde o contacta al administrador.')
+      return
     }
     const hoy = formatDateYYYYMMDD()
     try { 
