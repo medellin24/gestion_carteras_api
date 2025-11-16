@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react'
 import { useParams } from 'react-router-dom'
 // API deshabilitada en listado para evitar llamadas post-descarga
 import { offlineDB } from '../offline/db.js'
-import { parseISODateToLocal } from '../utils/date.js'
+import { parseISODateToLocal, formatDateYYYYMMDD } from '../utils/date.js'
 
 export default function AbonosListadoPage(){
   const { codigo } = useParams()
@@ -48,7 +48,12 @@ export default function AbonosListadoPage(){
                 .map((a, idx)=> (
                 <tr key={a.id||idx}>
                   <td>{idx+1}</td>
-                  <td className="val-date">{String(a.fecha||a.ts||'').toString().replace(/T.*$/,'').replace(/\s.*/,'')}</td>
+                  <td className="val-date">
+                    {(() => {
+                      const d = a?.fecha ? parseISODateToLocal(String(a.fecha)) : (a?.ts ? new Date(a.ts) : null)
+                      return d ? formatDateYYYYMMDD(d) : '—'
+                    })()}
+                  </td>
                   <td className="val-pos">{Number(a.monto).toLocaleString('es-CO')}</td>
                 </tr>
               ))}

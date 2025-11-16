@@ -10,12 +10,19 @@ from frames.ventana_principal import VentanaPrincipal
 from frames.ventana_login import VentanaLogin
 
 # Configurar logging para la aplicación de escritorio
-logging.basicConfig(
-    level=logging.INFO, # Cambiado de DEBUG a INFO para producción
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    filename='app_escritorio.log', # Guardar logs en un archivo
-    filemode='a'
-)
+LOG_FORMAT = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+if getattr(sys, 'frozen', False):
+    logging.basicConfig(
+        level=logging.INFO,
+        format=LOG_FORMAT
+    )
+else:
+    logging.basicConfig(
+        level=logging.INFO,  # Cambiado de DEBUG a INFO para producción
+        format=LOG_FORMAT,
+        filename='app_escritorio.log',  # Guardar logs en un archivo solo en desarrollo
+        filemode='a'
+    )
 logger = logging.getLogger(__name__)
 
 def main():

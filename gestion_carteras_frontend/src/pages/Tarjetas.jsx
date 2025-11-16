@@ -21,6 +21,8 @@ export default function TarjetasPage() {
   const [showRecaudos, setShowRecaudos] = useState(false)
   const [scrollToCodigo, setScrollToCodigo] = useState(() => sessionStorage.getItem('last_tarjeta_codigo') || '')
   const location = useLocation()
+  const searchInputRef = useRef(null)
+  const searchHistoryTokenRef = useRef(null)
   
   // Detectar si hay una ruta hija activa (detalle o abonos)
   const hasChildRoute = location.pathname !== '/tarjetas'
@@ -55,6 +57,10 @@ export default function TarjetasPage() {
       try {
         // Marcar por outbox (acciones locales del día) y sumar montos
         const opsHoy = outOps.filter(op => op && op.ts && formatDateYYYYMMDD(new Date(op.ts)) === today)
+        const abonosOutboxHoy = opsHoy.filter(op => op?.op === 'abono')
+        const abonoOutboxIds = new Set(
+          abonosOutboxHoy.map(op => String(op?.id || `${op?.tarjeta_codigo || ''}-${op?.ts || 0}`))
+        )
         opsHoy.sort((a,b)=>a.ts-b.ts).forEach(op => {
           if (op.op === 'abono') {
             map[op.tarjeta_codigo] = true
@@ -75,6 +81,10 @@ export default function TarjetasPage() {
             const { totHoy, countHoy } = (ab||[]).reduce((acc,a)=>{
               const d = a?.fecha ? parseISODateToLocal(String(a.fecha)) : (a?.ts ? new Date(a.ts): null)
               if (d && formatDateYYYYMMDD(d) === today) {
+                const entryId = a && (a.id || a.outbox_id)
+                if (entryId && abonoOutboxIds.has(String(entryId))) {
+                  return acc
+                }
                 acc.totHoy += Number(a?.monto||0)
                 acc.countHoy += 1
               }
@@ -129,6 +139,43 @@ export default function TarjetasPage() {
       return nombre.toLowerCase().includes(q)
     })
   }, [query, tarjetas])
+
+  // Permitir que el botón/gesto "Atrás" limpie la búsqueda antes de salir de la lista
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const hasQuery = query.trim().length > 0
+    if (hasQuery) {
+      if (!searchHistoryTokenRef.current) {
+        const token = `search-${Date.now()}-${Math.random().toString(36).slice(2)}`
+        searchHistoryTokenRef.current = token
+        const newState = { ...(window.history.state || {}), searchToken: token }
+        window.history.pushState(newState, '', window.location.href)
+      }
+    } else if (searchHistoryTokenRef.current) {
+      if (window.history.state && window.history.state.searchToken === searchHistoryTokenRef.current) {
+        const nextState = { ...window.history.state }
+        delete nextState.searchToken
+        window.history.replaceState(nextState, '', window.location.href)
+      }
+      searchHistoryTokenRef.current = null
+    }
+  }, [query])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return undefined
+    const handlePopState = (event) => {
+      if (!searchHistoryTokenRef.current) return
+      const stateToken = event?.state?.searchToken || null
+      if (stateToken === searchHistoryTokenRef.current) return
+      searchHistoryTokenRef.current = null
+      setQuery('')
+      window.setTimeout(() => {
+        try { searchInputRef.current?.blur() } catch {}
+      }, 0)
+    }
+    window.addEventListener('popstate', handlePopState)
+    return () => window.removeEventListener('popstate', handlePopState)
+  }, [])
 
   // Efecto separado para restaurar scroll cuando las tarjetas estén renderizadas
   useEffect(() => {
@@ -224,17 +271,31 @@ function RecaudosOverlay({ tarjetas, onClose }){
           op && op.op === 'abono' && 
           op.ts && formatDateYYYYMMDD(new Date(op.ts)) === today
         )
+        const abonoOutboxIds = new Set(
+          abonosOutboxHoy.map(op => String(op?.id || `${op?.tarjeta_codigo || ''}-${op?.ts || 0}`))
+        )
         
         const entries = await Promise.all((tarjetas||[]).map(async (t)=>{
           const list = await offlineDB.getAbonos(t.codigo).catch(()=>[])
+          const seenIds = new Set()
           const sum = (list||[]).reduce((s,a)=>{
             const d = a?.fecha ? parseISODateToLocal(String(a.fecha)) : (a?.ts ? new Date(a.ts): null)
-            return d && formatDateYYYYMMDD(d) === today ? s + Number(a?.monto||0) : s
+            if (d && formatDateYYYYMMDD(d) === today) {
+              const entryId = a && (a.id || a.outbox_id)
+              if (entryId) {
+                seenIds.add(String(entryId))
+                if (abonoOutboxIds.has(String(entryId))) {
+                  return s
+                }
+              }
+              return s + Number(a?.monto||0)
+            }
+            return s
           }, 0)
           
-          // Sumar abonos del outbox para esta tarjeta
+          // Incluir abonos del outbox que aún no estén reflejados en el cache local
           const outboxSum = abonosOutboxHoy
-            .filter(op => op.tarjeta_codigo === t.codigo)
+            .filter(op => op.tarjeta_codigo === t.codigo && (!op.id || !seenIds.has(String(op.id))))
             .reduce((s, op) => s + Number(op.monto || 0), 0)
           
           return [t.codigo, sum + outboxSum]
@@ -311,49 +372,49 @@ function RecaudosOverlay({ tarjetas, onClose }){
 }
 
   return (
-    <div className="app-shell" style={{width:'100%'}}>
-      <main style={{width:'100%', overscrollBehaviorY:'contain'}}>
-        {/* Bloque fijo: título, fila de métricas y buscador en un solo sticky */}
-        <div style={{position:'sticky', top:0, zIndex:19, background:'var(--bg)', width:'100%', opacity: hasChildRoute ? 0 : 1, transition: 'opacity 0.2s ease'}}>
-          <div className="app-header" style={{position:'relative', top:0, zIndex:20, width:'100%', padding:'12px'}}>
-            <h1 style={{margin:0, fontSize:18}}>Tarjetas</h1>
-          </div>
-          {/* Fila única: Recaudado ($ y #) a la izquierda, Tarjetas a la derecha */}
-          <div style={{display:'flex', alignItems:'center', justifyContent:'space-between', padding:'6px 2px', width:'100%', overflowX:'hidden'}}>
-            <div style={{display:'flex', alignItems:'center', gap:18, fontSize:15}}>
-              <button onClick={()=>setShowRecaudos(v=>!v)} style={{background:'transparent', color:'var(--fg)', border:'none', padding:0, cursor:'pointer', fontSize:15}}>
-                <span style={{opacity:.85}}>Recaudos</span>
-              </button>
-              <button onClick={()=>setShowRecaudos(v=>!v)} style={{background:'transparent', color:'var(--fg)', border:'none', padding:0, cursor:'pointer', fontSize:16}}>
-                <span style={{fontSize:16}}> $ </span><b style={{fontSize:16}}>{currency(stats.monto)}</b>
-              </button>
-              <button onClick={()=>setShowRecaudos(v=>!v)} style={{background:'transparent', color:'var(--fg)', border:'none', padding:0, cursor:'pointer', fontSize:16}}>
-                <span style={{fontSize:16}}> # </span><b style={{fontSize:16}}>{stats.abonos}</b>
-              </button>
-            </div>
-            <div style={{fontSize:14, color:'var(--muted)'}}>Tarjetas <b style={{color:'var(--fg)'}}>{tarjetas.length}</b></div>
-          </div>
-          {showRecaudos && (
-            <RecaudosOverlay tarjetas={tarjetas} onClose={()=>setShowRecaudos(false)} />
-          )}
-          {/* Buscador a ancho completo */}
-          <div style={{padding:'0 2px 6px 2px', width:'100%', overflowX:'hidden'}}>
-            <input
-              type="search"
-              placeholder="Buscar por nombre y apellido..."
-              value={query}
-              onChange={(e)=>setQuery(e.target.value)}
-              style={{
-                width:'100%', background:'#0b1220', color:'var(--fg)',
-                border:'1px solid #223045', borderRadius:12, padding:'12px 14px', fontSize:16
-              }}
-            />
+    <div className="app-shell tarjetas-page" style={{width:'100%'}}>
+      <div className="tarjetas-toolbar-fixed" style={{opacity: hasChildRoute ? 0 : 1, pointerEvents: hasChildRoute ? 'none' : 'auto', transition:'opacity 0.2s ease'}}>
+        <div className="tarjetas-toolbar-row">
+          <h1>Tarjetas</h1>
+          <div style={{fontSize:14, color:'var(--muted)'}}>Tarjetas <b style={{color:'var(--fg)'}}>{tarjetas.length}</b></div>
+        </div>
+        <div className="tarjetas-toolbar-row">
+          <div className="tarjetas-metrics">
+            <button onClick={()=>setShowRecaudos(v=>!v)} style={{background:'transparent', color:'var(--fg)', border:'none', padding:0, cursor:'pointer', fontSize:15}}>
+              <span style={{opacity:.85}}>Recaudos</span>
+            </button>
+            <button onClick={()=>setShowRecaudos(v=>!v)} style={{background:'transparent', color:'var(--fg)', border:'none', padding:0, cursor:'pointer', fontSize:16}}>
+              <span style={{fontSize:16}}> $ </span><b style={{fontSize:16}}>{currency(stats.monto)}</b>
+            </button>
+            <button onClick={()=>setShowRecaudos(v=>!v)} style={{background:'transparent', color:'var(--fg)', border:'none', padding:0, cursor:'pointer', fontSize:16}}>
+              <span style={{fontSize:16}}> # </span><b style={{fontSize:16}}>{stats.abonos}</b>
+            </button>
           </div>
         </div>
+        <div className="tarjetas-search">
+          <input
+            ref={searchInputRef}
+            type="search"
+            placeholder="Buscar por nombre y apellido..."
+            value={query}
+            onChange={(e)=>setQuery(e.target.value)}
+            onKeyDown={(e)=>{ if (e.key === 'Escape') { e.preventDefault(); setQuery('') } }}
+          />
+          {query.trim() !== '' && (
+            <button
+              type="button"
+              className="clear-search-btn"
+              aria-label="Limpiar búsqueda"
+              onClick={()=>setQuery('')}
+            >
+              X
+            </button>
+          )}
+        </div>
+      </div>
 
-        {/* Eliminado el botón flotante '+' en favor de long-press con contexto */}
-
-        <div style={{display:'flex', flexDirection:'column', gap:10, padding:'8px 2px 12px 2px', width:'100%', overflowX:'hidden', overscrollBehaviorY:'contain', opacity: hasChildRoute ? 0 : 1, transition: 'opacity 0.2s ease'}}>
+      <div className="tarjetas-scroll" style={{opacity: hasChildRoute ? 0 : 1, pointerEvents: hasChildRoute ? 'none' : 'auto', transition:'opacity 0.2s ease'}}>
+        <section className="tarjetas-list">
           {filtradas.map((t, idx)=>{
           // Obtener abonos reales de la tarjeta y derivar SIEMPRE el resumen dinámico
           const abonos = abonosPorTarjeta[t.codigo] || []
@@ -367,18 +428,20 @@ function RecaudosOverlay({ tarjetas, onClose }){
             const direccion = t?.cliente?.direccion || ''
             const telefono = t?.cliente?.telefono || t?.telefono || t?.cliente_telefono || ''
             const abonadoHoy = !!abonadosHoyMap[t.codigo]
-            const anterior = idx > 0 ? Number(filtradas[idx-1]?.numero_ruta ?? null) : null
-            const siguiente = idx < filtradas.length-1 ? Number(filtradas[idx+1]?.numero_ruta ?? null) : null
             const rutaNum = t?.numero_ruta != null ? Number(t.numero_ruta) : null
+            const rutaSiguiente = idx < filtradas.length-1 ? Number(filtradas[idx+1]?.numero_ruta ?? null) : null
             return (
               <SwipeableTarjeta key={t.codigo} tarjeta={t} barraColor={barraColor} nombre={nombre} telefono={telefono} direccion={direccion} saldo={saldoPendiente} estadoStr={estado} abonadoHoy={abonadoHoy} rutaNum={rutaNum} hideRuta={showRecaudos}
                 data-tarjeta-id={t.codigo} data-ruta={rutaNum != null ? rutaNum : ''}
-                onLongPress={(tar)=>{ setAddCtx({ posicionAnterior: anterior, posicionSiguiente: siguiente }); setShowAdd(true) }} />
+                onLongPress={(tar)=>{ setAddCtx({ posicionAnterior: rutaNum, posicionSiguiente: rutaSiguiente }); setShowAdd(true) }} />
             )
           })}
-        </div>
-      </main>
+        </section>
+      </div>
       {showAdd && <AddTarjetaModal posicionAnterior={addCtx.posicionAnterior} posicionSiguiente={addCtx.posicionSiguiente} onClose={()=>setShowAdd(false)} onCreated={()=>{ setShowAdd(false); window.dispatchEvent(new Event('outbox-updated')) }} />}
+      {showRecaudos && (
+        <RecaudosOverlay tarjetas={tarjetas} onClose={()=>setShowRecaudos(false)} />
+      )}
       {/* Overlay para rutas hijas (detalle/abonos) sin desmontar el listado */}
       {hasChildRoute && (
         <div style={{position:'fixed', inset:0, pointerEvents:'none', zIndex:1000}}>

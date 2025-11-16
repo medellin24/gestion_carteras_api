@@ -328,7 +328,7 @@ def crear_tarjeta(
             target_dt_raw = fecha_creacion or datetime.now(_tz.utc)
             # Normalizar a UTC naive (DB TIMESTAMP sin TZ)
             target_dt = target_dt_raw.astimezone(_tz.utc).replace(tzinfo=None)
-            # debug removido
+            # logs de diagnóstico removidos tras estabilizar la migración
             # Prefijo AAMMDD-XXXX-
             fecha_pref = target_dt.strftime('%y%m%d')
             ultimos = cliente_identificacion[-4:]
@@ -368,7 +368,7 @@ def crear_tarjeta(
                 got = cursor.fetchone()
                 if got and got[0]:
                     codigo_tarjeta = got[0]
-                    # debug removido
+                    # comprobación post-inserción removida (innecesaria en producción)
                     break
             else:
                 # no se pudo encontrar un código libre
@@ -530,9 +530,9 @@ def obtener_historial_cliente(cliente_identificacion: str) -> List[Dict]:
                     t.fecha_cancelacion,
                     CASE 
                         WHEN t.fecha_cancelacion IS NOT NULL THEN 
-                            (t.fecha_cancelacion - t.fecha_creacion) - t.cuotas
+                            (DATE(t.fecha_cancelacion) - DATE(t.fecha_creacion)) - t.cuotas
                         ELSE
-                            (CURRENT_DATE - t.fecha_creacion) - t.cuotas
+                            (CURRENT_DATE - DATE(t.fecha_creacion)) - t.cuotas
                     END as dias_atrasados,
                     t.interes,
                     e.nombre as empleado

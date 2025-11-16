@@ -8,12 +8,17 @@ import TarjetaDetallePage from './pages/TarjetaDetalle.jsx'
 import AbonosListadoPage from './pages/AbonosListado.jsx'
 import SubirPage from './pages/Subir.jsx'
 import GastosBasePage from './pages/GastosBase.jsx'
+import { apiClient } from './api/client.js'
+import { formatDateYYYYMMDD } from './utils/date.js'
+import { readPlanInfo, persistPlanInfoFromLimits } from './utils/plan.js'
 
 function Home() {
   const role = localStorage.getItem('user_role')
   const username = localStorage.getItem('username') || 'Usuario'
   const [flash, setFlash] = useState('')
   const [selectedEmployee, setSelectedEmployee] = useState(null)
+  const [today, setToday] = useState(() => new Date())
+  const [planInfo, setPlanInfo] = useState(() => readPlanInfo())
   
   useEffect(() => {
     const msg = localStorage.getItem('flash_message')
@@ -24,6 +29,43 @@ function Home() {
       return () => clearTimeout(t)
     }
   }, [])
+
+  useEffect(() => {
+    const timer = setInterval(() => setToday(new Date()), 60_000)
+    return () => clearInterval(timer)
+  }, [])
+
+  useEffect(() => {
+    const handlePlanUpdate = () => setPlanInfo(readPlanInfo())
+    const handleStorage = (event) => {
+      if (!event || !event.key) return
+      if (['plan_days_remaining', 'plan_max_days', 'plan_days_updated_at'].includes(event.key)) {
+        handlePlanUpdate()
+      }
+    }
+    window.addEventListener('plan-info-updated', handlePlanUpdate)
+    window.addEventListener('storage', handleStorage)
+    return () => {
+      window.removeEventListener('plan-info-updated', handlePlanUpdate)
+      window.removeEventListener('storage', handleStorage)
+    }
+  }, [])
+
+  useEffect(() => {
+    let cancelled = false
+    apiClient.getLimits()
+      .then((limits) => {
+        if (cancelled) return
+        const snapshot = persistPlanInfoFromLimits(limits)
+        setPlanInfo(snapshot)
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setPlanInfo(readPlanInfo())
+        }
+      })
+    return () => { cancelled = true }
+  }, [role])
   
   useEffect(() => {
     // Función para actualizar información del empleado
@@ -64,9 +106,17 @@ function Home() {
   }, [role])
   return (
     <div className="app-shell" style={{ overscrollBehaviorY: 'auto' }}>
-      <header className="app-header">
-        <h1>Inicio</h1>
-        <span className="badge">{role === 'admin' ? 'Admin' : 'Cobrador'}</span>
+      <header className="app-header home-header">
+        <div className="home-header-top">
+          <h1>Inicio</h1>
+          <span className="badge">{role === 'admin' ? 'Admin' : 'Cobrador'}</span>
+        </div>
+        <div className="home-header-info">
+          <span className="home-date-pill">Hoy: <strong>{formatDateYYYYMMDD(today)}</strong></span>
+          <span className="home-plan-pill">
+            Plan: quedan <strong>[{planInfo?.remaining != null ? planInfo.remaining : '—'}{planInfo?.max ? ` de ${planInfo.max}` : ''} días]</strong>
+          </span>
+        </div>
       </header>
       <main>
         {flash && (

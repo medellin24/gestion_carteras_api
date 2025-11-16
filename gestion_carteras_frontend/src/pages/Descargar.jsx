@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { apiClient } from '../api/client.js'
 import { getCurrentRoleAndEmpleado } from '../utils/jwt.js'
@@ -7,6 +7,7 @@ import { tarjetasStore } from '../state/store.js'
 import { offlineDB } from '../offline/db.js'
 import { computeDerived } from '../utils/derive.js'
 import { logDownload } from '../utils/log.js'
+import { persistPlanInfoFromLimits } from '../utils/plan.js'
 
 function Loading({ message }) {
   return (
@@ -23,6 +24,21 @@ export default function DescargarPage() {
   const [empleados, setEmpleados] = useState([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
+  const authRedirectRef = useRef(false)
+
+  const handleUnauthorized = (err, action = 'continuar') => {
+    if (err?.status === 401) {
+      if (!authRedirectRef.current) {
+        authRedirectRef.current = true
+        setError(`Sesión expirada. Inicia sesión nuevamente para ${action}.`)
+        setTimeout(() => navigate('/login'), 400)
+      } else {
+        setError('Sesión expirada. Ingresa de nuevo.')
+      }
+      return true
+    }
+    return false
+  }
 
   async function enrichTarjetasWithResumen(tarjetas) {
     const hoy = new Date()
@@ -69,29 +85,42 @@ export default function DescargarPage() {
     // Verificar estado de suscripción de la cuenta (bloquear si vencida)
     try {
       const limits = await apiClient.getLimits()
-      const remaining = Number(limits?.days_remaining || 0)
+      const planSnapshot = persistPlanInfoFromLimits(limits)
+      const remaining = Number(planSnapshot?.remaining ?? limits?.days_remaining ?? 0)
       if (remaining <= 0) {
         setError('Suscripción vencida. Renueva tu plan para continuar.')
         return
       }
     } catch (e) {
-      // Si el backend devuelve 403, informar claramente el motivo
+      if (handleUnauthorized(e, 'validar la suscripción')) return
       if (e && e.status === 403) {
-        setError('Suscripción vencida o no activa. Renueva para continuar.')
+        setError(e?.message || 'Suscripción vencida o no activa. Renueva para continuar.')
         return
       }
-      // Otros errores: mantener mensaje existente de validación de plan
+      setError(e?.message || 'No se pudo validar la suscripción. Inténtalo más tarde.')
+      return
     }
     // Validación de límite por plan (empleados distintos por día)
     try {
       const attempt = await apiClient.attemptDownload(id)
       if (!attempt?.allowed) {
-        setError(`Límite diario alcanzado: ya descargaron ${attempt?.used || 0} empleados (plan permite ${attempt?.limit || 1}).`)
+        const baseMsg = attempt?.message || 'Límite diario alcanzado para el plan.'
+        const used = typeof attempt?.used === 'number' ? attempt.used : 0
+        const limit = typeof attempt?.limit === 'number' ? attempt.limit : 1
+        setError(`${baseMsg} (${used}/${limit}).`)
         return
       }
     } catch (e) {
-      // Bloquear si no se pudo validar el límite del plan
-      setError('No se pudo validar el límite del plan. Inténtalo de nuevo más tarde o contacta al administrador.')
+      if (handleUnauthorized(e, 'registrar la descarga diaria')) return
+      if (e?.status === 403) {
+        setError(e?.message || 'No tienes permiso para registrar esta descarga.')
+        return
+      }
+      if (e?.status === 404) {
+        setError('No se encontró la cuenta asociada para validar el intento de descarga.')
+        return
+      }
+      setError(e?.message || 'No se pudo validar el límite del plan. Inténtalo de nuevo más tarde o contacta al administrador.')
       return
     }
     const hoy = formatDateYYYYMMDD()
@@ -115,12 +144,17 @@ export default function DescargarPage() {
       const last = String(perms?.fecha_accion || '')
       const canByDate = !last || last < today // si fecha_accion es anterior a hoy
       const canDownload = Boolean(perms?.descargar)
-      if (!(canByDate && canDownload)) {
-        setError('Descarga no permitida hoy. Solicita habilitación si es necesario.')
+      if (!canDownload) {
+        setError('Descarga deshabilitada para este cobrador. Solicita al administrador que habilite el permiso.')
+        return
+      }
+      if (!canByDate) {
+        setError('Ya realizaste una descarga hoy. Podrás volver a descargar mañana.')
         return
       }
     } catch (e) {
-      setError(e?.message || 'No se pudo verificar permisos de descarga')
+      if (handleUnauthorized(e, 'verificar permisos de descarga')) return
+      setError(e?.message || 'No se pudo verificar permisos de descarga. Reintenta en unos minutos.')
       return
     }
     setLoading(true)
@@ -171,6 +205,7 @@ export default function DescargarPage() {
       tarjetasStore.markDownload(id, hoy)
       navigate('/tarjetas')
     } catch (e) {
+      if (handleUnauthorized(e, 'descargar tarjetas')) return
       setError(e?.message || 'Error al descargar')
     } finally {
       setLoading(false)
@@ -179,7 +214,12 @@ export default function DescargarPage() {
 
   useEffect(() => {
     if (role === 'admin') {
-      apiClient.getEmpleados().then(setEmpleados).catch((e) => setError(e?.message || 'Error cargando empleados'))
+      apiClient.getEmpleados()
+        .then(setEmpleados)
+        .catch((e) => {
+          if (handleUnauthorized(e, 'listar cobradores')) return
+          setError(e?.message || 'Error cargando empleados')
+        })
     } else if (role === 'cobrador' && empleadoId) {
       // Para cobradores, obtener la información del empleado desde el JWT o localStorage
       const empleadoNombre = localStorage.getItem('empleado_nombre') || empleadoId

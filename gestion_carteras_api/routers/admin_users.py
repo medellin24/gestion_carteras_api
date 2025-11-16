@@ -71,8 +71,10 @@ class RenewRequest(BaseModel):
 
 
 @router.get("/limits", response_model=LimitsResponse)
-def get_limits(principal: dict = Depends(require_admin)):
+def get_limits(principal: dict = Depends(get_current_principal)):
     cuenta_id = principal.get("cuenta_id")
+    if not cuenta_id:
+        raise HTTPException(status_code=403, detail="Cuenta no asociada al usuario")
     
     # Validar estado de la cuenta (desactiva cobradores si está vencida)
     enforce_account_state(cuenta_id)

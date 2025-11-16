@@ -39,6 +39,9 @@ def obtener_datos_liquidacion(empleado_identificacion: str, fecha: date, tz_name
         end_local = datetime(fecha.year, fecha.month, fecha.day, 23, 59, 59, 999000, tzinfo=tz)
         start_utc = start_local.astimezone(timezone.utc)
         end_utc = end_local.astimezone(timezone.utc)
+        # Para columnas timestamp sin zona, comparar con límites UTC sin tz (naive)
+        start_naive = start_utc.replace(tzinfo=None)
+        end_naive = end_utc.replace(tzinfo=None)
         fecha_local = fecha
         # debug removido
 
@@ -70,7 +73,7 @@ def obtener_datos_liquidacion(empleado_identificacion: str, fecha: date, tz_name
                 FROM tarjetas 
                 WHERE empleado_identificacion = %s 
                   AND fecha_creacion >= %s AND fecha_creacion <= %s
-            ''', (empleado_identificacion, start_utc, end_utc))
+            ''', (empleado_identificacion, start_naive, end_naive))
             
             datos['tarjetas_nuevas'] = cursor.fetchone()[0]
             # debug removido
@@ -82,7 +85,7 @@ def obtener_datos_liquidacion(empleado_identificacion: str, fecha: date, tz_name
                 JOIN tarjetas t ON a.tarjeta_codigo = t.codigo
                 WHERE t.empleado_identificacion = %s 
                   AND a.fecha >= %s AND a.fecha <= %s
-            ''', (empleado_identificacion, start_utc, end_utc))
+            ''', (empleado_identificacion, start_naive, end_naive))
             
             total_registros = cursor.fetchone()[0]
             datos['total_registros'] = total_registros
@@ -95,7 +98,7 @@ def obtener_datos_liquidacion(empleado_identificacion: str, fecha: date, tz_name
                 JOIN tarjetas t ON a.tarjeta_codigo = t.codigo
                 WHERE t.empleado_identificacion = %s 
                   AND a.fecha >= %s AND a.fecha <= %s
-            ''', (empleado_identificacion, start_utc, end_utc))
+            ''', (empleado_identificacion, start_naive, end_naive))
             
             result = cursor.fetchone()[0]
             datos['total_recaudado'] = Decimal(str(result)) if result else Decimal('0')
@@ -118,7 +121,7 @@ def obtener_datos_liquidacion(empleado_identificacion: str, fecha: date, tz_name
                 FROM tarjetas 
                 WHERE empleado_identificacion = %s 
                   AND fecha_creacion >= %s AND fecha_creacion <= %s
-            ''', (empleado_identificacion, start_utc, end_utc))
+            ''', (empleado_identificacion, start_naive, end_naive))
             
             result = cursor.fetchone()[0]
             datos['prestamos_otorgados'] = Decimal(str(result)) if result else Decimal('0')
@@ -131,7 +134,7 @@ def obtener_datos_liquidacion(empleado_identificacion: str, fecha: date, tz_name
                 FROM gastos
                 WHERE empleado_identificacion = %s
                   AND fecha_creacion >= %s AND fecha_creacion <= %s
-            ''', (empleado_identificacion, start_utc, end_utc))
+            ''', (empleado_identificacion, start_naive, end_naive))
             result = cursor.fetchone()[0]
             datos['total_gastos'] = Decimal(str(result)) if result is not None else Decimal('0')
             

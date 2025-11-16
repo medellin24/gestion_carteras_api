@@ -6,6 +6,8 @@ from api_client.client import APIError, api_client
 from decimal import Decimal
 import os
 
+from resource_loader import asset_path
+
 # --- Ventana Emergente para Manejar Eliminación de Empleados ---
 class VentanaEliminarEmpleado(tk.Toplevel):
     """Ventana para manejar la eliminación de empleados con diferentes opciones."""
@@ -650,9 +652,8 @@ class FrameEmpleado(tk.Frame):
     def _load_icons(self):
         """Carga íconos desde assets/icons con nombres predefinidos. Fallback silencioso si no existen."""
         try:
-            base_dir = os.path.dirname(os.path.dirname(__file__))  # proyecto_gestion_carteras
             candidates = [
-                os.path.join(base_dir, 'assets', 'icons'),
+                asset_path('assets', 'icons'),
                 os.path.join(os.path.dirname(__file__), 'assets', 'icons')
             ]
             icon_files = {
@@ -803,29 +804,46 @@ class FrameEmpleado(tk.Frame):
             self.actualizar_status_base("Ingrese una fecha", "orange")
             return
             
+        # Mostrar estado de carga y consultar en segundo plano
+        self.actualizar_status_base("Buscando base...", "blue")
+        def _worker(emp_id: str, fecha: str):
+            try:
+                base = self.api_client.get_base_by_empleado_fecha(emp_id, fecha)
+            except APIError as e:
+                base = f"APIERR:{getattr(e,'status_code',None) or 0}"
+            except Exception:
+                base = "ERROR"
+            def _apply():
+                if isinstance(base, str):
+                    if base.startswith("APIERR:"):
+                        code = base.split(':',1)[1]
+                        if code == '404':
+                            self.base_actual = None
+                            self.label_monto.config(text="No registrada", foreground='gray')
+                            self.actualizar_status_base("No hay base para esta fecha.", "red")
+                        else:
+                            self.actualizar_status_base("Error al buscar la base.", "red")
+                    else:
+                        self.actualizar_status_base("Error al consultar base.", "red")
+                    return
+                if not base:
+                    self.base_actual = None
+                    self.label_monto.config(text="No registrada", foreground='gray')
+                    self.actualizar_status_base("No hay base para esta fecha.", "red")
+                    return
+                self.base_actual = base
+                monto = Decimal(self.base_actual.get('monto', 0))
+                self.label_monto.config(text=f"${monto:,.0f}", foreground='green')
+                self.actualizar_status_base("Base encontrada.", "green")
+            try:
+                self.after(0, _apply)
+            except Exception:
+                _apply()
         try:
-            base = self.api_client.get_base_by_empleado_fecha(self.empleado_seleccionado['identificacion'], fecha_str)
-            # Si la API devuelve None (no hay base), actualizar UI sin mostrar popups
-            if not base:
-                self.base_actual = None
-                self.label_monto.config(text="No registrada", foreground='gray')
-                self.actualizar_status_base("No hay base para esta fecha.", "red")
-                return
-            # Hay base
-            self.base_actual = base
-            monto = Decimal(self.base_actual.get('monto', 0))
-            self.label_monto.config(text=f"${monto:,.0f}", foreground='green')
-            self.actualizar_status_base("Base encontrada.", "green")
-        except APIError as e:
-            if e.status_code == 404:
-                self.base_actual = None
-                self.label_monto.config(text="No registrada", foreground='gray')
-                self.actualizar_status_base("No hay base para esta fecha.", "red")
-            else:
-                self.actualizar_status_base("Error al buscar la base.", "red")
+            import threading
+            threading.Thread(target=_worker, args=(self.empleado_seleccionado['identificacion'], fecha_str), daemon=True).start()
         except Exception:
-            # Evitar ventanas emergentes aquí; solo actualizar estado
-            self.actualizar_status_base("Error al consultar base.", "red")
+            self.actualizar_status_base("Error al iniciar búsqueda.", "red")
 
     def agregar_base(self):
         if not self.empleado_seleccionado:

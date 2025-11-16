@@ -1,209 +1,120 @@
+const MIN_ROUTE = 1
+const MAX_ROUTE = 9999
+
+const clampRoute = (n) => Math.max(MIN_ROUTE, Math.min(MAX_ROUTE, n))
+
+const normalizeRoute = (value) => {
+  if (value === null || value === undefined || value === '') return null
+  const parsed = parseInt(String(value), 10)
+  return Number.isFinite(parsed) ? parsed : null
+}
+
+const findGapBetween = (low, high, used) => {
+  if (!Number.isFinite(high)) return null
+  const start = Math.max(MIN_ROUTE, Math.floor(low) + 1)
+  const end = Math.min(MAX_ROUTE, Math.floor(high) - 1)
+  if (end < start) return null
+  for (let cand = start; cand <= end; cand++) {
+    if (!used.has(cand)) return cand
+  }
+  return null
+}
+
+const findFreeAscending = (start, used) => {
+  const begin = Math.max(MIN_ROUTE, Math.floor(start))
+  for (let cand = begin; cand <= MAX_ROUTE; cand++) {
+    if (!used.has(cand)) return cand
+  }
+  return MAX_ROUTE
+}
+
+const findFreeDescending = (start, used) => {
+  const begin = Math.min(MAX_ROUTE, Math.floor(start))
+  for (let cand = begin; cand >= MIN_ROUTE; cand--) {
+    if (!used.has(cand)) return cand
+  }
+  return MIN_ROUTE
+}
+
+const nextHundredAbove = (value) => {
+  if (!Number.isFinite(value)) return null
+  return Math.floor(value / 100) * 100 + 100
+}
+
 export function computeNextRouteNumber(existingRoutes = [], posicionAnterior = null, posicionSiguiente = null) {
   try {
     const routes = Array.from(new Set((existingRoutes || [])
-      .map(v => parseInt(String(v), 10))
-      .filter(n => Number.isFinite(n) && n >= 0)))
-      .sort((a,b)=>a-b)
+      .map(normalizeRoute)
+      .filter((n) => n != null && n >= MIN_ROUTE && n <= MAX_ROUTE)))
+      .sort((a, b) => a - b)
 
     if (routes.length === 0) return 100
 
     const used = new Set(routes)
-    const pa = posicionAnterior != null ? parseInt(String(posicionAnterior), 10) : null
-    const ps = posicionSiguiente != null ? parseInt(String(posicionSiguiente), 10) : null
+    const first = routes[0]
+    const last = routes[routes.length - 1]
+    const baseRoute = normalizeRoute(posicionAnterior)
+    const nextRoute = normalizeRoute(posicionSiguiente)
 
-    // Detectar si estamos en primera o última tarjeta
-    const esPrimera = pa === null && ps === routes[0]
-    const esUltima = pa === routes[routes.length - 1] && ps === null
-
-    // Caso intermedio: entre pa y ps
-    if (pa != null && ps != null && !esPrimera && !esUltima) {
-      if (ps - pa > 1) {
-        const mitad = Math.floor((pa + ps) / 2)
-        if (mitad > pa && mitad < ps && !used.has(mitad)) return mitad
-        // Si la mitad está ocupada, probar uno abajo o uno arriba
-        if (mitad - 1 > pa && !used.has(mitad - 1)) return mitad - 1
-        if (mitad + 1 < ps && !used.has(mitad + 1)) return mitad + 1
-      }
-      // Si no hay espacio, buscar siguiente centena disponible
-      const base = Math.max(pa, ps)
-      let cand = Math.min(((Math.floor(base / 100) + 1) * 100), 9900)
-      if (!used.has(cand)) return cand
-      // Si está ocupada, buscar siguiente decena
-      let d = Math.min(((Math.floor((cand + 1) / 10) * 10)), 9990)
-      while (d <= 9999) {
-        if (!used.has(d)) return d
-        d += 10
-      }
-      // Último recurso: siguiente libre
-      for (let c = base + 1; c <= 9999; c++) if (!used.has(c)) return c
-      return 9999
+    const pickBetween = (lower, upper) => {
+      if (!Number.isFinite(upper)) return null
+      const low = Number.isFinite(lower) ? lower : 0
+      if (upper - low <= 1) return findGapBetween(low, upper, used)
+      let candidate = Math.floor((low + upper) / 2)
+      if (candidate <= low) candidate = low + 1
+      if (candidate >= upper) candidate = upper - 1
+      candidate = clampRoute(candidate)
+      if (candidate > low && candidate < upper && !used.has(candidate)) return candidate
+      return findGapBetween(low, upper, used)
     }
 
-    // Caso última tarjeta: buscar siguiente centena mayor
-    if (esUltima || (pa != null && routes.indexOf(pa) === routes.length - 1)) {
-      // Ejemplo: si pa=1400, buscar 1500; si pa=9900, buscar 9910
-      let cand = Math.min(((Math.floor(pa / 100) + 1) * 100), 9900)
-      if (cand === pa) {
-        // Si pa ya es una centena (ej: 9900), buscar siguiente decena
-        let d = Math.min(((Math.floor((pa + 1) / 10) + 1) * 10), 9990)
-        while (d <= 9999) {
-          if (!used.has(d)) return d
-          d += 10
-        }
-        // Último recurso: siguiente libre
-        for (let c = pa + 1; c <= 9999; c++) if (!used.has(c)) return c
-        return 9999
+    const pickAfter = (reference) => {
+      let cursor = Number.isFinite(reference) ? reference : 0
+      let candidate = nextHundredAbove(cursor)
+      while (candidate && candidate <= MAX_ROUTE) {
+        if (!used.has(candidate)) return candidate
+        if (candidate === cursor) break
+        cursor = candidate
+        candidate = nextHundredAbove(cursor)
       }
-      if (!used.has(cand)) return cand
-      // Si está ocupada, buscar siguiente decena
-      let d = Math.min(((Math.floor((cand + 1) / 10) * 10)), 9990)
-      while (d <= 9999) {
-        if (!used.has(d)) return d
-        d += 10
-      }
-      // Último recurso: siguiente libre
-      for (let c = pa + 1; c <= 9999; c++) if (!used.has(c)) return c
-      return 9999
+      return findFreeAscending(Math.max(cursor + 1, (Number.isFinite(reference) ? reference + 1 : MIN_ROUTE)), used)
     }
 
-    // Caso primera tarjeta: insertar antes de la primera
-    if (esPrimera || (ps != null && routes.indexOf(ps) === 0)) {
-      // Ejemplo: si ps=20, buscar 10; si ps=10, buscar 05; si ps=05, buscar 03
-      if (ps <= 100) {
-        // Para números pequeños, usar mitad
-        const mitad = Math.floor(ps / 2)
-        if (mitad >= 1 && !used.has(mitad)) return mitad
-        // Si no, buscar el número más pequeño disponible
-        for (let c = 1; c < ps; c++) if (!used.has(c)) return c
-        return 1
-      } else {
-        // Para números grandes, buscar centena anterior
-        let cand = Math.floor((ps - 1) / 100) * 100
-        if (cand < 100) cand = 100
-        if (!used.has(cand)) return cand
-        // Si está ocupada, buscar decena anterior
-        let d = Math.floor((ps - 1) / 10) * 10
-        while (d >= 100) {
-          if (!used.has(d)) return d
-          d -= 10
-        }
-        // Último recurso: mitad
-        const mid = Math.floor(ps / 2)
-        if (mid >= 100 && !used.has(mid)) return mid
-        for (let c = 100; c < ps; c++) if (!used.has(c)) return c
-        return 100
-      }
+    // Escenario 1: insertar antes de la primera tarjeta ("poner de primera")
+    if (baseRoute == null && nextRoute != null && nextRoute === first) {
+      const candidate = pickBetween(0, nextRoute)
+      if (candidate != null) return candidate
+      return findFreeDescending(nextRoute - 1, used)
     }
 
-    // Caso genérico: solo pa (última tarjeta seleccionada)
-    if (pa != null) {
-      const siguientes = routes.filter(r => r > pa)
-      if (siguientes.length) {
-        const prox = siguientes[0]
-        if (prox - pa > 1) {
-          const mitad = Math.floor((pa + prox) / 2)
-          if (mitad > pa && mitad < prox && !used.has(mitad)) return mitad
-          // Si la mitad está ocupada, probar uno abajo o uno arriba
-          if (mitad - 1 > pa && !used.has(mitad - 1)) return mitad - 1
-          if (mitad + 1 < prox && !used.has(mitad + 1)) return mitad + 1
-        }
-        // Si no cabe en el medio, buscar siguiente centena
-        let cand = Math.min(((Math.floor(prox / 100) + 1) * 100), 9900)
-        if (!used.has(cand)) return cand
-        let d = Math.min(((Math.floor((cand + 1) / 10) * 10)), 9990)
-        while (d <= 9999) {
-          if (!used.has(d)) return d
-          d += 10
-        }
-        for (let c = prox + 1; c <= 9999; c++) if (!used.has(c)) return c
-        return 9999
-      } else {
-        // Último elemento: buscar siguiente centena mayor que pa
-        let cand = Math.min(((Math.floor(pa / 100) + 1) * 100), 9900)
-        if (cand === pa) {
-          // Si pa ya es una centena (ej: 9900), buscar siguiente decena
-          let d = Math.min(((Math.floor((pa + 1) / 10) + 1) * 10), 9990)
-          while (d <= 9999) {
-            if (!used.has(d)) return d
-            d += 10
-          }
-          for (let c = pa + 1; c <= 9999; c++) if (!used.has(c)) return c
-          return 9999
-        }
-        if (!used.has(cand)) return cand
-        let d = Math.min(((Math.floor((cand + 1) / 10) * 10)), 9990)
-        while (d <= 9999) {
-          if (!used.has(d)) return d
-          d += 10
-        }
-        for (let c = pa + 1; c <= 9999; c++) if (!used.has(c)) return c
-        return 9999
-      }
+    // Escenario 2: insertar entre la tarjeta seleccionada y la siguiente
+    if (baseRoute != null && nextRoute != null) {
+      const candidate = pickBetween(baseRoute, nextRoute)
+      if (candidate != null) return candidate
+      return pickAfter(Math.max(baseRoute, nextRoute))
     }
 
-    // Caso genérico: solo ps (primera tarjeta seleccionada)
-    if (ps != null) {
-      const anteriores = routes.filter(r => r < ps)
-      if (anteriores.length) {
-        const pa2 = anteriores[anteriores.length - 1]
-        if (ps - pa2 > 1) {
-          const mitad = Math.floor((pa2 + ps) / 2)
-          if (mitad > pa2 && mitad < ps && !used.has(mitad)) return mitad
-          // Si la mitad está ocupada, probar uno abajo o uno arriba
-          if (mitad - 1 > pa2 && !used.has(mitad - 1)) return mitad - 1
-          if (mitad + 1 < ps && !used.has(mitad + 1)) return mitad + 1
-        }
-        // Si no cabe en el medio, buscar centena anterior
-        let cand = Math.floor((ps - 1) / 100) * 100
-        if (cand < 100) cand = 100
-        if (!used.has(cand)) return cand
-        let d = Math.floor((ps - 1) / 10) * 10
-        while (d >= 100) {
-          if (!used.has(d)) return d
-          d -= 10
-        }
-        const mid = Math.floor(ps / 2)
-        if (mid >= 100 && !used.has(mid)) return mid
-        for (let c = 100; c < ps; c++) if (!used.has(c)) return c
-        return 100
-      } else {
-        // No hay anteriores: insertar antes de ps
-        if (ps <= 100) {
-          const mitad = Math.floor(ps / 2)
-          if (mitad >= 1 && !used.has(mitad)) return mitad
-          for (let c = 1; c < ps; c++) if (!used.has(c)) return c
-          return 1
-        } else {
-          let cand = Math.floor((ps - 1) / 100) * 100
-          if (cand < 100) cand = 100
-          if (!used.has(cand)) return cand
-          let d = Math.floor((ps - 1) / 10) * 10
-          while (d >= 100) {
-            if (!used.has(d)) return d
-            d -= 10
-          }
-          const mid = Math.floor(ps / 2)
-          if (mid >= 100 && !used.has(mid)) return mid
-          for (let c = 100; c < ps; c++) if (!used.has(c)) return c
-          return 100
-        }
-      }
+    // Escenario 3: insertar después de la última (sin siguiente)
+    if (baseRoute != null && nextRoute == null) {
+      return pickAfter(baseRoute)
     }
 
-    // Sin contexto: ampliar por centena
-    const maxR = routes[routes.length - 1]
-    let cand = Math.min(((Math.floor(maxR / 100) + 1) * 100), 9900)
-    if (!used.has(cand)) return cand
-    let d = Math.min(((Math.floor((cand + 1) / 10) * 10)), 9990)
-    while (d <= 9999) {
-      if (!used.has(d)) return d
-      d += 10
+    // Caso genérico: solo tenemos referencia del siguiente
+    if (baseRoute == null && nextRoute != null) {
+      const previous = routes.filter(r => r < nextRoute).pop()
+      if (previous != null) {
+        const candidate = pickBetween(previous, nextRoute)
+        if (candidate != null) return candidate
+      }
+      const candidate = pickBetween(0, nextRoute)
+      if (candidate != null) return candidate
+      return findFreeDescending(nextRoute - 1, used)
     }
-    for (let c = maxR + 1; c <= 9999; c++) if (!used.has(c)) return c
-    return 9900
+
+    // Sin contexto: extender después de la última ruta conocida
+    return pickAfter(last)
   } catch {
     return 100
   }
 }
-
 

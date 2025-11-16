@@ -32,7 +32,15 @@ function LoginForm({ onSuccess }) {
       } catch {}
       onSuccess?.(role)
     } catch (err) {
-      setError(err?.message || 'Error al iniciar sesión')
+      if (err?.status === 401) {
+        setError('Credenciales inválidas. Verifica tu usuario y contraseña.')
+      } else if (err?.status === 403) {
+        setError('Tu cuenta está vencida o suspendida. Contacta a soporte para reactivarla.')
+      } else if (err?.type === 'network') {
+        setError('No se pudo contactar al servidor. Verifica tu conexión e inténtalo nuevamente.')
+      } else {
+        setError(err?.message || 'Error al iniciar sesión')
+      }
     } finally {
       setIsLoading(false)
     }

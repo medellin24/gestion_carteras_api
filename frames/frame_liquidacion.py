@@ -10,6 +10,7 @@ import time
 import winsound
 from typing import List, Dict
 import unicodedata
+from time import perf_counter as _pc
 
 # Importar el cliente de la API desde la nueva ruta raíz
 from api_client.client import api_client
@@ -55,7 +56,7 @@ class FrameLiquidacion(ttk.Frame):
         self._detalles_abiertos = {}
         
         self.setup_ui()
-        self.cargar_empleados()
+        self.cargar_empleados(force=True)
         self.cargar_tipos_gastos()
         
         # Estado inicial - mostrar que se debe generar liquidación
@@ -66,10 +67,16 @@ class FrameLiquidacion(ttk.Frame):
         
         # Configurar estilos
         style = ttk.Style()
+        try:
+            style.theme_use('clam')
+        except Exception:
+            pass
         style.configure('Header.TLabel', font=('Segoe UI', 10, 'bold'))
         style.configure('Value.TLabel', font=('Segoe UI', 10, 'bold'), foreground='#2563EB')
         style.configure('Money.TLabel', font=('Segoe UI', 11, 'bold'), foreground='#059669')
         style.configure('Total.TLabel', font=('Segoe UI', 14, 'bold'), foreground='#DC2626')
+        style.configure('Blue.TButton', font=('Segoe UI', 10, 'bold'), padding=(8, 6), background='#73D0E6')
+        style.map('Blue.TButton', background=[('active', '#4FC3D9'), ('pressed', '#4FC3D9')])
         # Estilo Ocre robusto para Combobox y estilos extra
         style.configure('Ocre.TCombobox', fieldbackground='#F2C97D', background='#F2C97D', foreground='black')
         style.map('Ocre.TCombobox', fieldbackground=[('readonly', '#F2C97D')], background=[('readonly', '#F2C97D')], foreground=[('readonly', 'black')])
@@ -112,9 +119,9 @@ class FrameLiquidacion(ttk.Frame):
             pass
         self.combo_empleado.bind('<<ComboboxSelected>>', self.on_empleado_seleccionado)
         # Recargar empleados al abrir el combo para reflejar cambios recientes
-        self.combo_empleado.bind('<Button-1>', lambda e: self.cargar_empleados())
+        # Recargar solo con botón explícito (evitar doble carga)
         # Botón de refresco manual
-        ttk.Button(header_frame, text='↻', width=3, command=self.cargar_empleados).grid(row=0, column=1, sticky='e')
+        ttk.Button(header_frame, text='↻', width=3, command=lambda: self.cargar_empleados(force=True)).grid(row=0, column=1, sticky='e')
         
         # Fecha con calendario
         ttk.Label(header_frame, text="Fecha:", style='Header.TLabel').grid(
@@ -256,9 +263,9 @@ class FrameLiquidacion(ttk.Frame):
         self.base_content_frame.pack(fill='both', expand=True, pady=(0, 10))
         
         # Botón de generar liquidación (mismas dimensiones que asignar base)
-        self.btn_generar_liquidacion = tk.Button(base_frame, text="💰 Generar Liquidación",
-                                               bg='#10B981', fg='white', font=('Segoe UI', 10, 'bold'),
-                                               command=self.generar_liquidacion)
+        self.btn_generar_liquidacion = ttk.Button(base_frame, text="💰 Generar Liquidación",
+                                                 style='Blue.TButton',
+                                                 command=self.generar_liquidacion)
         self.btn_generar_liquidacion.pack(fill='x', pady=6)
         
         # SECCIÓN INFERIOR: Gestión de Gastos (dos columnas)
@@ -315,9 +322,14 @@ class FrameLiquidacion(ttk.Frame):
         self.tree_gastos.bind('<<TreeviewSelect>>', self.on_gasto_seleccionado)
         self.tree_gastos.bind('<Double-1>', self.editar_gasto_seleccionado)
 
-    def cargar_empleados(self):
+    def cargar_empleados(self, force: bool = False):
         """Carga la lista de empleados desde la API."""
         try:
+            t0 = _pc()
+            # Evitar recargas innecesarias salvo 'force'
+            if getattr(self, 'empleados_dict', None) and not force:
+                logger.info(f"[perf][liq] cargar_empleados: skipped (cache), n={len(self.empleados_dict)}")
+                return
             empleados = self.api_client.list_empleados()
             if empleados:
                 # El diccionario ahora guarda nombre_completo: identificacion
@@ -326,6 +338,7 @@ class FrameLiquidacion(ttk.Frame):
                 }
                 self.combo_empleado['values'] = list(self.empleados_dict.keys())
                 logger.info(f"Cargados {len(empleados)} empleados correctamente desde la API")
+            logger.info(f"[perf][liq] cargar_empleados: {(_pc()-t0):.3f}s, n={len(empleados) if empleados else 0}")
         except Exception as e:
             logger.error(f"Error al cargar empleados desde la API: {e}")
             messagebox.showerror("Error de API", f"No se pudieron cargar los empleados: {e}")
@@ -347,25 +360,23 @@ class FrameLiquidacion(ttk.Frame):
         if empleado_nombre and empleado_nombre in self.empleados_dict:
             self.empleado_actual_id = self.empleados_dict[empleado_nombre]
             
-            # ✅ SOLO actualizar interfaz básica, NO los cálculos
+            # ✅ SOLO actualizar interfaz básica (base), NO gastos ni cálculos
             self.limpiar_datos_liquidacion()
             self.actualizar_interfaz_base()
-            self.cargar_gastos_del_dia()
             
             logger.info(f"Empleado seleccionado: {empleado_nombre} (ID: {self.empleado_actual_id})")
 
     def on_fecha_cambio(self, event=None):
         """Maneja el cambio de fecha del calendario - SIN actualización automática"""
         try:
+            t0 = _pc()
             # Obtener fecha del DateEntry
             self.fecha_actual = self.date_picker.get_date()
             # debug removido
             
-            # ✅ SOLO limpiar datos y cargar gastos, NO calcular liquidación
-            if self.empleado_actual_id:
-                self.limpiar_datos_liquidacion()
-                self.actualizar_interfaz_base()
-                self.cargar_gastos_del_dia()
+            # ✅ SOLO limpiar datos; NO consultar base ni gastos aquí.
+            self.limpiar_datos_liquidacion()
+            logger.info(f"[perf][liq] on_fecha_cambio solo_limpiar={_pc()-t0:.3f}s (sin fetch)")
             
             logger.info(f"Fecha cambiada a: {self.fecha_actual}")
         except Exception as e:
@@ -394,9 +405,11 @@ class FrameLiquidacion(ttk.Frame):
             return
         
         try:
+            t0 = _pc()
             # La fecha debe enviarse en formato ISO (YYYY-MM-DD)
             fecha_str = self.fecha_actual.strftime('%Y-%m-%d')
             datos = self.api_client.get_liquidacion_diaria(self.empleado_actual_id, fecha_str)
+            t_datos = _pc()
             
             # Actualizar estadísticas
             for key, label in self.labels_estadisticas.items():
@@ -450,6 +463,7 @@ class FrameLiquidacion(ttk.Frame):
                     self.labels_calculos['recaudado_efectivo'].config(text=f"$ {total_efectivo:,.0f}")
                 if 'recaudado_consignacion' in self.labels_calculos:
                     self.labels_calculos['recaudado_consignacion'].config(text=f"$ {total_consig:,.0f}")
+                logger.info(f"[perf][liq] actualizar_liquidacion datos={t_datos-t0:.3f}s desglose={_pc()-t_datos:.3f}s total={_pc()-t0:.3f}s abonos_n={len(abonos_dia)}")
             except Exception as e:
                 logger.error(f"Error al calcular desglose de recaudado: {e}")
             
@@ -574,6 +588,12 @@ class FrameLiquidacion(ttk.Frame):
                     messagebox.showinfo("Éxito", "Gasto agregado correctamente")
                     ventana_agregar.destroy()
                     self.cargar_gastos_del_dia()
+                    # Recalcular caja del día (silencioso)
+                    try:
+                        fecha_str = self.fecha_actual.strftime('%Y-%m-%d')
+                        _ = self.api_client.recalcular_caja_dia(self.empleado_actual_id, fecha_str)
+                    except Exception:
+                        pass
                 else:
                     messagebox.showerror("Error", f"No se pudo agregar el gasto: {nuevo_gasto.get('detail', 'Error desconocido')}")
                     
@@ -690,6 +710,12 @@ class FrameLiquidacion(ttk.Frame):
                     messagebox.showinfo("Éxito", "Gasto actualizado correctamente")
                     ventana_editar.destroy()
                     self.cargar_gastos_del_dia()
+                    # Recalcular caja del día (silencioso)
+                    try:
+                        fecha_str = self.fecha_actual.strftime('%Y-%m-%d')
+                        _ = self.api_client.recalcular_caja_dia(self.empleado_actual_id, fecha_str)
+                    except Exception:
+                        pass
                 else:
                     messagebox.showerror("Error", f"No se pudo actualizar el gasto: {gasto_actualizado.get('detail', 'Error desconocido')}")
                     
@@ -729,6 +755,12 @@ class FrameLiquidacion(ttk.Frame):
                     self.gasto_seleccionado = None
                     self.cargar_gastos_del_dia()
                     messagebox.showinfo("Éxito", "Gasto eliminado correctamente")
+                    # Recalcular caja del día (silencioso)
+                    try:
+                        fecha_str = self.fecha_actual.strftime('%Y-%m-%d')
+                        _ = self.api_client.recalcular_caja_dia(self.empleado_actual_id, fecha_str)
+                    except Exception:
+                        pass
                 else:
                     error_msg = resultado.get('detail', 'Respuesta inesperada de la API.')
                     messagebox.showerror("Error", f"No se pudo eliminar el gasto: {error_msg}")
@@ -752,41 +784,60 @@ class FrameLiquidacion(ttk.Frame):
         """Muestra una ventana de carga mientras se procesa la liquidación"""
         self.ventana_carga = tk.Toplevel(self)
         self.ventana_carga.title("Generando Liquidación")
-        self.ventana_carga.geometry("350x140")
+        self.ventana_carga.geometry("350x160")
         self.ventana_carga.resizable(False, False)
         self.ventana_carga.transient(self.winfo_toplevel())
         self.ventana_carga.grab_set()
         
         # Centrar la ventana
         self.ventana_carga.update_idletasks()
-        x = (self.ventana_carga.winfo_screenwidth() // 2) - (350 // 2)
-        y = (self.ventana_carga.winfo_screenheight() // 2) - (140 // 2)
-        self.ventana_carga.geometry(f"350x140+{x}+{y}")
+        w, h = 350, 160
+        x = (self.ventana_carga.winfo_screenwidth() // 2) - (w // 2)
+        y = (self.ventana_carga.winfo_screenheight() // 2) - (h // 2)
+        self.ventana_carga.geometry(f"{w}x{h}+{x}+{y}")
         
         # Contenido de la ventana
         frame_carga = ttk.Frame(self.ventana_carga, padding=20)
         frame_carga.pack(fill='both', expand=True)
         
-        # Icono y texto
-        ttk.Label(frame_carga, text="💰", font=('Segoe UI', 24)).pack(pady=(0, 5))
-        ttk.Label(frame_carga, text="Generando Liquidación", 
+        # Icono y textos
+        ttk.Label(frame_carga, text="💼", font=('Segoe UI', 26)).pack(pady=(0, 6))
+        ttk.Label(frame_carga, text="Generando Liquidación",
                 font=('Segoe UI', 12, 'bold')).pack()
-        ttk.Label(frame_carga, text="Por favor espere...", 
-                font=('Segoe UI', 10), foreground='#6B7280').pack(pady=(5, 0))
+        ttk.Label(frame_carga, text="Por favor espere...",
+                font=('Segoe UI', 10), foreground='#6B7280').pack(pady=(4, 0))
         
-        # Barra de progreso indeterminada
-        self.progress_bar = ttk.Progressbar(frame_carga, mode='indeterminate')
-        self.progress_bar.pack(fill='x', pady=(15, 0))
-        self.progress_bar.start(10)  # Velocidad de animación
+        # Estilo verde para la barra indeterminada
+        try:
+            style = ttk.Style(self.ventana_carga)
+            style.configure('Success.Horizontal.TProgressbar', background='#10B981')
+            pbar_style = 'Success.Horizontal.TProgressbar'
+        except Exception:
+            pbar_style = 'Horizontal.TProgressbar'
+        
+        # Barra de progreso indeterminada verde
+        self.progress_bar = ttk.Progressbar(frame_carga, mode='indeterminate', style=pbar_style)
+        self.progress_bar.pack(fill='x', pady=(16, 0))
+        self.progress_bar.start(10)
     
     def _procesar_liquidacion(self):
         """Procesa la liquidación en hilo separado"""
         try:
+            t0 = _pc()
             # Simular tiempo de procesamiento mínimo para que se vea la ventana
             time.sleep(0.5)
             
             # Actualizar los datos de liquidación
             self.actualizar_liquidacion()
+            t1 = _pc()
+            # Recalcular caja del día (silencioso)
+            try:
+                if self.empleado_actual_id:
+                    fecha_str = self.fecha_actual.strftime('%Y-%m-%d')
+                    _ = self.api_client.recalcular_caja_dia(self.empleado_actual_id, fecha_str)
+                logger.info(f"[perf][liq] _procesar_liquidacion actualizar={t1-t0:.3f}s recalc_caja={_pc()-t1:.3f}s total={_pc()-t0:.3f}s")
+            except Exception:
+                pass
             
             # Cerrar ventana de carga y reproducir sonido en el hilo principal
             self.after(0, self._finalizar_liquidacion)
@@ -835,140 +886,138 @@ class FrameLiquidacion(ttk.Frame):
         fecha_str = self.fecha_actual.strftime('%Y-%m-%d')
 
         try:
+            # Crear ventana inmediatamente (pre-render)
             if tipo_estadistica == 'tarjetas_canceladas':
-                items = self.api_client.list_tarjetas_canceladas_del_dia(self.empleado_actual_id, fecha_str)
                 titulo = "Tarjetas canceladas del día"
                 cols = ("Cliente", "Cancelado", "Monto", "Ruta")
-                filas = []
-                abonos_idx = self._build_abonos_index_por_tarjeta(fecha_str)
-                for t in items:
-                    cliente_dict = t.get('cliente') or {}
-                    apellido = str(cliente_dict.get('apellido') or t.get('cliente_apellido') or '')
-                    nombre = str(cliente_dict.get('nombre') or t.get('cliente_nombre') or '')
-                    cliente = f"{apellido} {nombre}".strip().upper()
-                    cancelado = self._first_number(t, ('valor_cancelado', 'total_abonos', 'abonado_total', 'total_pagado', 'pagado', 'abonos'))
-                    if cancelado == 0:
-                        codigo_tarjeta = self._get_tarjeta_codigo_from_data(t)
-                        abono_final = abonos_idx.get(codigo_tarjeta)
-                        if abono_final:
-                            cancelado = self._first_number(abono_final, ('monto', 'valor'))
-                    monto = self._first_number(t, ('monto', 'valor_prestamo', 'monto_prestamo'))
-                    ruta = str(t.get('numero_ruta') or t.get('ruta') or t.get('numeroRuta') or '')
-                    filas.append((cliente, f"$ {cancelado:,.0f}", f"$ {monto:,.0f}", ruta))
+                contexto = 'tarjetas_canceladas'
             elif tipo_estadistica == 'tarjetas_nuevas':
-                items = self.api_client.list_tarjetas_nuevas_del_dia(self.empleado_actual_id, fecha_str)
                 titulo = "Tarjetas nuevas del día"
                 cols = ("Cliente", "Teléfono", "Dirección", "Monto", "Fecha", "Interés", "Cuotas", "Ruta")
-                filas = []
-                for t in items:
-                    c = t.get('cliente') or {}
-                    apellido = str(c.get('apellido') or t.get('cliente_apellido') or '')
-                    nombre = str(c.get('nombre') or t.get('cliente_nombre') or '')
-                    cliente = f"{apellido} {nombre}".strip().upper()
-                    telefono = self._get_first_str(c, ('telefono', 'celular', 'telefono1', 'movil')) or self._get_first_str(t, ('telefono', 'celular'))
-                    direccion = self._get_first_str(c, ('direccion', 'direccion_residencia')) or self._get_first_str(t, ('direccion',))
-                    if not (telefono and direccion):
-                        t_codigo = self._get_tarjeta_codigo_from_data(t)
-                        t_id = self._get_tarjeta_id_from_data(t)
-                        tarjeta_full = self._get_tarjeta_with_cache(codigo=t_codigo, tarjeta_id=t_id)
-                        if tarjeta_full:
-                            tel2, dir2 = self._extract_contacto_from_tarjeta(tarjeta_full)
-                            if not telefono:
-                                telefono = tel2
-                            if not direccion:
-                                direccion = dir2
-                    monto = self._first_number(t, ('monto', 'valor_prestamo', 'monto_prestamo'))
-                    # Mostrar fecha del día local del usuario. Si no viene 'fecha' desde backend,
-                    # convertir 'fecha_creacion' (UTC) a la timezone del token.
-                    fecha_txt = ''
-                    raw_fecha = t.get('fecha') or None
-                    if raw_fecha:
-                        fecha_txt = self._parse_iso_date_only(raw_fecha)
-                    else:
-                        try:
-                            from datetime import timezone as _tz
-                            from zoneinfo import ZoneInfo as _ZI
-                            dt_raw = t.get('fecha_creacion') or t.get('created_at')
-                            if dt_raw:
-                                dt = datetime.fromisoformat(str(dt_raw).replace('Z', '+00:00')) if isinstance(dt_raw, str) else dt_raw
-                                if dt and dt.tzinfo is None:
-                                    dt = dt.replace(tzinfo=_tz.utc)
-                                tz = _ZI(self.token_tz)
-                                fecha_txt = dt.astimezone(tz).strftime('%d/%m/%Y')
-                        except Exception:
-                            fecha_txt = self._parse_iso_date_only(t.get('fecha_creacion') or t.get('created_at'))
-                    interes = self._first_number(t, ('interes', 'tasa', 'tasa_interes'))
-                    interes_txt = f"{interes}%" if interes else ''
-                    cuotas = str(t.get('cuotas') or t.get('num_cuotas') or '')
-                    ruta = str(t.get('numero_ruta') or t.get('ruta') or '')
-                    filas.append((cliente, telefono, direccion, f"$ {monto:,.0f}", fecha_txt, interes_txt, cuotas, ruta))
+                contexto = 'tarjetas_nuevas'
             elif tipo_estadistica == 'total_registros':
-                items = self.api_client.list_abonos_del_dia(self.empleado_actual_id, fecha_str)
                 titulo = "Abonos del día"
                 cols = ("Cliente", "Abonado", "Método", "Monto", "Fecha")
-                filas = []
-                for a in items:
-                    apellido = str(a.get('cliente_apellido') or a.get('apellido') or '')
-                    nombre = str(a.get('cliente_nombre') or a.get('nombre') or '')
-                    cliente = f"{apellido} {nombre}".strip().upper()
-                    abonado = self._first_number(a, ('monto', 'valor'))
-                    metodo_raw = self._obtener_metodo_pago(a)
-                    if not (metodo_raw and str(metodo_raw).strip()):
-                        a_id = a.get('id') or a.get('abono_id')
-                        if a_id:
-                            a_full = self._get_abono_with_cache(a_id)
-                            if a_full:
-                                metodo_raw = self._obtener_metodo_pago(a_full) or metodo_raw
-                                if self._first_number(a_full, ('monto', 'valor')) and abonado == 0:
-                                    abonado = self._first_number(a_full, ('monto', 'valor'))
-                                if self._extraer_monto_prestamo_de_abono(a_full) is not None:
-                                    monto_prestamo = self._extraer_monto_prestamo_de_abono(a_full)
-                                else:
-                                    t_codigo = self._get_tarjeta_codigo_from_data(a_full)
-                                    t_id = self._get_tarjeta_id_from_data(a_full)
-                                    t_full = self._get_tarjeta_with_cache(codigo=t_codigo, tarjeta_id=t_id)
-                                    monto_prestamo = self._first_number(t_full or {}, ('monto', 'monto_prestamo')) if t_full else None
-                            else:
-                                monto_prestamo = self._extraer_monto_prestamo_de_abono(a)
-                    else:
-                        monto_prestamo = self._extraer_monto_prestamo_de_abono(a)
-                        if monto_prestamo is None:
-                            t_codigo = self._get_tarjeta_codigo_from_data(a)
-                            t_id = self._get_tarjeta_id_from_data(a)
-                            t_full = self._get_tarjeta_with_cache(codigo=t_codigo, tarjeta_id=t_id)
-                            monto_prestamo = self._first_number(t_full or {}, ('monto', 'monto_prestamo')) if t_full else None
-                    metodo_norm = self._normalizar_texto(metodo_raw).lower()
-                    metodo_txt = 'Consignación' if 'consignacion' in metodo_norm else ('Efectivo' if 'efectivo' in metodo_norm else (metodo_raw or ''))
-                    # Formatear fecha del abono según timezone del token
-                    fecha_raw = a.get('fecha') or a.get('created_at')
-                    try:
-                        dt = datetime.fromisoformat(str(fecha_raw).replace('Z', '+00:00')) if fecha_raw else None
-                        if dt and dt.tzinfo is None:
-                            dt = dt.replace(tzinfo=timezone.utc)
-                        tz = ZoneInfo(self.token_tz)
-                        fecha_txt = dt.astimezone(tz).strftime('%d/%m/%Y') if dt else ''
-                    except Exception:
-                        fecha_txt = self._parse_iso_date_only(fecha_raw)
-                    filas.append((cliente, f"$ {abonado:,.0f}", metodo_txt, f"$ {monto_prestamo:,.0f}" if monto_prestamo else "", fecha_txt))
+                contexto = 'abonos_dia'
             else:
                 messagebox.showinfo("Info", "Detalle no disponible para esta estadística.")
                 return
 
-            self._mostrar_tabla_detalle(titulo, cols, filas, raw_items=items, contexto=('abonos_dia' if tipo_estadistica == 'total_registros' else tipo_estadistica))
-        except Exception as e:
-            logger.error(f"Error al cargar detalle de {tipo_estadistica}: {e}")
-            messagebox.showerror("Error", f"No se pudo cargar el detalle: {e}")
+            ventana, tree, iid_to_index = self._crear_ventana_detalle_empty(titulo, cols, contexto)
+            # Mostrar indicador de carga
+            try:
+                tree.insert('', 'end', values=("Cargando...",), iid='__loading__')
+            except Exception:
+                pass
 
-    def _mostrar_tabla_detalle(self, titulo, columnas, filas, raw_items=None, contexto=None):
+            def _worker():
+                t0 = _pc()
+                filas = []
+                items = []
+                try:
+                    if tipo_estadistica == 'tarjetas_canceladas':
+                        items = self.api_client.list_tarjetas_canceladas_del_dia(self.empleado_actual_id, fecha_str)
+                        abonos_idx = self._build_abonos_index_por_tarjeta(fecha_str) if items else {}
+                        for t in items:
+                            cliente_dict = t.get('cliente') or {}
+                            apellido = str(cliente_dict.get('apellido') or t.get('cliente_apellido') or '')
+                            nombre = str(cliente_dict.get('nombre') or t.get('cliente_nombre') or '')
+                            cliente = f"{apellido} {nombre}".strip().upper()
+                            cancelado = self._first_number(t, ('valor_cancelado', 'total_abonos', 'abonado_total', 'total_pagado', 'pagado', 'abonos'))
+                            if cancelado == 0 and abonos_idx:
+                                codigo_tarjeta = self._get_tarjeta_codigo_from_data(t)
+                                abono_final = abonos_idx.get(codigo_tarjeta)
+                                if abono_final:
+                                    cancelado = self._first_number(abono_final, ('monto', 'valor'))
+                            monto = self._first_number(t, ('monto', 'valor_prestamo', 'monto_prestamo'))
+                            ruta = str(t.get('numero_ruta') or t.get('ruta') or t.get('numeroRuta') or '')
+                            filas.append((cliente, f"$ {cancelado:,.0f}", f"$ {monto:,.0f}", ruta))
+                    elif tipo_estadistica == 'tarjetas_nuevas':
+                        items = self.api_client.list_tarjetas_nuevas_del_dia(self.empleado_actual_id, fecha_str)
+                        for t in items:
+                            c = t.get('cliente') or {}
+                            apellido = str(c.get('apellido') or t.get('cliente_apellido') or '')
+                            nombre = str(c.get('nombre') or t.get('cliente_nombre') or '')
+                            cliente = f"{apellido} {nombre}".strip().upper()
+                            telefono = self._get_first_str(c, ('telefono', 'celular', 'telefono1', 'movil')) or ''
+                            direccion = self._get_first_str(c, ('direccion', 'direccion_residencia')) or ''
+                            monto = self._first_number(t, ('monto', 'valor_prestamo', 'monto_prestamo'))
+                            fecha_txt = ''
+                            raw_fecha = t.get('fecha') or None
+                            if raw_fecha:
+                                fecha_txt = self._parse_iso_date_only(raw_fecha)
+                            else:
+                                try:
+                                    from datetime import timezone as _tz
+                                    from zoneinfo import ZoneInfo as _ZI
+                                    dt_raw = t.get('fecha_creacion') or t.get('created_at')
+                                    if dt_raw:
+                                        dt = datetime.fromisoformat(str(dt_raw).replace('Z', '+00:00')) if isinstance(dt_raw, str) else dt_raw
+                                        if dt and dt.tzinfo is None:
+                                            dt = dt.replace(tzinfo=_tz.utc)
+                                        tz = _ZI(self.token_tz)
+                                        fecha_txt = dt.astimezone(tz).strftime('%d/%m/%Y')
+                                except Exception:
+                                    fecha_txt = self._parse_iso_date_only(t.get('fecha_creacion') or t.get('created_at'))
+                            interes = self._first_number(t, ('interes', 'tasa', 'tasa_interes'))
+                            interes_txt = f"{interes}%" if interes else ''
+                            cuotas = str(t.get('cuotas') or t.get('num_cuotas') or '')
+                            ruta = str(t.get('numero_ruta') or t.get('ruta') or '')
+                            filas.append((cliente, telefono, direccion, f"$ {monto:,.0f}", fecha_txt, interes_txt, cuotas, ruta))
+                    else:  # total_registros
+                        items = self.api_client.list_abonos_del_dia(self.empleado_actual_id, fecha_str)
+                        for a in items:
+                            apellido = str(a.get('cliente_apellido') or a.get('apellido') or '')
+                            nombre = str(a.get('cliente_nombre') or a.get('nombre') or '')
+                            cliente = f"{apellido} {nombre}".strip().upper()
+                            abonado = self._first_number(a, ('monto', 'valor'))
+                            metodo_raw = a.get('metodo_pago') or self._obtener_metodo_pago(a)
+                            monto_prestamo = self._first_number(a, ('tarjeta_monto', 'monto_prestamo', 'monto_tarjeta'))
+                            metodo_norm = self._normalizar_texto(metodo_raw).lower()
+                            metodo_txt = 'Consignación' if 'consignacion' in metodo_norm else ('Efectivo' if 'efectivo' in metodo_norm else (metodo_raw or ''))
+                            fecha_raw = a.get('fecha') or a.get('created_at')
+                            try:
+                                dt = datetime.fromisoformat(str(fecha_raw).replace('Z', '+00:00')) if fecha_raw else None
+                                if dt and dt.tzinfo is None:
+                                    dt = dt.replace(tzinfo=timezone.utc)
+                                tz = ZoneInfo(self.token_tz)
+                                fecha_txt = dt.astimezone(tz).strftime('%d/%m/%Y') if dt else ''
+                            except Exception:
+                                fecha_txt = self._parse_iso_date_only(fecha_raw)
+                            filas.append((cliente, f"$ {abonado:,.0f}", metodo_txt, f"$ {monto_prestamo:,.0f}" if monto_prestamo else "", fecha_txt))
+                except Exception as e:
+                    logger.error(f"Error al cargar detalle de {tipo_estadistica}: {e}")
+                    filas = [("Error al cargar",)]
+                finally:
+                    logger.info(f"[perf][liq][detalle] {tipo_estadistica}: fetch={_pc()-t0:.3f}s items={len(items) if items else 0}")
+
+                def _apply():
+                    # Limpiar loading y renderizar en lotes
+                    try:
+                        if '__loading__' in tree.get_children():
+                            tree.delete('__loading__')
+                    except Exception:
+                        pass
+                    self._prerender_into_tree(ventana, tree, filas, iid_to_index)
+                try:
+                    self.after(0, _apply)
+                except Exception:
+                    _apply()
+
+            threading.Thread(target=_worker, daemon=True).start()
+        except Exception as e:
+            logger.error(f"Error al iniciar detalle: {e}")
+            messagebox.showerror("Error", f"No se pudo abrir el detalle: {e}")
+
+    def _crear_ventana_detalle_empty(self, titulo, columnas, contexto=None):
+        """Crea la ventana del detalle inmediatamente y devuelve (ventana, tree, iid_to_index)."""
         ventana = tk.Toplevel(self)
         ventana.title(titulo)
-        # Registrar ventana abierta por contexto
         try:
             if contexto:
                 self._detalles_abiertos[contexto] = ventana
         except Exception:
             pass
-        # Tamaño dinámico: si son 2 columnas (efectivo/consignación), usar ventana compacta
         ancho, alto = (360, 320) if len(columnas) <= 2 else (700, 400)
         ventana.geometry(f"{ancho}x{alto}")
         ventana.resizable(True, True)
@@ -981,7 +1030,6 @@ class FrameLiquidacion(ttk.Frame):
             ventana.geometry(f"{ancho}x{alto}+%d+%d" % (x, y))
         except Exception:
             pass
-
         def _on_close():
             try:
                 if contexto and contexto in self._detalles_abiertos and self._detalles_abiertos[contexto] is ventana:
@@ -993,12 +1041,10 @@ class FrameLiquidacion(ttk.Frame):
 
         cont = ttk.Frame(ventana, padding=10)
         cont.pack(fill='both', expand=True)
-
         tree = ttk.Treeview(cont, columns=columnas, show='headings', style='Detalle.Treeview')
         for idx, col in enumerate(columnas):
             tree.heading(col, text=col)
             if len(columnas) <= 2:
-                # Ventanas compactas (Efectivo/Consignación)
                 if idx == 0:
                     tree.column(col, width=200, anchor='w', stretch=False)
                 else:
@@ -1015,175 +1061,34 @@ class FrameLiquidacion(ttk.Frame):
         tree.pack(side='top', fill='both', expand=True)
         vs.pack(side='right', fill='y')
         hs.pack(side='bottom', fill='x')
-
         tree.tag_configure('row_even', background='#FFFFFF')
         tree.tag_configure('row_odd', background='#E6F4FA')
+        return ventana, tree, {}
 
-        # Insertar filas y mapear iids a índices de raw_items
-        iid_to_index = {}
-        for i, fila in enumerate(filas):
-            tag = 'row_odd' if (i % 2) else 'row_even'
-            iid = f"row-{i}"
-            tree.insert('', 'end', iid=iid, values=fila, tags=(tag,))
-            iid_to_index[iid] = i
-
-        # Menú contextual
-        menu = tk.Menu(ventana, tearoff=0)
-        menu.add_command(label="Modificar", command=lambda: on_modificar())
-        menu.add_command(label="Eliminar", command=lambda: on_eliminar())
-
-        def get_selected_raw():
-            sel = tree.selection()
-            if not sel:
-                return None
-            idx = iid_to_index.get(sel[0])
-            if idx is None:
-                return None
-            if raw_items and 0 <= idx < len(raw_items):
-                return raw_items[idx]
-            return None
-
-        def on_modificar():
-            try:
-                raw = get_selected_raw()
-                if not raw:
-                    messagebox.showinfo("Info", "Seleccione un registro")
-                    return
-                if contexto in ("tarjetas_nuevas", "tarjetas_canceladas"):
-                    codigo = self._get_tarjeta_codigo_from_data(raw)
-                    if not codigo:
-                        messagebox.showerror("Error", "No se pudo determinar el código de la tarjeta.")
-                        return
-                    VentanaEditarTarjeta(self.winfo_toplevel(), codigo)
-                    # Nota: VentanaEditarTarjeta maneja su propio guardado; tras cerrarse refrescamos
-                    self._abono_cache.clear(); self._tarjeta_cache.clear(); self._refrescar_ventanas_detalle()
-                else:
-                    # Abonos: abrir editor simple
-                    abono_id = raw.get('id') or raw.get('abono_id')
-                    if not abono_id:
-                        messagebox.showerror("Error", "No se pudo determinar el ID del abono.")
-                        return
-                    editar_abono(abono_id)
-            except Exception as e:
-                messagebox.showerror("Error", f"No se pudo modificar: {e}")
-
-        def on_eliminar():
-            try:
-                raw = get_selected_raw()
-                if not raw:
-                    messagebox.showinfo("Info", "Seleccione un registro")
-                    return
-                # Solo permitir eliminar en tarjetas nuevas y abonos (según indicación)
-                if contexto == "tarjetas_nuevas":
-                    codigo = self._get_tarjeta_codigo_from_data(raw)
-                    if not codigo:
-                        messagebox.showerror("Error", "No se pudo determinar el código de la tarjeta.")
-                        return
-                    if messagebox.askyesno("Confirmar", f"¿Eliminar tarjeta {codigo}?"):
-                        resp = self.api_client.delete_tarjeta(codigo)
-                        messagebox.showinfo("Resultado", "Tarjeta eliminada" if resp else "Acción completada")
-                        # Quitar del Treeview
-                        sel = tree.selection()
-                        if sel:
-                            tree.delete(sel[0])
-                        self._abono_cache.clear(); self._tarjeta_cache.clear(); self._refrescar_ventanas_detalle()
-                elif contexto in ("abonos_dia", "efectivo", "consignacion"):
-                    abono_id = raw.get('id') or raw.get('abono_id')
-                    if not abono_id:
-                        messagebox.showerror("Error", "No se pudo determinar el ID del abono.")
-                        return
-                    if messagebox.askyesno("Confirmar", f"¿Eliminar abono #{abono_id}?"):
-                        resp = self.api_client.delete_abono(int(abono_id))
-                        messagebox.showinfo("Resultado", "Abono eliminado" if resp else "Acción completada")
-                        sel = tree.selection()
-                        if sel:
-                            tree.delete(sel[0])
-                        self._abono_cache.clear(); self._tarjeta_cache.clear(); self._refrescar_ventanas_detalle()
-                else:
-                    messagebox.showinfo("Info", "Eliminación no disponible para esta vista.")
-            except Exception as e:
-                messagebox.showerror("Error", f"No se pudo eliminar: {e}")
-
-        def editar_abono(abono_id):
-            # Cargar abono para mostrar valores actuales
-            ab = self._get_abono_with_cache(abono_id) or {}
-            dlg = tk.Toplevel(ventana)
-            dlg.title(f"Editar Abono #{abono_id}")
-            dlg.geometry("300x200")
-            dlg.resizable(False, False)
-            dlg.transient(ventana)
-            dlg.grab_set()
-            frame = ttk.Frame(dlg, padding=12)
-            frame.pack(fill='both', expand=True)
-            ttk.Label(frame, text="Monto:").grid(row=0, column=0, sticky='w', pady=6)
-            entry_monto = ttk.Entry(frame, width=18)
-            try:
-                monto_actual = ab.get('monto') or ab.get('valor') or ''
-                entry_monto.insert(0, str(monto_actual))
-            except Exception:
-                pass
-            entry_monto.grid(row=0, column=1, sticky='ew', pady=6)
-            ttk.Label(frame, text="Método:").grid(row=1, column=0, sticky='w', pady=6)
-            combo_metodo = ttk.Combobox(frame, state='readonly', values=["Efectivo", "Consignación"], width=16)
-            metodo_raw = self._obtener_metodo_pago(ab)
-            metodo_norm = self._normalizar_texto(metodo_raw).lower()
-            if 'consignacion' in metodo_norm:
-                combo_metodo.set('Consignación')
-            elif 'efectivo' in metodo_norm:
-                combo_metodo.set('Efectivo')
-            else:
-                combo_metodo.set('Efectivo')
-            combo_metodo.grid(row=1, column=1, sticky='ew', pady=6)
-            frame.grid_columnconfigure(1, weight=1)
-
-            def guardar():
+    def _prerender_into_tree(self, ventana, tree, filas, iid_to_index):
+        """Inserta filas en lotes dentro de un tree existente."""
+        batch_size = 200
+        total = len(filas)
+        t0_pr = _pc()
+        def _insert_batch(start_idx: int):
+            end_idx = min(start_idx + batch_size, total)
+            for i in range(start_idx, end_idx):
+                fila = filas[i]
+                tag = 'row_odd' if (i % 2) else 'row_even'
+                iid = f"row-{i}"
+                tree.insert('', 'end', iid=iid, values=fila, tags=(tag,))
+                iid_to_index[iid] = i
+            if end_idx < total:
                 try:
-                    monto_str = entry_monto.get().strip()
-                    monto = float(str(monto_str).replace(',', '').replace('$', '')) if monto_str else None
-                    metodo_sel = combo_metodo.get()
-                    metodo_api = 'efectivo' if metodo_sel.lower().startswith('efec') else 'consignacion'
-                    payload = {}
-                    if monto is not None:
-                        payload['monto'] = monto
-                    payload['metodo_pago'] = metodo_api
-                    if not payload:
-                        messagebox.showinfo("Info", "Sin cambios que guardar")
-                        return
-                    resp = self.api_client.update_abono(int(abono_id), payload)
-                    # Actualizar fila seleccionada
-                    sel = tree.selection()
-                    if sel:
-                        # Recalcular valores visibles según columnas
-                        vals = list(tree.item(sel[0], 'values'))
-                        try:
-                            # Abonado es col 1, Método col 2
-                            vals[1] = f"$ {Decimal(str(monto)):,.0f}" if monto is not None else vals[1]
-                            vals[2] = 'Efectivo' if metodo_api == 'efectivo' else 'Consignación'
-                        except Exception:
-                            pass
-                        tree.item(sel[0], values=tuple(vals))
-                    messagebox.showinfo("Éxito", "Abono actualizado")
-                    self._abono_cache.clear(); self._tarjeta_cache.clear(); self._refrescar_ventanas_detalle()
-                    dlg.destroy()
-                except Exception as e:
-                    messagebox.showerror("Error", f"No se pudo actualizar: {e}")
-
-            btns = ttk.Frame(frame)
-            btns.grid(row=2, column=0, columnspan=2, pady=(10, 0))
-            ttk.Button(btns, text="Guardar", command=guardar).pack(side='left', padx=5)
-            ttk.Button(btns, text="Cancelar", command=dlg.destroy).pack(side='left', padx=5)
-
-        def mostrar_menu(event):
-            try:
-                row_id = tree.identify_row(event.y)
-                if row_id:
-                    tree.selection_set(row_id)
-                menu.tk_popup(event.x_root, event.y_root)
-            finally:
-                menu.grab_release()
-
-        # Bind botón derecho
-        tree.bind('<Button-3>', mostrar_menu)
+                    ventana.after(0, lambda: _insert_batch(end_idx))
+                except Exception:
+                    _insert_batch(end_idx)
+            else:
+                try:
+                    logger.info(f"[perf][liq][detalle] prerender filas={total} en {(_pc()-t0_pr):.3f}s (batch={batch_size})")
+                except Exception:
+                    pass
+        _insert_batch(0)
 
     def mostrar_detalle_tarjetas_canceladas(self):
         """[DESACTIVADO] Muestra ventana con lista de tarjetas canceladas"""
@@ -1221,41 +1126,48 @@ class FrameLiquidacion(ttk.Frame):
         titulo = "Recaudos en Efectivo (día)" if 'efectivo' in metodo_norm else "Recaudos en Consignación (día)"
         fecha_str = self.fecha_actual.strftime('%Y-%m-%d')
         try:
-            items = self.api_client.list_abonos_del_dia(self.empleado_actual_id, fecha_str)
+            # Pre-render ventana con placeholder
             columnas = ("Cliente", "Abono")
-            filas = []
-            raw_filtrados = []
-            for a in items:
-                m_raw = self._obtener_metodo_pago(a)
-                m_norm = self._normalizar_texto(m_raw).lower()
-                if not m_norm:
-                    # Fallback: enriquecer por ID si existe
-                    a_id = a.get('id') or a.get('abono_id')
+            ctx = 'efectivo' if 'efectivo' in metodo_norm else 'consignacion'
+            ventana, tree, iid_to_index = self._crear_ventana_detalle_empty(titulo, columnas, ctx)
+            try:
+                tree.insert('', 'end', values=("Cargando...",), iid='__loading__')
+            except Exception:
+                pass
+
+            def _worker():
+                t0 = _pc()
+                filas = []
+                try:
+                    items = self.api_client.list_abonos_del_dia(self.empleado_actual_id, fecha_str)
+                    for a in items:
+                        m_raw = a.get('metodo_pago') or self._obtener_metodo_pago(a)
+                        m_norm = self._normalizar_texto(m_raw).lower()
+                        coincide_efectivo = ('efectivo' in metodo_norm and 'efectivo' in m_norm)
+                        coincide_consig = ('consignacion' in metodo_norm and 'consignacion' in m_norm)
+                        if coincide_efectivo or coincide_consig:
+                            cliente = self._extract_cliente_nombre(a)
+                            abonado = self._first_number(a, ('monto', 'valor'))
+                            filas.append((cliente or '—', f"$ {abonado:,.0f}"))
+                except Exception as e:
+                    logger.error(f"Error al cargar detalle por método {metodo}: {e}")
+                    filas = [("Error al cargar",)]
+                finally:
+                    logger.info(f"[perf][liq][detalle] metodo={metodo}: fetch+render_async={_pc()-t0:.3f}s items={len(filas)}")
+
+                def _apply():
                     try:
-                        if a_id:
-                            a_full = self._get_abono_with_cache(a_id)
-                            if a_full:
-                                m_raw = self._obtener_metodo_pago(a_full)
-                                m_norm = self._normalizar_texto(m_raw).lower()
-                                a = a_full
+                        if '__loading__' in tree.get_children():
+                            tree.delete('__loading__')
                     except Exception:
                         pass
-                coincide_efectivo = ('efectivo' in metodo_norm and 'efectivo' in m_norm)
-                coincide_consig = ('consignacion' in metodo_norm and 'consignacion' in m_norm)
-                if coincide_efectivo or coincide_consig:
-                    cliente = self._extract_cliente_nombre(a)
-                    if not cliente:
-                        # Intentar enriquecer con tarjeta si aún vacío
-                        t_codigo = self._get_tarjeta_codigo_from_data(a)
-                        t_id = self._get_tarjeta_id_from_data(a)
-                        t_full = self._get_tarjeta_with_cache(codigo=t_codigo, tarjeta_id=t_id)
-                        if t_full:
-                            cliente = self._extract_cliente_nombre(t_full)
-                    abonado = self._first_number(a, ('monto', 'valor'))
-                    filas.append((cliente or '—', f"$ {abonado:,.0f}"))
-                    raw_filtrados.append(a)
-            ctx = 'efectivo' if 'efectivo' in metodo_norm else 'consignacion'
-            self._mostrar_tabla_detalle(titulo, columnas, filas, raw_items=raw_filtrados, contexto=ctx)
+                    self._prerender_into_tree(ventana, tree, filas, iid_to_index)
+                try:
+                    self.after(0, _apply)
+                except Exception:
+                    _apply()
+
+            threading.Thread(target=_worker, daemon=True).start()
         except Exception as e:
             logger.error(f"Error al cargar detalle por método {metodo}: {e}")
             messagebox.showerror("Error", f"No se pudo cargar el detalle por método: {e}")
@@ -1265,20 +1177,36 @@ class FrameLiquidacion(ttk.Frame):
         if not self.empleado_actual_id:
             self.mostrar_interfaz_sin_empleado()
             return
-            
+        # Mostrar estado de carga no bloqueante
+        try:
+            self.limpiar_contenido_base()
+            self.base_frame.config(text="💰 Base del Día")
+            ttk.Label(self.base_content_frame, text="Cargando base...", font=('Segoe UI', 9)).pack(pady=6)
+        except Exception:
+            pass
+        # Consultar en segundo plano
+        def _worker(emp_id: str, fecha_str: str):
+            try:
+                base_existente = self.api_client.get_base_by_empleado_fecha(emp_id, fecha_str)
+            except Exception as e:
+                logger.error(f"[liq][base] error fetch: {e}")
+                base_existente = 'ERROR'
+            def _apply():
+                if base_existente == 'ERROR':
+                    self.mostrar_interfaz_error()
+                elif base_existente:
+                    self.mostrar_interfaz_base_existente(base_existente)
+                else:
+                    self.mostrar_interfaz_asignar_base()
+            try:
+                self.after(0, _apply)
+            except Exception:
+                _apply()
         try:
             fecha_str = self.fecha_actual.strftime('%Y-%m-%d')
-            base_existente = self.api_client.get_base_by_empleado_fecha(self.empleado_actual_id, fecha_str)
-
-            # Tratar None como caso normal: no hay base asignada aún para ese día
-            if base_existente:
-                self.mostrar_interfaz_base_existente(base_existente)
-            else:
-                self.mostrar_interfaz_asignar_base()
-
+            threading.Thread(target=_worker, args=(self.empleado_actual_id, fecha_str), daemon=True).start()
         except Exception as e:
-            # Cualquier otro error distinto a "no existe" debe considerarse error real de interfaz
-            logger.error(f"Error al actualizar interfaz de base desde API: {e}")
+            logger.error(f"Error al disparar carga asíncrona de base: {e}")
             self.mostrar_interfaz_error()
 
     def limpiar_contenido_base(self):
@@ -1323,9 +1251,9 @@ class FrameLiquidacion(ttk.Frame):
         self.entry_nueva_base.bind('<Return>', lambda e: self.asignar_base_rapida())
         
         # Botón de asignar
-        self.btn_asignar_base = tk.Button(input_frame, text="✅ Asignar Base",
-                                        bg='#10B981', fg='white', font=('Segoe UI', 10, 'bold'),
-                                        command=self.asignar_base_rapida)
+        self.btn_asignar_base = ttk.Button(input_frame, text="✅ Asignar Base",
+                                           style='Blue.TButton',
+                                           command=self.asignar_base_rapida)
         self.btn_asignar_base.pack(fill='x', pady=(5, 0))
         
         # Mensaje adicional
@@ -1422,6 +1350,12 @@ class FrameLiquidacion(ttk.Frame):
                 messagebox.showinfo("Éxito", f"Base de $ {monto:,.0f} asignada correctamente")
                 # Esta actualización SÍ es necesaria porque se asignó una nueva base
                 self.actualizar_liquidacion()
+                # Recalcular caja del día (silencioso)
+                try:
+                    fecha_str = self.fecha_actual.strftime('%Y-%m-%d')
+                    _ = self.api_client.recalcular_caja_dia(self.empleado_actual_id, fecha_str)
+                except Exception:
+                    pass
             else:
                 error_msg = nueva_base.get('detail', 'Error desconocido')
                 # Si el error es por base duplicada, mostramos un mensaje amigable

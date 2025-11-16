@@ -251,3 +251,52 @@ class AttemptDownloadResponse(BaseModel):
     limit: int
     already_registered: bool = False
     message: str = ""
+
+# --- Modelos de Contabilidad / Caja ---
+
+class ContabilidadQuery(BaseModel):
+    empleado_id: Optional[str] = None  # None -> consolidado
+    desde: date
+    hasta: date
+
+class ContabilidadMetricas(BaseModel):
+    desde: date
+    hasta: date
+    empleado_id: Optional[str] = None
+    total_cobrado: float
+    total_prestamos: float
+    total_gastos: float
+    total_bases: float
+    total_salidas: float
+    caja: float  # saldo_caja desde control_caja en la fecha 'hasta'
+    total_intereses: float = 0.0
+    ganancia: float = 0.0
+    cartera_en_calle: float = 0.0
+    abonos_count: int = 0
+    dias_en_rango: int = 0
+
+class CajaValor(BaseModel):
+    fecha: date
+    valor: float
+
+class CajaSalidaBase(BaseModel):
+    fecha: date
+    valor: float
+    concepto: Optional[str] = None
+    empleado_identificacion: Optional[str] = None
+
+class CajaSalidaCreate(CajaSalidaBase):
+    pass
+
+class CajaSalida(CajaSalidaBase):
+    id: int
+
+    class Config:
+        orm_mode = True
+
+class VerificacionEsquemaCaja(BaseModel):
+    ok: bool
+    tabla_caja: bool
+    tabla_salidas: bool
+    columnas_caja: List[str] = []
+    columnas_salidas: List[str] = []

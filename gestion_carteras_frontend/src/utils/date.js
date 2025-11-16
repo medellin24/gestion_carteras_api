@@ -60,10 +60,22 @@ export function isYYYYMMDD(str) {
 export function parseISODateToLocal(dateStr) {
   if (!dateStr) return null
   try {
+    // 1) YYYY-MM-DD => interpretar como fecha local (00:00 local)
     if (isYYYYMMDD(dateStr)) {
       const [y, m, d] = dateStr.split('-').map(Number)
       return new Date(y, m - 1, d)
     }
+    // 2) ISO con zona explícita (Z o +/-hh:mm) => usar parser nativo
+    if (/[zZ]|[+\-]\d{2}:\d{2}$/.test(dateStr)) {
+      const d = new Date(dateStr)
+      return isNaN(d.getTime()) ? null : d
+    }
+    // 3) ISO con 'T' y SIN zona => tratar como UTC naive (append 'Z')
+    if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d{1,6})?)?$/.test(dateStr)) {
+      const d = new Date(dateStr + 'Z')
+      return isNaN(d.getTime()) ? null : d
+    }
+    // 4) Fallback
     const d = new Date(dateStr)
     return isNaN(d.getTime()) ? null : d
   } catch { return null }
