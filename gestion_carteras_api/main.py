@@ -5,6 +5,7 @@ from typing import List, Optional
 import logging
 from decimal import Decimal
 from datetime import date
+from zoneinfo import ZoneInfo
 from time import perf_counter as _pc
 
 """Importaciones del paquete interno (usar rutas relativas del paquete)."""
@@ -19,17 +20,38 @@ from .database.bases_db import insertar_base, obtener_base, actualizar_base, eli
 # CORRECCIÓN: Se importa la función correcta 'obtener_tipos_gastos' (plural)
 from .database.gastos_db import agregar_gasto, obtener_gasto_por_id, actualizar_gasto, eliminar_gasto, obtener_resumen_gastos_por_tipo, obtener_tipos_gastos, obtener_todos_los_gastos
 from .database.liquidacion_db import obtener_datos_liquidacion, obtener_resumen_financiero_fecha
+from .database.caja_db import (
+    verificar_esquema_caja,
+    upsert_caja,
+    get_caja_en_fecha,
+    registrar_salida,
+    obtener_salidas,
+    obtener_metricas_contabilidad,
+    recalcular_caja_dia,
+)
 
 from .schemas import (
     Cliente, ClienteCreate, ClienteUpdate, Empleado, EmpleadoCreate, EmpleadoUpdate,
     Tarjeta, TarjetaCreate, TarjetaUpdate, Abono, AbonoCreate, AbonoUpdate, Base,
     BaseCreate, BaseUpdate, TipoGasto, Gasto, GastoCreate, GastoUpdate,
     ResumenGasto, LiquidacionDiaria, ResumenFinanciero,
-    SyncRequest, SyncResponse
+    SyncRequest, SyncResponse,
+    ContabilidadQuery, ContabilidadMetricas, CajaValor, CajaSalida, CajaSalidaCreate, VerificacionEsquemaCaja
 )
 
 # Configuración del logging
 logging.basicConfig(level=logging.INFO)
+# Elevar niveles a DEBUG para ver trazas de diagnóstico durante desarrollo
+logging.getLogger().setLevel(logging.DEBUG)
+for _name in (
+    "gestion_carteras_api",
+    "gestion_carteras_api.database",
+    "gestion_carteras_api.database.caja_db",
+):
+    _lg = logging.getLogger(_name)
+    _lg.setLevel(logging.DEBUG)
+    _lg.propagate = True
+
 logger = logging.getLogger(__name__)
 
 # --- Creación de la app FastAPI ---
@@ -82,12 +104,35 @@ def _enforce_empleado_scope(principal: dict, empleado_id: str):
         return
     raise HTTPException(status_code=403, detail="Acceso denegado para este empleado")
 
+def _day_bounds_utc_str(fecha_str: str, tz_name: str):
+    """Devuelve (inicio_utc, fin_utc) como strings ISO para filtrar un día local en UTC."""
+    try:
+        from datetime import datetime as _dt, timezone as _tz
+        tz = ZoneInfo(tz_name or 'UTC')
+        d = _dt.strptime(fecha_str, '%Y-%m-%d').date()
+        start_local = _dt(d.year, d.month, d.day, 0, 0, 0, tzinfo=tz)
+        end_local = _dt(d.year, d.month, d.day, 23, 59, 59, 999000, tzinfo=tz)
+        start_utc = start_local.astimezone(_tz.utc)
+        end_utc = end_local.astimezone(_tz.utc)
+        # debug removido
+        return (start_utc, end_utc)
+    except Exception:
+        # Fallback seguro a día UTC si falla el parseo
+        from datetime import datetime as _dt, timezone as _tz
+        d = _dt.strptime(fecha_str, '%Y-%m-%d').date()
+        start_utc = _dt(d.year, d.month, d.day, 0, 0, 0, tzinfo=_tz.utc)
+        end_utc = _dt(d.year, d.month, d.day, 23, 59, 59, 999000, tzinfo=_tz.utc)
+        return (start_utc, end_utc)
+
 # --- Evento de Arranque (Startup) ---
 @app.on_event("startup")
 def startup_event():
     logger.info("Iniciando la aplicación y el pool de conexiones a la base de datos...")
     try:
-        DatabasePool.initialize(**DB_CONFIG)
+        # Permitir configurar tamaño del pool por entorno
+        _minconn = int(os.getenv("POOL_MINCONN", "1"))
+        _maxconn = int(os.getenv("POOL_MAXCONN", "10"))
+        DatabasePool.initialize(minconn=_minconn, maxconn=_maxconn, **DB_CONFIG)
         logger.info("Pool de conexiones a la base de datos inicializado con éxito.")
     except Exception as e:
         logger.critical(f"Error crítico al inicializar el pool de conexiones: {e}", exc_info=True)
@@ -106,6 +151,137 @@ def shutdown_event():
 @app.get("/")
 def read_root():
     return {"message": "¡Bienvenido a la API de Gestión de Carteras!"}
+
+# --- Endpoints de Contabilidad / Caja ---
+
+@app.get("/contabilidad/esquema", response_model=VerificacionEsquemaCaja)
+def contabilidad_verificar_esquema_endpoint(principal: dict = Depends(require_admin)):
+    try:
+        info = verificar_esquema_caja()
+        return info
+    except Exception as e:
+        logger.error(f"Error al verificar esquema de caja: {e}")
+        raise HTTPException(status_code=500, detail="Error interno al verificar esquema de caja")
+
+
+@app.post("/contabilidad/metricas", response_model=ContabilidadMetricas)
+def contabilidad_metricas_endpoint(query: ContabilidadQuery, principal: dict = Depends(get_current_principal)):
+    try:
+        tz_name = principal.get("timezone")
+        datos = obtener_metricas_contabilidad(
+            desde=query.desde,
+            hasta=query.hasta,
+            empleado_id=query.empleado_id,
+            timezone_name=tz_name,
+        )
+        # días en rango
+        try:
+            dias = (query.hasta - query.desde).days + 1
+            if dias < 0:
+                dias = 0
+        except Exception:
+            dias = 0
+        return {
+            'desde': query.desde,
+            'hasta': query.hasta,
+            'empleado_id': query.empleado_id,
+            'total_cobrado': float(datos.get('total_cobrado', 0)),
+            'total_prestamos': float(datos.get('total_prestamos', 0)),
+            'total_gastos': float(datos.get('total_gastos', 0)),
+            'total_bases': float(datos.get('total_bases', 0)),
+            'total_salidas': float(datos.get('total_salidas', 0)),
+            'caja': float(datos.get('caja', 0)),
+            'total_intereses': float(datos.get('total_intereses', 0)),
+            'ganancia': float(datos.get('total_intereses', 0)) - float(datos.get('total_gastos', 0)),
+            'cartera_en_calle': float(datos.get('cartera_en_calle', 0)),
+            'abonos_count': int(datos.get('abonos_count', 0)),
+            'dias_en_rango': int(dias),
+        }
+    except Exception as e:
+        logger.error(f"Error al calcular métricas de contabilidad: {e}")
+        raise HTTPException(status_code=500, detail="Error interno al calcular métricas")
+
+
+@app.get("/caja/{empleado_id}/{fecha}", response_model=CajaValor)
+def caja_valor_endpoint(empleado_id: str, fecha: str, principal: dict = Depends(get_current_principal)):
+    try:
+        from datetime import datetime as _dt
+        fecha_obj = _dt.strptime(fecha, '%Y-%m-%d').date()
+        val = get_caja_en_fecha(empleado_id, fecha_obj)
+        return { 'fecha': fecha_obj, 'valor': float(val) }
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Formato de fecha inválido. Use YYYY-MM-DD.")
+    except Exception as e:
+        logger.error(f"Error al obtener valor de caja: {e}")
+        raise HTTPException(status_code=500, detail="Error interno al obtener caja")
+
+
+@app.post("/caja/salidas", response_model=CajaSalida, status_code=201)
+def caja_registrar_salida_endpoint(payload: CajaSalidaCreate, principal: dict = Depends(get_current_principal)):
+    try:
+        from decimal import Decimal as _Dec
+        sid = registrar_salida(
+            fecha=payload.fecha,
+            valor=_Dec(str(payload.valor)),
+            concepto=payload.concepto,
+            empleado_identificacion=payload.empleado_identificacion,
+        )
+        if sid is None:
+            raise HTTPException(status_code=400, detail="No se pudo registrar la salida de caja")
+        # Recalcular caja del día si hay empleado
+        try:
+            if payload.empleado_identificacion:
+                _ = recalcular_caja_dia(payload.empleado_identificacion, payload.fecha, principal.get("timezone"))
+        except Exception:
+            pass
+        return { 'id': sid, **payload.dict() }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error al registrar salida de caja: {e}")
+        raise HTTPException(status_code=500, detail="Error interno al registrar salida de caja")
+@app.post("/caja/recalcular-dia", response_model=CajaValor)
+def caja_recalcular_dia_endpoint(body: dict, principal: dict = Depends(get_current_principal)):
+    try:
+        emp = str(body.get('empleado_identificacion'))
+        from datetime import datetime as _dt
+        fecha = body.get('fecha')
+        if isinstance(fecha, str):
+            fecha = _dt.strptime(fecha, '%Y-%m-%d').date()
+        if not emp or not fecha:
+            raise HTTPException(status_code=400, detail='empleado_identificacion y fecha son requeridos')
+        val = recalcular_caja_dia(emp, fecha, principal.get("timezone"))
+        return { 'fecha': fecha, 'valor': float(val) }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error al recalcular caja del día: {e}")
+        raise HTTPException(status_code=500, detail='Error interno al recalcular caja')
+
+
+@app.get("/caja/salidas")
+def caja_listar_salidas_endpoint(desde: str, hasta: str, empleado_id: Optional[str] = None, principal: dict = Depends(get_current_principal)):
+    try:
+        from datetime import datetime as _dt
+        d1 = _dt.strptime(desde, '%Y-%m-%d').date()
+        d2 = _dt.strptime(hasta, '%Y-%m-%d').date()
+        rows = obtener_salidas(d1, d2, empleado_id)
+        salidas = []
+        for r in rows:
+            salidas.append({
+                'id': r[0],
+                'fecha': r[1],
+                'valor': float(r[2] or 0),
+                'concepto': r[3],
+                'empleado_identificacion': r[4],
+                'fecha_creacion': r[5],
+            })
+        return salidas
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Parámetros de fecha inválidos. Use YYYY-MM-DD")
+    except Exception as e:
+        logger.error(f"Error al listar salidas de caja: {e}")
+        raise HTTPException(status_code=500, detail="Error interno al listar salidas de caja")
 
 # --- Endpoint para Tipos de Gastos ---
 
@@ -202,6 +378,9 @@ def get_empleado_permissions_endpoint(identificacion: str, principal: dict = Dep
     _enforce_empleado_scope(principal, identificacion)
     try:
         logger.info(f"GET permisos empleado: {identificacion}")
+        tz_name = principal.get("timezone") or "UTC"
+        from datetime import datetime as _dt
+        today_local = _dt.now(ZoneInfo(tz_name)).date()
         with DatabasePool.get_cursor() as cur:
             cur.execute(
                 """
@@ -214,10 +393,18 @@ def get_empleado_permissions_endpoint(identificacion: str, principal: dict = Dep
             row = cur.fetchone()
             if not row:
                 raise HTTPException(status_code=404, detail="Empleado no encontrado")
+            descargar = bool(row[0])
+            subir = bool(row[1])
+            fecha_accion = row[2]
+            # Derivados por zona: se puede subir si tiene flag subir y no ha subido hoy local
+            puede_subir = bool(subir and (not fecha_accion or fecha_accion < today_local))
+            puede_descargar = bool(descargar)
             return {
-                "descargar": bool(row[0]),
-                "subir": bool(row[1]),
-                "fecha_accion": row[2].isoformat() if row[2] else None,
+                "descargar": descargar,
+                "subir": subir,
+                "fecha_accion": fecha_accion.isoformat() if fecha_accion else None,
+                "puede_subir": puede_subir,
+                "puede_descargar": puede_descargar,
             }
     except HTTPException:
         raise
@@ -231,6 +418,9 @@ def set_empleado_permissions_endpoint(identificacion: str, body: EmpleadoPermsUp
     _enforce_empleado_scope(principal, identificacion)
     try:
         logger.info(f"POST permisos empleado: {identificacion} body={body.dict()}")
+        tz_name = principal.get("timezone") or "UTC"
+        from datetime import datetime as _dt
+        today_local = _dt.now(ZoneInfo(tz_name)).date()
         sets = []
         params = []
         if body.descargar is not None:
@@ -260,10 +450,13 @@ def set_empleado_permissions_endpoint(identificacion: str, body: EmpleadoPermsUp
             )
             row = cur.fetchone()
             logger.info(f"Permisos actualizados {identificacion}: descargar={row[0]}, subir={row[1]}, fecha_accion={row[2]}")
+            descargar = bool(row[0]); subir = bool(row[1]); fecha_accion = row[2]
             return {
-                "descargar": bool(row[0]),
-                "subir": bool(row[1]),
-                "fecha_accion": row[2].isoformat() if row[2] else None,
+                "descargar": descargar,
+                "subir": subir,
+                "fecha_accion": fecha_accion.isoformat() if fecha_accion else None,
+                "puede_subir": bool(subir and (not fecha_accion or fecha_accion < today_local)),
+                "puede_descargar": bool(descargar),
             }
     except HTTPException:
         raise
@@ -598,6 +791,18 @@ def read_base_by_empleado_fecha_endpoint(empleado_id: str, fecha: str, principal
     Obtiene la base de un empleado en una fecha específica.
     """
     try:
+        tz_name = principal.get('timezone') or 'UTC'
+        start_utc, end_utc = _day_bounds_utc_str(fecha, tz_name)
+        start_naive = start_utc.replace(tzinfo=None)
+        end_naive = end_utc.replace(tzinfo=None)
+        start_naive = start_utc.replace(tzinfo=None)
+        end_naive = end_utc.replace(tzinfo=None)
+        start_naive = start_utc.replace(tzinfo=None)
+        end_naive = end_utc.replace(tzinfo=None)
+        # Usar límites UTC sin tz (naive) para columnas timestamp sin zona
+        start_naive = start_utc.replace(tzinfo=None)
+        end_naive = end_utc.replace(tzinfo=None)
+        # La tabla bases guarda fecha (date) y/o fecha_creacion (timestamp). Usar la función actual por date exacta.
         from datetime import datetime as _dt
         fecha_obj = _dt.strptime(fecha, '%Y-%m-%d').date()
         base = obtener_base(empleado_id, fecha_obj)
@@ -789,11 +994,23 @@ def read_gastos_by_empleado_fecha_endpoint(empleado_id: str, fecha: str, princip
     Obtiene todos los gastos de un empleado en una fecha específica.
     """
     try:
-        from datetime import datetime
-        fecha_obj = datetime.strptime(fecha, '%Y-%m-%d').date()
-        
-        from .database.gastos_db import obtener_gastos_por_fecha_empleado
-        gastos_tuplas = obtener_gastos_por_fecha_empleado(fecha_obj, empleado_id)
+        tz_name = principal.get('timezone') or 'UTC'
+        start_utc, end_utc = _day_bounds_utc_str(fecha, tz_name)
+        start_naive = start_utc.replace(tzinfo=None)
+        end_naive = end_utc.replace(tzinfo=None)
+        from .database.connection_pool import DatabasePool as _DB
+        gastos_tuplas = []
+        with _DB.get_cursor() as cur:
+            cur.execute(
+                '''
+                SELECT id, tipo, valor, observacion, fecha_creacion
+                FROM gastos
+                WHERE empleado_identificacion = %s
+                  AND fecha_creacion >= %s AND fecha_creacion <= %s
+                ORDER BY fecha_creacion DESC
+                ''', (empleado_id, start_naive, end_naive)
+            )
+            gastos_tuplas = cur.fetchall() or []
         
         # Convertir tuplas a diccionarios para FastAPI
         gastos = []
@@ -806,7 +1023,7 @@ def read_gastos_by_empleado_fecha_endpoint(empleado_id: str, fecha: str, princip
                 'observacion': row[3],
                 'fecha_creacion': row[4],
                 'empleado_identificacion': empleado_id,
-                'fecha': fecha_obj
+                'fecha': fecha
             }
             gastos.append(gasto)
         return gastos
@@ -825,8 +1042,12 @@ def read_tarjetas_canceladas_del_dia_endpoint(empleado_id: str, fecha: str, prin
     Lista las tarjetas canceladas en la fecha indicada para un empleado.
     """
     try:
+        tz_name = principal.get('timezone') or 'UTC'
+        # Para columnas DATE como fecha_cancelacion, comparar por fecha local directamente
         from datetime import datetime as _dt
-        fecha_obj = _dt.strptime(fecha, '%Y-%m-%d').date()
+        from zoneinfo import ZoneInfo as _ZI
+        d_local = _dt.strptime(fecha, '%Y-%m-%d').date()
+        # debug removido
         tarjetas: List[dict] = []
         with DatabasePool.get_cursor() as cursor:
             cursor.execute(
@@ -849,9 +1070,9 @@ def read_tarjetas_canceladas_del_dia_endpoint(empleado_id: str, fecha: str, prin
                 JOIN clientes c ON c.identificacion = t.cliente_identificacion
                 WHERE t.empleado_identificacion = %s
                   AND t.estado = 'cancelada'
-                  AND DATE(t.fecha_cancelacion) = %s
+                  AND t.fecha_cancelacion = %s
                 ORDER BY t.numero_ruta
-                ''', (empleado_id, fecha_obj)
+                ''', (empleado_id, d_local)
             )
             for row in cursor.fetchall() or []:
                 tarjeta = {
@@ -872,6 +1093,7 @@ def read_tarjetas_canceladas_del_dia_endpoint(empleado_id: str, fecha: str, prin
                     'observaciones': row[11],
                     'fecha_cancelacion': row[12]
                 }
+                # debug removido
                 tarjetas.append(tarjeta)
         return tarjetas
     except ValueError:
@@ -887,10 +1109,14 @@ def read_tarjetas_nuevas_del_dia_endpoint(empleado_id: str, fecha: str, principa
     Lista las tarjetas creadas en la fecha indicada para un empleado.
     """
     try:
-        from datetime import datetime as _dt
-        fecha_obj = _dt.strptime(fecha, '%Y-%m-%d').date()
+        tz_name = principal.get('timezone') or 'UTC'
+        # Para tarjetas nuevas usamos fecha_creacion (timestamp) → BETWEEN por día local convertido a UTC
+        start_utc, end_utc = _day_bounds_utc_str(fecha, tz_name)
+        start_naive = start_utc.replace(tzinfo=None)
+        end_naive = end_utc.replace(tzinfo=None)
         tarjetas: List[dict] = []
         with DatabasePool.get_cursor() as cursor:
+            # Con la migración, fecha_creacion es TIMESTAMP (UTC) → usar siempre límites UTC naive
             cursor.execute(
                 '''
                 SELECT 
@@ -899,6 +1125,8 @@ def read_tarjetas_nuevas_del_dia_endpoint(empleado_id: str, fecha: str, principa
                     t.interes,
                     c.nombre AS cliente_nombre,
                     c.apellido AS cliente_apellido,
+                    c.telefono AS cliente_telefono,
+                    c.direccion AS cliente_direccion,
                     t.cuotas,
                     t.numero_ruta,
                     t.estado,
@@ -910,11 +1138,12 @@ def read_tarjetas_nuevas_del_dia_endpoint(empleado_id: str, fecha: str, principa
                 FROM tarjetas t
                 JOIN clientes c ON c.identificacion = t.cliente_identificacion
                 WHERE t.empleado_identificacion = %s
-                  AND DATE(t.fecha_creacion) = %s
+                  AND t.fecha_creacion >= %s AND t.fecha_creacion <= %s
                 ORDER BY t.numero_ruta
-                ''', (empleado_id, fecha_obj)
+                ''', (empleado_id, start_naive, end_naive)
             )
-            for row in cursor.fetchall() or []:
+            rows = cursor.fetchall() or []
+            for row in rows:
                 tarjeta = {
                     'codigo': row[0],
                     'monto': row[1],
@@ -922,17 +1151,32 @@ def read_tarjetas_nuevas_del_dia_endpoint(empleado_id: str, fecha: str, principa
                     'cliente': {
                         'nombre': row[3],
                         'apellido': row[4],
-                        'identificacion': row[9]
+                        'telefono': row[5],
+                        'direccion': row[6],
+                        'identificacion': row[11]
                     },
-                    'cuotas': row[5],
-                    'numero_ruta': row[6],
-                    'estado': row[7],
-                    'fecha_creacion': row[8],
-                    'cliente_identificacion': row[9],
-                    'empleado_identificacion': row[10],
-                    'observaciones': row[11],
-                    'fecha_cancelacion': row[12]
+                    'cuotas': row[7],
+                    'numero_ruta': row[8],
+                    'estado': row[9],
+                    'fecha_creacion': row[10],
+                    'cliente_identificacion': row[11],
+                    'empleado_identificacion': row[12],
+                    'observaciones': row[13],
+                    'fecha_cancelacion': row[14]
                 }
+                # Añadir fecha local (día) para UI consistente
+                try:
+                    from datetime import timezone as _tz
+                    from zoneinfo import ZoneInfo as _ZI
+                    import datetime as _dtmod
+                    dt = row[10]
+                    if dt is not None:
+                        if getattr(dt, 'tzinfo', None) is None:
+                            dt = dt.replace(tzinfo=_tz.utc)
+                        local_dt = dt.astimezone(_ZI(tz_name))
+                        tarjeta['fecha'] = local_dt.date().isoformat()
+                except Exception:
+                    pass
                 tarjetas.append(tarjeta)
         return tarjetas
     except ValueError:
@@ -948,21 +1192,24 @@ def read_abonos_del_dia_endpoint(empleado_id: str, fecha: str, principal: dict =
     Lista los abonos del día para un empleado (join abonos + tarjetas).
     """
     try:
-        from datetime import datetime as _dt
-        fecha_obj = _dt.strptime(fecha, '%Y-%m-%d').date()
+        tz_name = principal.get('timezone') or 'UTC'
+        start_utc, end_utc = _day_bounds_utc_str(fecha, tz_name)
+        start_naive = start_utc.replace(tzinfo=None)
+        end_naive = end_utc.replace(tzinfo=None)
         abonos: List[dict] = []
         with DatabasePool.get_cursor() as cursor:
             cursor.execute(
                 '''
-                SELECT a.id, a.fecha, a.monto, a.indice_orden, a.tarjeta_codigo,
+                SELECT a.id, a.fecha, a.monto, a.indice_orden, a.tarjeta_codigo, a.metodo_pago,
+                       t.monto AS tarjeta_monto,
                        c.nombre, c.apellido
                 FROM abonos a
                 JOIN tarjetas t ON a.tarjeta_codigo = t.codigo
                 JOIN clientes c ON t.cliente_identificacion = c.identificacion
                 WHERE t.empleado_identificacion = %s
-                  AND DATE(a.fecha) = %s
+                  AND a.fecha >= %s AND a.fecha <= %s
                 ORDER BY a.fecha, a.id
-                ''', (empleado_id, fecha_obj)
+                ''', (empleado_id, start_naive, end_naive)
             )
             for row in cursor.fetchall() or []:
                 abono = {
@@ -971,8 +1218,10 @@ def read_abonos_del_dia_endpoint(empleado_id: str, fecha: str, principal: dict =
                     'monto': row[2],
                     'indice_orden': row[3],
                     'tarjeta_codigo': row[4],
-                    'cliente_nombre': row[5],
-                    'cliente_apellido': row[6]
+                    'metodo_pago': row[5],
+                    'tarjeta_monto': row[6],
+                    'cliente_nombre': row[7],
+                    'cliente_apellido': row[8]
                 }
                 abonos.append(abono)
         return abonos
@@ -983,22 +1232,30 @@ def read_abonos_del_dia_endpoint(empleado_id: str, fecha: str, principal: dict =
         raise HTTPException(status_code=500, detail="Error interno al consultar abonos del día.")
 
 @app.get("/empleados/{empleado_id}/gastos/{fecha}/resumen", response_model=List[ResumenGasto])
-def read_resumen_gastos_by_empleado_fecha_endpoint(empleado_id: str, fecha: str):
+def read_resumen_gastos_by_empleado_fecha_endpoint(empleado_id: str, fecha: str, principal: dict = Depends(get_current_principal)):
     """
     Obtiene el resumen de gastos de un empleado en una fecha específica.
     """
     try:
-        from datetime import datetime
-        fecha_obj = datetime.strptime(fecha, '%Y-%m-%d').date()
-        
-        from .database.gastos_db import obtener_total_gastos_fecha_empleado, obtener_conteo_gastos_fecha_empleado
-        total = obtener_total_gastos_fecha_empleado(fecha_obj, empleado_id)
-        conteo = obtener_conteo_gastos_fecha_empleado(fecha_obj, empleado_id)
+        tz_name = principal.get('timezone') or 'UTC'
+        start_utc, end_utc = _day_bounds_utc_str(fecha, tz_name)
+        from .database.connection_pool import DatabasePool as _DB
+        with _DB.get_cursor() as cur:
+            cur.execute(
+                '''SELECT COALESCE(SUM(valor),0) FROM gastos WHERE empleado_identificacion=%s AND fecha_creacion >= %s AND fecha_creacion <= %s''',
+                (empleado_id, start_naive, end_naive)
+            )
+            total = cur.fetchone()[0] or 0
+            cur.execute(
+                '''SELECT COUNT(*) FROM gastos WHERE empleado_identificacion=%s AND fecha_creacion >= %s AND fecha_creacion <= %s''',
+                (empleado_id, start_naive, end_naive)
+            )
+            conteo = cur.fetchone()[0] or 0
         
         # Crear resumen
         resumen = [{
             'empleado_identificacion': empleado_id,
-            'fecha': fecha_obj,
+            'fecha': fecha,
             'total_gastos': total,
             'cantidad_gastos': conteo
         }]
@@ -1124,6 +1381,7 @@ def read_tarjetas_by_empleado_endpoint(empleado_id: str, estado: str = 'activas'
     Obtiene una lista de tarjetas de un empleado específico filtradas por estado.
     """
     try:
+        tz_name = principal.get('timezone') or 'UTC'
         # Usar la función existente obtener_tarjetas con empleado_identificacion y estado
         from .database.tarjetas_db import obtener_tarjetas
         tarjetas_tuplas = obtener_tarjetas(empleado_identificacion=empleado_id, estado=estado, offset=skip, limit=limit)
@@ -1134,6 +1392,8 @@ def read_tarjetas_by_empleado_endpoint(empleado_id: str, estado: str = 'activas'
             # Normalizar fecha_creacion
             try:
                 from datetime import datetime as _dt
+                from datetime import timezone as _tz
+                from zoneinfo import ZoneInfo as _ZI
                 fc = row[8]
                 if fc is None:
                     fc_norm = _dt.utcnow()
@@ -1141,9 +1401,23 @@ def read_tarjetas_by_empleado_endpoint(empleado_id: str, estado: str = 'activas'
                     fc_norm = _dt(fc.year, fc.month, fc.day, 0, 0, 0)
                 else:
                     fc_norm = fc
+                # Derivar fecha_local consistente: si el valor original era DATE (sin hora), tomarlo tal cual;
+                # si era TIMESTAMP, convertir a tz local y extraer el día
+                try:
+                    if hasattr(fc, 'year') and not hasattr(fc, 'hour'):
+                        fecha_local_str = fc.isoformat()
+                    else:
+                        _base = fc_norm
+                        if getattr(_base, 'tzinfo', None) is None:
+                            _base = _base.replace(tzinfo=_tz.utc)
+                        _loc = _base.astimezone(_ZI(tz_name))
+                        fecha_local_str = _loc.date().isoformat()
+                except Exception:
+                    fecha_local_str = None
             except Exception:
                 from datetime import datetime as _dt
                 fc_norm = _dt.utcnow()
+                fecha_local_str = None
 
             tarjeta = {
                 'codigo': row[0],
@@ -1158,6 +1432,7 @@ def read_tarjetas_by_empleado_endpoint(empleado_id: str, estado: str = 'activas'
                 'numero_ruta': row[6],
                 'estado': row[7],
                 'fecha_creacion': fc_norm,
+                'fecha': fecha_local_str,
                 'cliente_identificacion': row[9],
                 'empleado_identificacion': row[10],
                 'observaciones': row[11],
@@ -1248,6 +1523,7 @@ def create_tarjeta_endpoint(tarjeta: TarjetaCreate, principal: dict = Depends(ge
             _ = cli  # no-op
         except Exception:
             pass
+        tz_name = principal.get("timezone") or "UTC"
         codigo = crear_tarjeta(
             cliente_identificacion=tarjeta.cliente_identificacion,
             empleado_identificacion=tarjeta.empleado_identificacion,
@@ -1272,6 +1548,19 @@ def create_tarjeta_endpoint(tarjeta: TarjetaCreate, principal: dict = Depends(ge
             "nombre": db_tarjeta.get("cliente_nombre", ""),
             "apellido": db_tarjeta.get("cliente_apellido", "")
         }
+        # Recalcular caja del día de la tarjeta nueva
+        try:
+            from datetime import datetime as _dt
+            fecha_dt = tarjeta.fecha_creacion
+            if fecha_dt and isinstance(fecha_dt, str):
+                try:
+                    fecha_dt = _dt.fromisoformat(fecha_dt.replace('Z', '+00:00'))
+                except Exception:
+                    fecha_dt = None
+            fecha_dia = fecha_dt.date() if fecha_dt else date.today()
+            _ = recalcular_caja_dia(tarjeta.empleado_identificacion, fecha_dia, tz_name)
+        except Exception:
+            pass
         return db_tarjeta
     except HTTPException:
         raise
@@ -1505,7 +1794,8 @@ def read_liquidacion_diaria_endpoint(empleado_id: str, fecha: str, principal: di
     try:
         from datetime import datetime as _dt
         fecha_obj = _dt.strptime(fecha, '%Y-%m-%d').date()
-        datos = obtener_datos_liquidacion(empleado_id, fecha_obj)
+        tz_name = principal.get('timezone') or 'UTC'
+        datos = obtener_datos_liquidacion(empleado_id, fecha_obj, tz_name)
         # Adaptar tipos a float/int donde aplique
         adaptado = {
             'empleado': datos.get('empleado', empleado_id),
@@ -1623,6 +1913,14 @@ def sync_endpoint(payload: SyncRequest, principal: dict = Depends(get_current_pr
     """
     try:
         t0 = _pc()
+        from datetime import datetime as _dt
+        from zoneinfo import ZoneInfo as _ZI, ZoneInfoNotFoundError as _ZINF
+        tz_name = principal.get('timezone') or 'UTC'
+        try:
+            today_local = _dt.now(_ZI(tz_name)).date()
+        except _ZINF:
+            tz_name = 'UTC'
+            today_local = _dt.now(_ZI('UTC')).date()
         
         # Verificar permisos ANTES de procesar cualquier dato
         # La sincronización debe ser por UN SOLO empleado seleccionado
@@ -1723,8 +2021,7 @@ def sync_endpoint(payload: SyncRequest, principal: dict = Depends(get_current_pr
                         raise HTTPException(status_code=404, detail=f"Empleado {emp_id} no encontrado")
                     
                     descargar, subir, fecha_accion = row
-                    today = date.today()
-                    
+                    # Comparar contra el día LOCAL del usuario para evitar desfaces por huso
                     # Verificar permiso de subida
                     if not subir:
                         raise HTTPException(
@@ -1733,7 +2030,7 @@ def sync_endpoint(payload: SyncRequest, principal: dict = Depends(get_current_pr
                         )
                     
                     # Verificar fecha de última acción
-                    if fecha_accion and fecha_accion >= today:
+                    if fecha_accion and fecha_accion >= today_local:
                         raise HTTPException(
                             status_code=403, 
                             detail=f"Empleado {emp_id} ya realizó una subida hoy. Próxima subida disponible mañana"
@@ -1902,11 +2199,12 @@ def sync_endpoint(payload: SyncRequest, principal: dict = Depends(get_current_pr
                         cur.execute(
                             f"""
                             UPDATE tarjetas
-                            SET estado='cancelada'
+                            SET estado='cancelada',
+                                fecha_cancelacion=%s
                             WHERE codigo IN ({placeholders2})
                               AND (estado='activas' OR estado='activa')
                             """,
-                            to_cancel,
+                            [today_local, *to_cancel],
                         )
         except Exception:
             # No bloquear la sincronización si algo falla aquí
@@ -1978,14 +2276,13 @@ def sync_endpoint(payload: SyncRequest, principal: dict = Depends(get_current_pr
         try:
             if empleado_ids:
                 emp_id = next(iter(empleado_ids))  # El único empleado
-                hoy_local = date.today()
                 with DatabasePool.get_cursor() as cur2:
                     cur2.execute(
                         "UPDATE empleados SET fecha_accion=%s, subir=FALSE, descargar=TRUE WHERE identificacion=%s RETURNING identificacion",
-                        (hoy_local, emp_id),
+                        (today_local, emp_id),
                     )
                     if cur2.fetchone() is not None:
-                        logger.info(f"Permisos sincronización actualizados para empleado {emp_id}: subir=FALSE, descargar=TRUE, fecha_accion={hoy_local}")
+                        logger.info(f"Permisos sincronización actualizados para empleado {emp_id}: subir=FALSE, descargar=TRUE, fecha_accion={today_local}")
                     else:
                         logger.warning(f"No se pudo actualizar permisos para empleado {emp_id} - no encontrado")
                         

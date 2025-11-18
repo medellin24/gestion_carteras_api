@@ -6,13 +6,26 @@ from frames.frame_entrega import FrameEntrega
 from frames.frame_liquidacion import FrameLiquidacion
 from frames.frame_empleado import FrameEmpleado
 from frames.frame_finanzas import FrameFinanzas
+from frames.frame_contabilidad import FrameContabilidad
 from api_client.client import api_client, APIError
 
 class VentanaPrincipal:
-    def __init__(self, root):
+    def __init__(self, root, user_email=None):
         self.root = root
-        self.root.title("SIRC [nombre propietario] tiempo:[0] 37x.gg")
-        self.root.geometry("1200x700")  # Ajusta según necesites
+        self.user_email = user_email
+        # Formatear título con email del usuario
+        if user_email:
+            self.root.title(f"CARTERAS [{user_email}] informes : 3112027405")
+        else:
+            self.root.title("CARTERAS [usuario@ejemplo.com] informes : 3112027405")
+        sw = self.root.winfo_screenwidth()
+        x_offset = max((sw - 1200) // 2, 0)
+        self.root.geometry(f"1200x700+{x_offset}+20")  # Ajusta según necesites y sitúa arriba
+        # Fondo general gris claro para mayor contraste
+        try:
+            self.root.configure(bg="#ECEFF3")
+        except Exception:
+            pass
         
         # ✅ OPTIMIZACIÓN: Cache de frames para reutilización
         self.frames_cache = {}
@@ -25,58 +38,100 @@ class VentanaPrincipal:
         self.crear_botones_principales()
         self.crear_barra_estado()  # ✅ Crear ANTES del contenedor
         self.crear_contenedor_frames()
-        
+
     def crear_menu(self):
         """Crear barra de menú superior"""
         self.menu_bar = tk.Menu(self.root)
         self.root.config(menu=self.menu_bar)
-        
-        # Menú Archivo
-        archivo_menu = tk.Menu(self.menu_bar, tearoff=0)
-        self.menu_bar.add_cascade(label="Archivo", menu=archivo_menu)
-        archivo_menu.add_command(label="Salir", command=self.root.quit)
-        
-        # Otros menús
-        self.menu_bar.add_cascade(label="Perfil")
-        self.menu_bar.add_cascade(label="Vista")
-        self.menu_bar.add_cascade(label="Herramientas")
-        self.menu_bar.add_cascade(label="Ayuda")
-        
+
+        # Botón volver a login
+        self.menu_bar.add_command(label="Volver", command=self.volver_login)
+
+        # Menú herramientas (se mantiene por si se agregan funciones más adelante)
+        herramientas_menu = tk.Menu(self.menu_bar, tearoff=0)
+        self.menu_bar.add_cascade(label="Herramientas", menu=herramientas_menu)
+
+        # Ayuda
+        self.menu_bar.add_command(label="Ayuda", command=self.mostrar_ayuda)
+
         # Licencia (como label interactivo)
-        self.lic_label = tk.Menu(self.menu_bar, tearoff=0)
-        # Insertar comando placeholder y guardar su índice para poder actualizarlo luego
         self.menu_bar.add_command(label="Licencia: [cargando]", command=self.mostrar_detalle_licencia)
         self._licencia_menu_index = self.menu_bar.index('end')
+        self._aplicar_estilo_licencia()
         # Iniciar actualización y refresco periódico del estado de licencia
         self._iniciar_actualizacion_licencia()
+
+    def _aplicar_estilo_licencia(self):
+        """Aplica estilo personalizado al menú de licencia."""
+        try:
+            self.menu_bar.entryconfig(self._licencia_menu_index, background='#B2FF59', activebackground='#9CE64D')
+        except Exception:
+            pass
+
+    def mostrar_ayuda(self):
+        """Mostrar información de soporte."""
+        mensaje = (
+            "Para contactar soporte al cliente comuníquese al correo: "
+            "jorgeale17@hotmail.com o al número: +57 3112027405."
+        )
+        try:
+            messagebox.showinfo("Ayuda", mensaje)
+        except Exception:
+            pass
+
+    def volver_login(self):
+        """Cerrar la ventana principal y volver a la pantalla de login."""
+        try:
+            self.root.destroy()
+        except Exception:
+            pass
+        try:
+            from main import main as run_main
+            run_main()
+        except Exception as e:
+            print(f"Error al reiniciar aplicación: {e}")
+    
     
     def crear_botones_principales(self):
         """Crear botones principales"""
-        self.frame_botones = ttk.Frame(self.root)
-        self.frame_botones.pack(fill='x', padx=5, pady=5)
-        
-        # Estilo para los botones
+        self.frame_botones = ttk.Frame(self.root, style='Nav.TFrame')
+        self.frame_botones.pack(fill='x', padx=6, pady=2)
+
+        # Estilos y tema para una apariencia moderna
         style = ttk.Style()
-        style.configure('Principal.TButton', padding=10)
-        
-        # Crear botones
-        self.btn_entrega = ttk.Button(self.frame_botones, text="Entrega", 
-                                    style='Principal.TButton', command=self.mostrar_entrega)
-        self.btn_liquidacion = ttk.Button(self.frame_botones, text="Liquidación", 
-                                        style='Principal.TButton', command=self.mostrar_liquidacion)
-        self.btn_empleado = ttk.Button(self.frame_botones, text="Empleado", 
-                                     style='Principal.TButton', command=self.mostrar_empleado)
-        self.btn_finanzas = ttk.Button(self.frame_botones, text="Finanzas (En desarrollo)", 
-                                     style='Principal.TButton', command=self.mostrar_finanzas)
-        
-        # Desactivar el botón de Finanzas temporalmente
-        self.btn_finanzas.config(state=tk.DISABLED)
-        
-        # Ubicar botones
-        self.btn_entrega.pack(side='left', padx=5)
-        self.btn_liquidacion.pack(side='left', padx=5)
-        self.btn_empleado.pack(side='left', padx=5)
-        self.btn_finanzas.pack(side='left', padx=5)
+        try:
+            style.theme_use('clam')
+        except Exception:
+            pass
+        style.configure('Nav.TFrame', background='#F7FAFC')
+        style.configure('PrimaryNav.TButton', padding=4, font=('Segoe UI', 9, 'bold'))
+        # Hover al azul bondi como los botones de Ver
+        style.map('PrimaryNav.TButton', background=[('active', '#73D0E6')])
+
+        # Usar grid para que los botones ocupen el ancho de la ventana con espacio entre ellos
+        self.frame_botones.grid_columnconfigure(0, weight=1)
+        self.frame_botones.grid_columnconfigure(1, weight=1)
+        self.frame_botones.grid_columnconfigure(2, weight=1)
+        self.frame_botones.grid_columnconfigure(3, weight=1)
+        # Hacer el panel de navegación más angosto (más bajo)
+        for btn in (0, 1, 2, 3):
+            pass
+
+        # Crear botones: Tarjetas, Liquidación, Rutas, Contabilidad
+        self.btn_tarjetas = ttk.Button(self.frame_botones, text="Tarjetas", style='PrimaryNav.TButton', command=self.mostrar_entrega)
+        self.btn_liquidacion = ttk.Button(self.frame_botones, text="Liquidación", style='PrimaryNav.TButton', command=self.mostrar_liquidacion)
+        self.btn_rutas = ttk.Button(self.frame_botones, text="Rutas", style='PrimaryNav.TButton', command=self.mostrar_empleado)
+        self.btn_contabilidad = ttk.Button(self.frame_botones, text="Contabilidad", style='PrimaryNav.TButton', command=self.mostrar_contabilidad)
+
+        # Contabilidad ya está implementado - habilitado
+
+        # Distribución horizontal con algo de espacio entre cada uno
+        self.btn_tarjetas.grid(row=0, column=0, sticky='ew', padx=6)
+        self.btn_liquidacion.grid(row=0, column=1, sticky='ew', padx=6)
+        self.btn_rutas.grid(row=0, column=2, sticky='ew', padx=6)
+        self.btn_contabilidad.grid(row=0, column=3, sticky='ew', padx=6)
+
+        # (Separador removido por decisión de diseño)
     
     def crear_contenedor_frames(self):
         """Crear contenedor para los frames principales"""
@@ -133,6 +188,7 @@ class VentanaPrincipal:
         etiqueta = f"{estado}: [{dias} d]" if dias > 0 else f"{estado}"
         try:
             self.menu_bar.entryconfig(self._licencia_menu_index, label=etiqueta)
+            self._aplicar_estilo_licencia()
         except Exception:
             pass
 
@@ -341,4 +397,8 @@ class VentanaPrincipal:
     def mostrar_finanzas(self):
         """Muestra el frame de finanzas (optimizado)"""
         self._cambiar_frame("Finanzas", FrameFinanzas)
+
+    def mostrar_contabilidad(self):
+        """Muestra el frame de contabilidad"""
+        self._cambiar_frame("Contabilidad", FrameContabilidad)
 

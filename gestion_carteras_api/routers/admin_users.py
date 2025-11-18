@@ -4,7 +4,8 @@ from datetime import date, timedelta
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
-from ..security import require_admin, get_password_hash
+from ..security import require_admin, get_password_hash, get_current_principal
+from ..schemas import AttemptDownloadRequest, AttemptDownloadResponse
 from ..database.connection_pool import DatabasePool
 
 router = APIRouter()
@@ -12,8 +13,9 @@ router = APIRouter()
 
 def enforce_account_state(cuenta_id: str) -> bool:
     """
-    Valida el estado de la cuenta y desactiva todos los cobradores si está vencida.
+    Valida el estado de la cuenta.
     Retorna True si la cuenta está activa, False si está vencida.
+    Nota: No cambia estados de usuarios; la suscripción se hace cumplir a nivel de cuenta.
     """
     with DatabasePool.get_cursor() as cur:
         # Obtener información de la cuenta
@@ -41,15 +43,7 @@ def enforce_account_state(cuenta_id: str) -> bool:
             vencida = True
         elif trial_until and hoy > trial_until and not fecha_fin:
             vencida = True
-        
-        # Si está vencida, desactivar todos los cobradores
-        if vencida:
-            cur.execute("""
-                UPDATE usuarios 
-                SET is_active = FALSE 
-                WHERE role='cobrador' AND cuenta_id=%s AND is_active=TRUE
-            """, (cuenta_id,))
-        
+
         return not vencida
 
 
@@ -73,11 +67,14 @@ class RenewRequest(BaseModel):
     max_empleados: int
     dias: int
     es_renovacion: bool = True  # True para renovación, False para cambio de plan
+    max_daily_routes: Optional[int] = None  # Si no viene, se iguala a max_empleados
 
 
 @router.get("/limits", response_model=LimitsResponse)
-def get_limits(principal: dict = Depends(require_admin)):
+def get_limits(principal: dict = Depends(get_current_principal)):
     cuenta_id = principal.get("cuenta_id")
+    if not cuenta_id:
+        raise HTTPException(status_code=403, detail="Cuenta no asociada al usuario")
     
     # Validar estado de la cuenta (desactiva cobradores si está vencida)
     enforce_account_state(cuenta_id)
@@ -570,45 +567,33 @@ def activate_cobrador(empleado_id: str, principal: dict = Depends(require_admin)
 def renew_subscription(body: RenewRequest, principal: dict = Depends(require_admin)):
     """
     Renueva o cambia el plan de suscripción.
-    Si es renovación (es_renovacion=True), reactiva automáticamente los usuarios que estaban activos.
-    Si es cambio de plan (es_renovacion=False), no reactiva automáticamente.
+    No reactiva ni desactiva usuarios; el cumplimiento del plan se hace
+    a nivel de límites de creación/descarga.
     """
     cuenta_id = principal.get("cuenta_id")
     
     with DatabasePool.get_cursor() as cur:
-        # 1. Guardar qué usuarios estaban activos ANTES de la renovación
-        usuarios_para_reactivar = []
-        if body.es_renovacion:
-            cur.execute("""
-                SELECT empleado_identificacion 
-                FROM usuarios 
-                WHERE role='cobrador' AND cuenta_id=%s AND is_active=FALSE
-            """, (cuenta_id,))
-            usuarios_para_reactivar = [row[0] for row in cur.fetchall()]
-        
-        # 2. Actualizar plan
+        # Asegurar columna max_daily_routes
         cur.execute("""
+            ALTER TABLE cuentas_admin
+            ADD COLUMN IF NOT EXISTS max_daily_routes INTEGER
+        """)
+        # 1. Actualizar plan
+        cur.execute(
+            """
             UPDATE cuentas_admin 
-            SET max_empleados=%s, fecha_fin=CURRENT_DATE + INTERVAL '%s days'
-            WHERE id=%s
-        """, (body.max_empleados, body.dias, cuenta_id))
-        
-        # 3. Si es RENOVACIÓN: reactivar automáticamente hasta el límite
-        reactivados = 0
-        if body.es_renovacion and usuarios_para_reactivar:
-            limite = min(len(usuarios_para_reactivar), body.max_empleados)
-            for i in range(limite):
-                cur.execute("""
-                    UPDATE usuarios 
-                    SET is_active=TRUE 
-                    WHERE role='cobrador' AND cuenta_id=%s AND empleado_identificacion=%s
-                """, (cuenta_id, usuarios_para_reactivar[i]))
-            reactivados = limite
+               SET max_empleados=%s,
+                   max_daily_routes=COALESCE(%s, %s),
+                   fecha_fin=CURRENT_DATE + INTERVAL '%s days'
+             WHERE id=%s
+            """,
+            (body.max_empleados, body.max_daily_routes, body.max_empleados, body.dias, cuenta_id),
+        )
     
     return {
         "ok": True, 
-        "reactivados": reactivados,
-        "mensaje": f"Plan actualizado. Se reactivaron {reactivados} usuarios cobrador." if body.es_renovacion else "Plan actualizado. Active manualmente los usuarios que necesite."
+        "reactivados": 0,
+        "mensaje": "Plan actualizado. Los usuarios existentes podrán operar según el límite del plan."
     }
 
 
@@ -653,6 +638,93 @@ def activate_available_cobradores(principal: dict = Depends(require_admin)):
             "mensaje": f"Se activaron {len(activados)} usuarios cobrador"
         }
 
+
+@router.post("/downloads/attempt", response_model=AttemptDownloadResponse)
+def attempt_download(body: AttemptDownloadRequest, principal: dict = Depends(get_current_principal)):
+    """
+    Registra un intento de descarga para un empleado y valida límite por plan (sin histórico):
+    - Usa campos volátiles en cuentas_admin: daily_routes_date (DATE local) y daily_routes_empleados (JSONB-set)
+    - Acepta admin y cobrador; siempre suma a la cuenta (cuenta_id del token)
+    - Permite múltiples descargas del MISMO empleado en el día
+    - Bloquea si el empleado es nuevo en el día y ya se alcanzó el límite (max_daily_routes || max_empleados)
+    """
+    from datetime import datetime as _dt
+    from zoneinfo import ZoneInfo as _ZI, ZoneInfoNotFoundError as _ZINF
+    role = principal.get("role")
+    if role not in ("admin", "cobrador"):
+        raise HTTPException(status_code=403, detail="Rol no autorizado")
+    cuenta_id = principal.get("cuenta_id")
+    empleado_id = str(body.empleado_identificacion)
+    # Si es cobrador, solo puede registrar su propio empleado
+    if role == "cobrador":
+        if str(principal.get("empleado_identificacion")) != empleado_id:
+            raise HTTPException(status_code=403, detail="Cobrador no puede registrar otro empleado")
+    # Calcular día LOCAL según timezone del token
+    tz_name = principal.get('timezone') or 'UTC'
+    try:
+        hoy_local = _dt.now(_ZI(tz_name)).date()
+    except _ZINF:
+        hoy_local = _dt.now(_ZI('UTC')).date()
+    with DatabasePool.get_cursor() as cur:
+        # Asegurar columnas volátiles
+        cur.execute("""
+            ALTER TABLE cuentas_admin
+            ADD COLUMN IF NOT EXISTS daily_routes_date DATE,
+            ADD COLUMN IF NOT EXISTS daily_routes_empleados JSONB DEFAULT '{}'::jsonb,
+            ADD COLUMN IF NOT EXISTS max_daily_routes INTEGER
+        """)
+        # Validar pertenencia del empleado a la cuenta cuando el rol es admin (opcional pero recomendable)
+        if role == 'admin':
+            cur.execute("SELECT 1 FROM empleados WHERE identificacion=%s AND cuenta_id=%s", (empleado_id, cuenta_id))
+            if cur.fetchone() is None:
+                raise HTTPException(status_code=403, detail="Empleado no pertenece a la cuenta")
+        # Lock de la fila de cuenta para consistencia
+        cur.execute(
+            """
+            SELECT daily_routes_date, daily_routes_empleados, COALESCE(max_daily_routes, max_empleados, 1) AS lim
+            FROM cuentas_admin
+            WHERE id=%s
+            FOR UPDATE
+            """,
+            (cuenta_id,),
+        )
+        row = cur.fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Cuenta no encontrada")
+        d_date, d_json, limit_emp = row
+        if not isinstance(d_json, dict):
+            # psycopg2 convierte jsonb a dict; si no, normalizar
+            try:
+                import json as _json
+                d_json = _json.loads(d_json) if d_json else {}
+            except Exception:
+                d_json = {}
+        # Reset diario si cambió de día local
+        if d_date != hoy_local:
+            cur.execute(
+                "UPDATE cuentas_admin SET daily_routes_date=%s, daily_routes_empleados='{}'::jsonb WHERE id=%s",
+                (hoy_local, cuenta_id),
+            )
+            d_json = {}
+        # Si el empleado ya está registrado hoy, permitir redescarga
+        if empleado_id in d_json.keys():
+            used = len(d_json)
+            return AttemptDownloadResponse(allowed=True, used=used, limit=limit_emp, already_registered=True, message="Redescarga permitida")
+        # Límite
+        used = len(d_json)
+        if used >= int(limit_emp or 1):
+            return AttemptDownloadResponse(allowed=False, used=used, limit=int(limit_emp or 1), already_registered=False, message="Límite diario alcanzado para el plan")
+        # Registrar empleado en set JSONB
+        cur.execute(
+            """
+            UPDATE cuentas_admin
+               SET daily_routes_empleados = COALESCE(daily_routes_empleados, '{}'::jsonb) || jsonb_build_object(%s, true),
+                   daily_routes_date = %s
+             WHERE id=%s
+            """,
+            (empleado_id, hoy_local, cuenta_id),
+        )
+        return AttemptDownloadResponse(allowed=True, used=used+1, limit=int(limit_emp or 1), already_registered=False, message="Descarga registrada")
 
 @router.get("/users/cobradores/activos")
 def get_cobradores_activos(principal: dict = Depends(require_admin)):

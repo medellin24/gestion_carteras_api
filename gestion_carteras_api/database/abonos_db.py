@@ -63,13 +63,13 @@ def registrar_abono(tarjeta_codigo: str, monto: Decimal, metodo_pago: str = 'efe
             ''', (tarjeta_codigo,))
             indice_orden = cursor.fetchone()[0]
             
-            # Insertar el abono usando fecha/hora local
+            # Insertar el abono usando fecha/hora del servidor (UTC por sesión)
             query = '''
                 INSERT INTO abonos (tarjeta_codigo, fecha, monto, indice_orden, metodo_pago)
-                VALUES (%s, %s, %s, %s, %s)
+                VALUES (%s, NOW(), %s, %s, %s)
                 RETURNING id
             '''
-            cursor.execute(query, (tarjeta_codigo, datetime.now(), monto, indice_orden, metodo_pago))
+            cursor.execute(query, (tarjeta_codigo, monto, indice_orden, metodo_pago))
             return cursor.fetchone()[0]
             
     except Exception as e:

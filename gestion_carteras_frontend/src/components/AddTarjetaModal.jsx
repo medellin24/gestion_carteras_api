@@ -114,7 +114,7 @@ export default function AddTarjetaModal({ onClose, onCreated, posicionAnterior =
     return null
   }
 
-  async function createOnline(payload) {
+  async function createOnline(payload, clienteDataSnapshot = null) {
     const res = await apiClient.crearTarjeta(payload)
     // Usar la respuesta del backend (que ya incluye cliente y valores correctos)
     try {
@@ -138,6 +138,19 @@ export default function AddTarjetaModal({ onClose, onCreated, posicionAnterior =
         },
       }
       await offlineDB.setTarjetas([nueva, ...(tarjetas||[])])
+    } catch {}
+    try {
+      await recordShadowPrestamo({
+        payload,
+        cliente: clienteDataSnapshot || {
+          identificacion: payload.cliente_identificacion,
+          nombre: cliente?.nombre || clienteNombre || '',
+          apellido: cliente?.apellido || clienteApellido || '',
+          telefono: telefono || '',
+          direccion: direccion || '',
+        },
+        codigo: res?.codigo,
+      })
     } catch {}
     return res
   }
@@ -199,6 +212,27 @@ export default function AddTarjetaModal({ onClose, onCreated, posicionAnterior =
     }
   }
 
+  async function recordShadowPrestamo({ payload, cliente, codigo }) {
+    try {
+      await offlineDB.queueOperation({
+        type: 'tarjeta:shadow',
+        shadow_only: true,
+        empleado_identificacion: payload.empleado_identificacion,
+        tarjeta_codigo: codigo || null,
+        monto: payload.monto,
+        cuotas: payload.cuotas,
+        interes: payload.interes,
+        numero_ruta: payload.numero_ruta,
+        cliente: cliente ? { ...cliente } : null,
+        cliente_identificacion: cliente?.identificacion || payload.cliente_identificacion,
+        fecha: getLocalDateString(),
+        ts: Date.now(),
+      })
+    } catch (error) {
+      console.warn('recordShadowPrestamo: no se pudo registrar prestamo online en outbox', error)
+    }
+  }
+
   async function handleSubmitExisting() {
     setError('')
     const effectiveEmpleado = empleadoId || localStorage.getItem('empleado_identificacion')
@@ -232,7 +266,13 @@ export default function AddTarjetaModal({ onClose, onCreated, posicionAnterior =
             })
           }
         } catch {}
-        await createOnline(payload)
+        await createOnline(payload, {
+          identificacion: cliente?.identificacion || identificacion,
+          nombre: cliente?.nombre || '',
+          apellido: cliente?.apellido || '',
+          telefono,
+          direccion,
+        })
       } else {
         await queueOffline(payload, { identificacion: cliente.identificacion, nombre: cliente.nombre, apellido: cliente.apellido, telefono, direccion })
       }
@@ -309,7 +349,7 @@ export default function AddTarjetaModal({ onClose, onCreated, posicionAnterior =
             console.log('🔍 handleSubmitNew: Cliente existe, actualizando datos')
             await apiClient.updateCliente(identificacion, { nombre: clienteNombre, apellido: clienteApellido, telefono, direccion, observaciones: null })
           }
-          await createOnline(payload)
+          await createOnline(payload, clienteData)
         } catch (error) {
           console.log('🔍 handleSubmitNew: Error en modo online, cambiando a offline', error)
           await queueOffline(payload, clienteData)

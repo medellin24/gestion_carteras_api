@@ -1,6 +1,7 @@
 import tkinter as tk
 from tkinter import ttk, messagebox
-from datetime import datetime, timezone
+from datetime import datetime, timezone, date
+from zoneinfo import ZoneInfo
 from decimal import Decimal
 import logging
 from tkinter import Toplevel
@@ -16,6 +17,12 @@ class FrameEntrega(ttk.Frame):
         super().__init__(parent)
         # Usar cliente global con token de sesión
         self.api_client = api_client
+        # Zona horaria del usuario (desde token)
+        try:
+            tz1 = self.api_client.get_user_timezone()
+            self.token_tz = tz1 or 'UTC'
+        except Exception:
+            self.token_tz = 'UTC'
         self.empleados_dict = {}
         # Caché de abonos por código de tarjeta
         self._abonos_cache_por_tarjeta = {}
@@ -177,6 +184,11 @@ class FrameEntrega(ttk.Frame):
         try:
             for item in self.tree.get_children():
                 self.tree.delete(item)
+            # Indicar carga
+            try:
+                self.tree.insert('', 'end', values=('', '', 'Cargando...', '', '', ''), iid='__loading__')
+            except Exception:
+                pass
             
             empleado_nombre = self.combo_empleados.get()
             if not empleado_nombre:
@@ -187,17 +199,55 @@ class FrameEntrega(ttk.Frame):
                 return
             
             estado = self.combo_estado.get()
-            tarjetas = self.api_client.list_tarjetas(empleado_id=empleado_id, estado=estado, limit=200)
-            
-            fecha_actual = datetime.now().date()
+            # Consultar en segundo plano para no bloquear la UI
+            def _worker():
+                try:
+                    tarjetas_loc = self.api_client.list_tarjetas(empleado_id=empleado_id, estado=estado, limit=200)
+                except Exception as _e:
+                    tarjetas_loc = []
+                def _apply():
+                    # Limpiar loading si existe
+                    try:
+                        if '__loading__' in self.tree.get_children():
+                            self.tree.delete('__loading__')
+                    except Exception:
+                        pass
+                    self._render_tarjetas_tabla(tarjetas_loc, nueva_tarjeta_id, empleado_id)
+                try:
+                    self.after(0, _apply)
+                except Exception:
+                    _apply()
+            import threading
+            threading.Thread(target=_worker, daemon=True).start()
+            return
+
+            # (este bloque no se ejecutará ya; mantenido por compatibilidad)
+            # Calcular "hoy" según la zona horaria del usuario
+            try:
+                fecha_actual = datetime.now(ZoneInfo(self.token_tz)).date()
+            except Exception:
+                fecha_actual = date.today()
             
             # Limpiar caché cuando cambia empleado/estado y preparar prefetch
             self._abonos_cache_por_tarjeta = {}
             codigos_para_prefetch = []
 
             for idx, tarjeta in enumerate(tarjetas):
-                fecha_creacion_dt = datetime.fromisoformat(tarjeta['fecha_creacion'].replace('Z', '+00:00'))
-                fecha_tarjeta = fecha_creacion_dt.date()
+                # Preferir 'fecha' calculada por el backend; si no viene, convertir fecha_creacion a día local
+                try:
+                    fecha_api = tarjeta.get('fecha')
+                    if fecha_api:
+                        # viene como YYYY-MM-DD
+                        from datetime import date as _date
+                        fecha_tarjeta = _date.fromisoformat(str(fecha_api))
+                    else:
+                        raw_dt = tarjeta.get('fecha_creacion') or tarjeta.get('created_at')
+                        dt = datetime.fromisoformat(str(raw_dt).replace('Z', '+00:00')) if raw_dt else None
+                        if dt and dt.tzinfo is None:
+                            dt = dt.replace(tzinfo=timezone.utc)
+                        fecha_tarjeta = dt.astimezone(ZoneInfo(self.token_tz)).date() if dt else fecha_actual
+                except Exception:
+                    fecha_tarjeta = fecha_actual
                 es_nueva = fecha_tarjeta == fecha_actual
                 
                 fecha_str = fecha_tarjeta.strftime('%d/%m/%Y')
@@ -259,6 +309,79 @@ class FrameEntrega(ttk.Frame):
         except Exception as e:
             logger.error(f"Error al mostrar tarjetas desde la API: {e}")
             messagebox.showerror("Error de API", f"Error al mostrar tarjetas: {e}")
+
+    def _render_tarjetas_tabla(self, tarjetas, nueva_tarjeta_id, empleado_id):
+        """Pinta las tarjetas ya obtenidas (llamado desde hilo principal)."""
+        try:
+            # Calcular "hoy" según la zona horaria del usuario
+            try:
+                fecha_actual = datetime.now(ZoneInfo(self.token_tz)).date()
+            except Exception:
+                fecha_actual = date.today()
+            # Limpiar caché cuando cambia empleado/estado y preparar prefetch
+            self._abonos_cache_por_tarjeta = {}
+            codigos_para_prefetch = []
+            for idx, tarjeta in enumerate(tarjetas or []):
+                # Preferir 'fecha' calculada por el backend; si no viene, convertir fecha_creacion a día local
+                try:
+                    fecha_api = tarjeta.get('fecha')
+                    if fecha_api:
+                        from datetime import date as _date
+                        fecha_tarjeta = _date.fromisoformat(str(fecha_api))
+                    else:
+                        raw_dt = tarjeta.get('fecha_creacion') or tarjeta.get('created_at')
+                        dt = datetime.fromisoformat(str(raw_dt).replace('Z', '+00:00')) if raw_dt else None
+                        if dt and dt.tzinfo is None:
+                            dt = dt.replace(tzinfo=timezone.utc)
+                        fecha_tarjeta = dt.astimezone(ZoneInfo(self.token_tz)).date() if dt else fecha_actual
+                except Exception:
+                    fecha_tarjeta = fecha_actual
+                es_nueva = fecha_tarjeta == fecha_actual
+                fecha_str = fecha_tarjeta.strftime('%d/%m/%Y')
+                numero_ruta = tarjeta.get('numero_ruta')
+                if numero_ruta is not None:
+                    try:
+                        ruta_int = int(float(numero_ruta))
+                        ruta_str = f"{ruta_int}"
+                    except Exception:
+                        ruta_str = str(numero_ruta)
+                else:
+                    ruta_str = "0"
+                cliente_obj = tarjeta.get('cliente') if isinstance(tarjeta.get('cliente'), dict) else None
+                nombre_cliente = (
+                    (cliente_obj.get('nombre') if cliente_obj and 'nombre' in cliente_obj else tarjeta.get('cliente_nombre', ''))
+                ).upper()
+                apellido_cliente = (
+                    (cliente_obj.get('apellido') if cliente_obj and 'apellido' in cliente_obj else tarjeta.get('cliente_apellido', ''))
+                ).upper()
+                row_tag = 'row_odd' if (idx % 2) else 'row_even'
+                item_id = self.tree.insert('', 'end', values=(
+                    ruta_str,
+                    f"${tarjeta.get('monto',0):,.0f}",
+                    nombre_cliente,
+                    apellido_cliente,
+                    fecha_str,
+                    tarjeta.get('cuotas',''),
+                    tarjeta.get('codigo','')
+                ), iid=tarjeta.get('id', tarjeta.get('codigo')), tags=(row_tag,))
+                try:
+                    cod_tar = str(tarjeta.get('codigo') or tarjeta.get('id') or '')
+                    if cod_tar:
+                        codigos_para_prefetch.append(cod_tar)
+                except Exception:
+                    pass
+                if es_nueva:
+                    current_tags = list(self.tree.item(item_id, 'tags') or [])
+                    if 'nueva' not in current_tags:
+                        current_tags.append('nueva')
+                    self.tree.item(item_id, tags=tuple(current_tags))
+                if nueva_tarjeta_id and (tarjeta.get('id', tarjeta.get('codigo')) == nueva_tarjeta_id):
+                    self.tree.selection_set(item_id)
+                    self.tree.see(item_id)
+                    self.tree.focus(item_id)
+            self._lanzar_prefetch_abonos(empleado_id, codigos_para_prefetch)
+        except Exception as e:
+            logger.error(f"Error al renderizar tarjetas: {e}")
 
     def _lanzar_prefetch_abonos(self, empleado_id: str, codigos: list):
         """Dispara un hilo que precarga abonos para los códigos dados y los guarda en caché."""

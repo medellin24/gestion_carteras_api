@@ -4,6 +4,9 @@ from tkcalendar import Calendar, DateEntry
 from datetime import datetime, timedelta
 from api_client.client import APIError, api_client
 from decimal import Decimal
+import os
+
+from resource_loader import asset_path
 
 # --- Ventana Emergente para Manejar Eliminación de Empleados ---
 class VentanaEliminarEmpleado(tk.Toplevel):
@@ -412,15 +415,18 @@ class VentanaGestionEmpleado(tk.Toplevel):
             messagebox.showerror("Error Inesperado", f"Ocurrió un error al guardar:\n{e}", parent=self)
 
 # --- Frame Principal que Contiene Todo ---
-class FrameEmpleado(ttk.Frame):
+class FrameEmpleado(tk.Frame):
     def __init__(self, parent):
-        super().__init__(parent)
+        super().__init__(parent, bg='#e8e8e8')  # Fondo gris claro para todo el frame
         self.empleado_seleccionado = None
         # Usar el cliente global para conservar el token de sesión
         self.api_client = api_client
         self.base_actual = None
+        # Íconos cargados (PhotoImage) con fallback si faltan archivos
+        self.icons = {}
         
         self.setup_styles()
+        self._load_icons()
         self.setup_ui()
         self.cargar_empleados()
 
@@ -428,37 +434,51 @@ class FrameEmpleado(ttk.Frame):
         style = ttk.Style()
         style.configure('Main.TLabelframe', font=('Arial', 11, 'bold'))
         style.configure('Main.TLabelframe.Label', font=('Arial', 11, 'bold'))
-
-        # Estilo azul claro reutilizable para botones
-        light_blue = '#e6f2ff'
-        light_blue_hover = '#d6eaff'
-        style.configure('Blue.TButton', font=('Arial', 10, 'bold'), padding=(12, 8), background=light_blue)
-        style.map('Blue.TButton', background=[('active', light_blue_hover), ('pressed', light_blue_hover)])
+        # Estilo azul Bondi consistente con FrameEntrega
+        bondi = '#73D0E6'
+        bondi_hover = '#4FC3D9'
+        style.configure('Blue.TButton', font=('Arial', 10, 'bold'), padding=(12, 8), background=bondi)
+        style.map('Blue.TButton', background=[('active', bondi_hover), ('pressed', bondi_hover)])
 
         # Mantener estilos existentes pero con el mismo color base
-        style.configure('Action.TButton', font=('Arial', 9, 'bold'), padding=(10, 6), background=light_blue)
-        style.configure('Primary.TButton', font=('Arial', 10, 'bold'), padding=(12, 8), background=light_blue)
-        style.configure('Secondary.TButton', font=('Arial', 10, 'bold'), padding=(12, 8), background=light_blue)
-        style.configure('Info.TButton', font=('Arial', 10), padding=(12, 8), background=light_blue)
-        style.map('Action.TButton', background=[('active', light_blue_hover)])
-        style.map('Primary.TButton', background=[('active', light_blue_hover)])
-        style.map('Secondary.TButton', background=[('active', light_blue_hover)])
-        style.map('Info.TButton', background=[('active', light_blue_hover)])
+        style.configure('Action.TButton', font=('Arial', 9, 'bold'), padding=(10, 6), background=bondi)
+        style.configure('Primary.TButton', font=('Arial', 10, 'bold'), padding=(12, 8), background=bondi)
+        style.configure('Secondary.TButton', font=('Arial', 10, 'bold'), padding=(12, 8), background=bondi)
+        style.configure('Info.TButton', font=('Arial', 10), padding=(12, 8), background=bondi)
+        style.map('Action.TButton', background=[('active', bondi_hover)])
+        style.map('Primary.TButton', background=[('active', bondi_hover)])
+        style.map('Secondary.TButton', background=[('active', bondi_hover)])
+        style.map('Info.TButton', background=[('active', bondi_hover)])
         style.configure('Danger.TButton', font=('Arial', 10, 'bold'), padding=(12, 8))
 
     def setup_ui(self):
-        # Frame principal dividido en tres secciones
-        self.frame_izquierdo = ttk.LabelFrame(self, text="👥 Empleados", style='Main.TLabelframe')
-        self.frame_izquierdo.pack(side='left', fill='y', padx=5, pady=5)
-        # Hacerla más angosta
+        # Frame principal con fondo gris claro para contrastar con las secciones
+        main_container = tk.Frame(self, bg='#f0f0f0')
+        main_container.pack(fill='both', expand=True, padx=(70, 15), pady=25)  # Aún más margen izquierdo para mejor centralización
+        
+        # Frame izquierdo: Empleados (ancho fijo)
+        self.frame_izquierdo = ttk.LabelFrame(main_container, text="Empleados", style='Main.TLabelframe')
+        self.frame_izquierdo.pack(side='left', fill='y', padx=(0, 8))
         self.frame_izquierdo.configure(width=280)
         self.frame_izquierdo.pack_propagate(False)
 
-        self.frame_central = ttk.LabelFrame(self, text="👤 Perfil", style='Main.TLabelframe')
-        self.frame_central.pack(side='left', fill='both', expand=True, padx=5, pady=5)
+        # Frame central: Perfil con 2 cm adicionales (4 cm total extra)
+        self.frame_central = ttk.LabelFrame(main_container, text="Perfil", style='Main.TLabelframe')
+        self.frame_central.pack(side='left', fill='y', padx=(8, 8))
+        # Aumentar 4 cm total el ancho de la sección perfil (2 cm anteriores + 2 cm nuevos)
+        try:
+            extra_width = int(self.winfo_fpixels('4c'))
+        except Exception:
+            extra_width = 152  # ~4 cm a 96 DPI
+        self.frame_central.configure(width=280 + extra_width)  # 4 cm más de ancho
+        self.frame_central.pack_propagate(False)
 
-        self.frame_derecho = ttk.LabelFrame(self, text="💰 Base del Día", style='Main.TLabelframe')
-        self.frame_derecho.pack(side='left', fill='both', expand=True, padx=5, pady=5)
+        # Frame derecho: Base del Día (ancho fijo, no expandible)
+        self.frame_derecho = ttk.LabelFrame(main_container, text="Base del Día", style='Main.TLabelframe')
+        self.frame_derecho.pack(side='left', fill='y', padx=(8, 0))
+        # Ancho fijo para que no se expanda más allá de sus medidas originales
+        self.frame_derecho.configure(width=280)  # Ancho fijo igual que empleados
+        self.frame_derecho.pack_propagate(False)
 
         self.setup_seccion_empleados()
         self.setup_seccion_perfil()
@@ -466,17 +486,29 @@ class FrameEmpleado(ttk.Frame):
 
     # --- Sección de Lista de Empleados (Izquierda) ---
     def setup_seccion_empleados(self):
-        # Lista de empleados
+        # Encabezado con ícono
+        header = ttk.Frame(self.frame_izquierdo)
+        header.pack(fill='x', padx=10, pady=(8, 0))
+        ttk.Label(header, text="Empleados", image=self.icons.get('employee_header') or self.icons.get('user'), compound='left', font=('Arial', 11, 'bold')).pack(anchor='w')
+
+        # Lista de empleados con íconos (Treeview modo árbol)
         frame_lista = ttk.Frame(self.frame_izquierdo)
         frame_lista.pack(fill='both', expand=True, padx=10, pady=10)
-        
-        self.lista_empleados = tk.Listbox(frame_lista, font=('Arial', 10), selectbackground='#0078d4', selectforeground='white')
-        scrollbar = ttk.Scrollbar(frame_lista, orient="vertical", command=self.lista_empleados.yview)
-        self.lista_empleados.config(yscrollcommand=scrollbar.set)
-        
-        self.lista_empleados.pack(side='left', fill='both', expand=True)
+
+        self.tree_empleados = ttk.Treeview(frame_lista, show='tree')
+        scrollbar = ttk.Scrollbar(frame_lista, orient="vertical", command=self.tree_empleados.yview)
+        self.tree_empleados.config(yscrollcommand=scrollbar.set)
+
+        self.tree_empleados.pack(side='left', fill='both', expand=True)
         scrollbar.pack(side='right', fill='y')
-        self.lista_empleados.bind('<<ListboxSelect>>', self.on_empleado_seleccionado)
+        self.tree_empleados.bind('<<TreeviewSelect>>', self.on_empleado_seleccionado)
+
+        # Ajustar altura de fila para mejor legibilidad (ligero)
+        try:
+            style = ttk.Style()
+            style.configure('Treeview', rowheight=26)
+        except Exception:
+            pass
 
         # Botones de gestión se movieron a la sección de Perfil
 
@@ -485,31 +517,91 @@ class FrameEmpleado(ttk.Frame):
         main_frame = ttk.Frame(self.frame_central)
         main_frame.pack(fill='both', expand=True, padx=10, pady=10)
 
+        # Encabezado con ícono
+        header = ttk.Frame(main_frame)
+        header.pack(fill='x')
+        ttk.Label(header, text="Perfil", image=self.icons.get('user'), compound='left', font=('Arial', 11, 'bold')).pack(anchor='w', pady=(0, 4))
+
+        # Grid de perfil con UN SOLO ÍCONO más grande bien encuadrado
+        perfil_grid = ttk.Frame(main_frame)
+        perfil_grid.pack(fill='x')
+        # Configurar columnas: una para campos, una para el ícono grande
+        perfil_grid.grid_columnconfigure(0, weight=1)  # Campos expandibles
+        perfil_grid.grid_columnconfigure(1, weight=0, minsize=120)  # Ícono grande
+        # Ícono más grande para el espacio adicional
+        try:
+            extra_icon_px = int(self.winfo_fpixels('2c'))
+        except Exception:
+            extra_icon_px = 76  # ~2 cm a 96 DPI
+        base_w, base_h = 100, 120  # Ícono más grande
+
+        # UN SOLO ÍCONO grande centrado en la parte superior
+        single_icon_container = tk.Frame(perfil_grid, width=base_w + extra_icon_px, height=base_h + extra_icon_px)
+        single_icon_container.grid(row=0, column=1, sticky='n', padx=(8, 0), pady=(10, 10))
+        try:
+            single_icon_container.grid_propagate(False)
+        except Exception:
+            pass
+
+        # Campos agrupados a la izquierda del ícono
+        campos_frame = ttk.Frame(perfil_grid)
+        campos_frame.grid(row=0, column=0, sticky='nw', padx=(0, 8), pady=(10, 10))
+
+        # Cargar UN SOLO ÍCONO grande centrado
+        try:
+            if self.icons.get('profile_right'):
+                ttk.Label(single_icon_container, image=self.icons['profile_right']).pack(expand=True)
+        except Exception:
+            pass
+
+        # Crear campos apilados en el frame de campos
         self.perfil_fields = {}
-        self.perfil_fields['identificacion'] = self.create_profile_field(main_frame, "🆔", "Identificación")
-        self.perfil_fields['nombre_completo'] = self.create_profile_field(main_frame, "👤", "Nombre Completo")
-        self.perfil_fields['telefono'] = self.create_profile_field(main_frame, "📞", "Teléfono")
-        self.perfil_fields['direccion'] = self.create_profile_field(main_frame, "🏠", "Dirección")
+        self.perfil_fields['identificacion'] = self.create_profile_field(campos_frame, "🆔", "Identificación")
+        self.perfil_fields['nombre_completo'] = self.create_profile_field(campos_frame, "👤", "Nombre Completo")
+        self.perfil_fields['telefono'] = self.create_profile_field(campos_frame, "📞", "Teléfono")
+        self.perfil_fields['direccion'] = self.create_profile_field(campos_frame, "🏠", "Dirección")
         # Eliminado IMEI según requerimiento
 
-        # Barra de acciones (AGREGAR, EDITAR, ELIMINAR, ASIGNAR IMEI)
+        # Barra de acciones COMPACTA: 3 botones arriba, Usuario cobrador abajo ocupando todo el ancho
         acciones = ttk.Frame(main_frame)
-        acciones.pack(fill='x', pady=12)
-        acciones.columnconfigure(0, weight=1)
-        acciones.columnconfigure(1, weight=1)
-        acciones.columnconfigure(2, weight=1)
-        acciones.columnconfigure(3, weight=1)
-        ttk.Button(acciones, text="➕ Agregar", style='Blue.TButton', command=self.mostrar_ventana_agregar).grid(row=0, column=0, padx=5, sticky='ew')
-        ttk.Button(acciones, text="✏️ Editar", style='Blue.TButton', command=self.mostrar_ventana_actualizar).grid(row=0, column=1, padx=5, sticky='ew')
-        ttk.Button(acciones, text="🗑️ Eliminar | Transferir", style='Blue.TButton', command=self.eliminar_empleado_seleccionado).grid(row=0, column=2, padx=5, sticky='ew')
-        ttk.Button(acciones, text="👤 Usuario cobrador", style='Blue.TButton', command=self.gestionar_usuario_cobrador).grid(row=0, column=3, padx=5, sticky='ew')
+        acciones.pack(fill='x', pady=(8, 5))
+        
+        # Fila superior: 3 botones compactos
+        fila_superior = ttk.Frame(acciones)
+        fila_superior.pack(fill='x', pady=(0, 3))
+        fila_superior.columnconfigure(0, weight=1)
+        fila_superior.columnconfigure(1, weight=1)
+        fila_superior.columnconfigure(2, weight=1)
+        ttk.Button(fila_superior, text="Agregar", image=self.icons.get('add'), compound='left', style='Blue.TButton', command=self.mostrar_ventana_agregar).grid(row=0, column=0, padx=2, sticky='ew')
+        ttk.Button(fila_superior, text="Editar", image=self.icons.get('edit'), compound='left', style='Blue.TButton', command=self.mostrar_ventana_actualizar).grid(row=0, column=1, padx=2, sticky='ew')
+        ttk.Button(fila_superior, text="Eliminar | Transferir", image=self.icons.get('delete'), compound='left', style='Blue.TButton', command=self.eliminar_empleado_seleccionado).grid(row=0, column=2, padx=2, sticky='ew')
+        
+        # Fila inferior: Usuario cobrador ocupando todo el ancho disponible
+        fila_inferior = ttk.Frame(acciones)
+        fila_inferior.pack(fill='x')
+        ttk.Button(fila_inferior, text="Usuario cobrador", image=self.icons.get('collector'), compound='left', style='Blue.TButton', command=self.gestionar_usuario_cobrador).pack(fill='x')
 
     def create_profile_field(self, parent, icon, label_text):
         field_frame = ttk.Frame(parent)
-        field_frame.pack(fill='x', pady=5)
-        ttk.Label(field_frame, text=f"{icon} {label_text}", font=('Arial', 9, 'bold')).pack(anchor='w')
-        entry = ttk.Entry(field_frame, font=('Arial', 10), state='readonly')
-        entry.pack(fill='x', pady=(2, 0))
+        field_frame.pack(fill='x', pady=2)  # Más compacto
+        # Mapear emoji a clave de ícono y usar PhotoImage si está disponible
+        icon_key_map = {'🆔': 'id', '👤': 'user', '📞': 'phone', '🏠': 'address'}
+        lbl = ttk.Label(field_frame, text=label_text, font=('Arial', 8, 'bold'))  # Fuente más pequeña
+        key = icon_key_map.get(icon)
+        try:
+            if key and self.icons.get(key):
+                lbl.configure(image=self.icons[key], compound='left')
+        except Exception:
+            pass
+        # Si no hay imagen, mostrar fallback con emoji + texto
+        if not getattr(lbl, 'image', None) and (icon or '').strip():
+            try:
+                lbl.configure(text=f"{icon} {label_text}")
+            except Exception:
+                pass
+        lbl.pack(anchor='w')
+        entry = ttk.Entry(field_frame, font=('Arial', 9), state='readonly', width=25)  # Ancho aumentado para aprovechar espacio
+        entry.pack(fill='x', pady=(1, 0))
         return entry
 
     # --- Sección de Base del Día (Derecha) ---
@@ -517,8 +609,13 @@ class FrameEmpleado(ttk.Frame):
         main_frame = ttk.Frame(self.frame_derecho)
         main_frame.pack(fill='both', expand=True, padx=10, pady=10)
         
+        # Encabezado con ícono
+        header = ttk.Frame(main_frame)
+        header.pack(fill='x')
+        ttk.Label(header, text="Base del Día", image=self.icons.get('money'), compound='left', font=('Arial', 11, 'bold')).pack(anchor='w', pady=(0, 6))
+
         # Fecha
-        ttk.Label(main_frame, text="📅 Fecha:", font=('Arial', 9, 'bold')).pack(anchor='w')
+        ttk.Label(main_frame, text="Fecha:", font=('Arial', 9, 'bold')).pack(anchor='w')
         fecha_input_frame = ttk.Frame(main_frame)
         fecha_input_frame.pack(fill='x', pady=(2, 10))
         self.date_var = tk.StringVar(value=datetime.now().strftime('%Y-%m-%d'))
@@ -534,7 +631,7 @@ class FrameEmpleado(ttk.Frame):
         self.entry_fecha.pack(side='left', fill='x', expand=True)
         
         # Monto Actual
-        ttk.Label(main_frame, text="💰 Monto Actual:", font=('Arial', 9, 'bold')).pack(anchor='w')
+        ttk.Label(main_frame, text="Monto Actual:", font=('Arial', 9, 'bold')).pack(anchor='w')
         self.label_monto = ttk.Label(main_frame, text="N/A", font=('Arial', 12, 'bold'), foreground='gray')
         self.label_monto.pack(anchor='w', pady=(2, 10))
         
@@ -547,10 +644,58 @@ class FrameEmpleado(ttk.Frame):
         frame_botones.pack(fill='x', pady=15)
         frame_botones.columnconfigure(0, weight=1)
         # Botones en columna vertical más anchos
-        ttk.Button(frame_botones, text="➕ Agregar Base", style='Blue.TButton', command=self.agregar_base).grid(row=0, column=0, padx=5, pady=4, sticky='ew')
-        ttk.Button(frame_botones, text="✏️ Actualizar Base", style='Blue.TButton', command=self.actualizar_base).grid(row=1, column=0, padx=5, pady=4, sticky='ew')
-        ttk.Button(frame_botones, text="🗑️ Eliminar Base", style='Blue.TButton', command=self.eliminar_base).grid(row=2, column=0, padx=5, pady=4, sticky='ew')
-        ttk.Button(frame_botones, text="🔎 Buscar Base", style='Blue.TButton', command=self.buscar_base).grid(row=3, column=0, padx=5, pady=4, sticky='ew')
+        ttk.Button(frame_botones, text="Agregar Base", image=self.icons.get('add'), compound='left', style='Blue.TButton', command=self.agregar_base).grid(row=0, column=0, padx=5, pady=4, sticky='ew')
+        ttk.Button(frame_botones, text="Actualizar Base", image=self.icons.get('edit'), compound='left', style='Blue.TButton', command=self.actualizar_base).grid(row=1, column=0, padx=5, pady=4, sticky='ew')
+        ttk.Button(frame_botones, text="Eliminar Base", image=self.icons.get('delete'), compound='left', style='Blue.TButton', command=self.eliminar_base).grid(row=2, column=0, padx=5, pady=4, sticky='ew')
+        ttk.Button(frame_botones, text="Buscar Base", image=self.icons.get('search'), compound='left', style='Blue.TButton', command=self.buscar_base).grid(row=3, column=0, padx=5, pady=4, sticky='ew')
+
+    def _load_icons(self):
+        """Carga íconos desde assets/icons con nombres predefinidos. Fallback silencioso si no existen."""
+        try:
+            candidates = [
+                asset_path('assets', 'icons'),
+                os.path.join(os.path.dirname(__file__), 'assets', 'icons')
+            ]
+            icon_files = {
+                'add': 'add.png',
+                'edit': 'edit.png',
+                'delete': 'delete.png',
+                'collector': 'collector.png',
+                'date': 'date.png',
+                'money': 'money.png',
+                'search': 'search.png',
+                'user': 'user.png',
+                    'employee_bullet': 'employee_bullet.png',
+                    'employee_header': 'employee_header.png',
+                'id': 'id.png',
+                'phone': 'phone.png',
+                'address': 'address.png',
+                'profile_right': 'profile_right.png',
+                'contact_left': 'contact_left.png',
+            }
+            for key, fname in icon_files.items():
+                loaded = False
+                for c in candidates:
+                    fpath = os.path.join(c, fname)
+                    if os.path.exists(fpath):
+                        try:
+                            self.icons[key] = tk.PhotoImage(file=fpath)
+                            loaded = True
+                            break
+                        except Exception:
+                            pass
+                if not loaded:
+                    # No icon found; keep key absent
+                    pass
+                # Fallback suave: si no hay ícono específico para viñeta, usar 'user' para no romper UI
+                if 'employee_bullet' not in self.icons and 'user' in self.icons:
+                    self.icons['employee_bullet'] = self.icons['user']
+                # Fallback suave para encabezado de empleados
+                if 'employee_header' not in self.icons and 'user' in self.icons:
+                    self.icons['employee_header'] = self.icons['user']
+        except Exception:
+            # Cualquier problema al cargar íconos no debe romper la UI
+            pass
 
     # --- Métodos de Lógica y Eventos ---
     
@@ -559,25 +704,50 @@ class FrameEmpleado(ttk.Frame):
         try:
             empleados = self.api_client.list_empleados()
             self.empleados_cache = sorted(empleados, key=lambda emp: emp['nombre_completo'].lower())
-            
-            self.lista_empleados.delete(0, tk.END)
+            # Reconstruir vista
             self.empleados_dict = {emp['nombre_completo']: emp for emp in self.empleados_cache}
-            
-            for emp in self.empleados_cache:
-                self.lista_empleados.insert(tk.END, emp['nombre_completo'])
+
+            if hasattr(self, 'tree_empleados'):
+                # Limpiar árbol y agregar elementos con viñeta de ícono
+                for item in self.tree_empleados.get_children():
+                    self.tree_empleados.delete(item)
+                for emp in self.empleados_cache:
+                    try:
+                        bullet_icon = self.icons.get('employee_bullet') or self.icons.get('user')
+                        self.tree_empleados.insert('', 'end', text=emp['nombre_completo'], image=bullet_icon)
+                    except Exception:
+                        self.tree_empleados.insert('', 'end', text=emp['nombre_completo'])
+            else:
+                # Fallback (por si no existe el tree)
+                self.lista_empleados.delete(0, tk.END)
+                for emp in self.empleados_cache:
+                    self.lista_empleados.insert(tk.END, emp['nombre_completo'])
             self.limpiar_todo()
         except Exception as e:
             messagebox.showerror("Error de Carga", f"No se pudo cargar la lista de empleados:\n{e}")
 
     def on_empleado_seleccionado(self, event=None):
-        """Maneja la selección de un empleado en la Listbox."""
-        seleccion = self.lista_empleados.curselection()
-        if not seleccion:
+        """Maneja la selección de un empleado en la lista/árbol."""
+        nombre_seleccionado = None
+        if hasattr(self, 'tree_empleados'):
+            seleccion = self.tree_empleados.selection()
+            if not seleccion:
+                return
+            item_id = seleccion[0]
+            try:
+                nombre_seleccionado = self.tree_empleados.item(item_id, 'text')
+            except Exception:
+                nombre_seleccionado = None
+        else:
+            seleccion = self.lista_empleados.curselection()
+            if not seleccion:
+                return
+            nombre_seleccionado = self.lista_empleados.get(seleccion[0])
+
+        if not nombre_seleccionado:
             return
-            
-        nombre_seleccionado = self.lista_empleados.get(seleccion[0])
+
         self.empleado_seleccionado = self.empleados_dict.get(nombre_seleccionado)
-        
         if self.empleado_seleccionado:
             self.actualizar_campos_perfil()
             self.buscar_base()
@@ -634,29 +804,46 @@ class FrameEmpleado(ttk.Frame):
             self.actualizar_status_base("Ingrese una fecha", "orange")
             return
             
+        # Mostrar estado de carga y consultar en segundo plano
+        self.actualizar_status_base("Buscando base...", "blue")
+        def _worker(emp_id: str, fecha: str):
+            try:
+                base = self.api_client.get_base_by_empleado_fecha(emp_id, fecha)
+            except APIError as e:
+                base = f"APIERR:{getattr(e,'status_code',None) or 0}"
+            except Exception:
+                base = "ERROR"
+            def _apply():
+                if isinstance(base, str):
+                    if base.startswith("APIERR:"):
+                        code = base.split(':',1)[1]
+                        if code == '404':
+                            self.base_actual = None
+                            self.label_monto.config(text="No registrada", foreground='gray')
+                            self.actualizar_status_base("No hay base para esta fecha.", "red")
+                        else:
+                            self.actualizar_status_base("Error al buscar la base.", "red")
+                    else:
+                        self.actualizar_status_base("Error al consultar base.", "red")
+                    return
+                if not base:
+                    self.base_actual = None
+                    self.label_monto.config(text="No registrada", foreground='gray')
+                    self.actualizar_status_base("No hay base para esta fecha.", "red")
+                    return
+                self.base_actual = base
+                monto = Decimal(self.base_actual.get('monto', 0))
+                self.label_monto.config(text=f"${monto:,.0f}", foreground='green')
+                self.actualizar_status_base("Base encontrada.", "green")
+            try:
+                self.after(0, _apply)
+            except Exception:
+                _apply()
         try:
-            base = self.api_client.get_base_by_empleado_fecha(self.empleado_seleccionado['identificacion'], fecha_str)
-            # Si la API devuelve None (no hay base), actualizar UI sin mostrar popups
-            if not base:
-                self.base_actual = None
-                self.label_monto.config(text="No registrada", foreground='gray')
-                self.actualizar_status_base("No hay base para esta fecha.", "red")
-                return
-            # Hay base
-            self.base_actual = base
-            monto = Decimal(self.base_actual.get('monto', 0))
-            self.label_monto.config(text=f"${monto:,.0f}", foreground='green')
-            self.actualizar_status_base("Base encontrada.", "green")
-        except APIError as e:
-            if e.status_code == 404:
-                self.base_actual = None
-                self.label_monto.config(text="No registrada", foreground='gray')
-                self.actualizar_status_base("No hay base para esta fecha.", "red")
-            else:
-                self.actualizar_status_base("Error al buscar la base.", "red")
+            import threading
+            threading.Thread(target=_worker, args=(self.empleado_seleccionado['identificacion'], fecha_str), daemon=True).start()
         except Exception:
-            # Evitar ventanas emergentes aquí; solo actualizar estado
-            self.actualizar_status_base("Error al consultar base.", "red")
+            self.actualizar_status_base("Error al iniciar búsqueda.", "red")
 
     def agregar_base(self):
         if not self.empleado_seleccionado:

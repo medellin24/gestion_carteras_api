@@ -1,9 +1,27 @@
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { offlineDB } from '../offline/db.js'
-import { getLocalDateString } from '../utils/date.js'
 import { apiClient } from '../api/client.js'
 import { Edit, Trash2, Check, X } from 'lucide-react'
+
+function currency(n) {
+  try {
+    return new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', maximumFractionDigits: 0 }).format(Number(n) || 0)
+  } catch {
+    return `$${Number(n || 0).toFixed(0)}`
+  }
+}
+
+function formatHour(ts) {
+  if (!ts) return ''
+  const date = ts instanceof Date ? ts : new Date(ts)
+  if (Number.isNaN(date.getTime())) return ''
+  try {
+    return date.toLocaleTimeString('es-CO', { hour: '2-digit', minute: '2-digit' })
+  } catch {
+    return ''
+  }
+}
 
 export default function SubirPage(){
   const [pending, setPending] = useState(0)
@@ -13,6 +31,7 @@ export default function SubirPage(){
   const [outboxData, setOutboxData] = useState({ tarjetas: 0, abonos: 0, gastos: 0, bases: 0 })
   const [localGastos, setLocalGastos] = useState([])
   const [localBases, setLocalBases] = useState([])
+  const [preflightModal, setPreflightModal] = useState(null)
   const navigate = useNavigate()
   const debugProfile = true
 
@@ -32,6 +51,140 @@ export default function SubirPage(){
     }
   }
 
+  async function collectEmpleadoOutboxData(empleadoId, profilerInstance = null) {
+    const empId = empleadoId ? String(empleadoId) : ''
+    profilerInstance?.mark('readOutbox')
+    const outbox = await offlineDB.readOutbox()
+    profilerInstance?.mark('getTarjetas')
+    const tarjetasEmpleado = await offlineDB.getTarjetas()
+    const codigosTarjetasEmpleado = new Set(
+      (tarjetasEmpleado || [])
+        .filter(t => t && String(t.empleado_identificacion) === empId)
+        .map(t => String(t.codigo))
+    )
+    const shadowData = []
+    const empleadoData = (outbox || []).filter(item => {
+      if (!item) return false
+      const isShadow = item.shadow_only === true || item.type === 'tarjeta:shadow' || item.type === 'shadow:tarjeta'
+      if (item.type === 'abono:add') {
+        if (item.tarjeta_codigo == null) return false
+        return codigosTarjetasEmpleado.has(String(item.tarjeta_codigo))
+      }
+      const itemEmpleadoId = item.empleado_identificacion || item.empleado_id
+      const sameEmpleado = itemEmpleadoId != null && String(itemEmpleadoId) === empId
+      if (!sameEmpleado) return false
+      if (isShadow) {
+        shadowData.push(item)
+        return false
+      }
+      return true
+    })
+    profilerInstance?.mark('filterOutbox')
+    return { empleadoData, outbox, shadowData }
+  }
+
+  function hasSyncableData(list = []) {
+    return list.some(item =>
+      (item?.type === 'tarjeta:new' && typeof item?.temp_id === 'string' && item.temp_id.startsWith('tmp-')) ||
+      item?.type === 'abono:add' ||
+      item?.type === 'gasto:new' ||
+      item?.type === 'base:set'
+    )
+  }
+
+  function summarizeEmpleadoData(items = [], extraItems = []) {
+    const list = Array.isArray(extraItems) && extraItems.length ? [...items, ...extraItems] : items
+    const totals = {
+      recaudoEfectivo: 0,
+      recaudoConsignacion: 0,
+      recaudoOtros: 0,
+      baseTotal: 0,
+      prestamosTotal: 0,
+      gastosTotal: 0,
+    }
+    const counts = { tarjetas: 0, abonos: 0, gastos: 0, bases: 0 }
+    for (const item of list) {
+      if (!item) continue
+      if (item.type === 'abono:add') {
+        counts.abonos += 1
+        const monto = Number(item.monto) || 0
+        const metodo = (item.metodo_pago || 'efectivo').toLowerCase()
+        if (metodo === 'consignacion') {
+          totals.recaudoConsignacion += monto
+        } else if (metodo === 'efectivo') {
+          totals.recaudoEfectivo += monto
+        } else {
+          totals.recaudoOtros += monto
+        }
+      } else if (item.type === 'gasto:new') {
+        counts.gastos += 1
+        totals.gastosTotal += Number(item.valor) || 0
+      } else if (item.type === 'base:set') {
+        counts.bases += 1
+        totals.baseTotal += Number(item.monto) || 0
+      } else if (
+        (item.type === 'tarjeta:new' && typeof item.temp_id === 'string' && item.temp_id.startsWith('tmp-')) ||
+        item.type === 'tarjeta:shadow'
+      ) {
+        counts.tarjetas += 1
+        totals.prestamosTotal += Number(item.monto) || 0
+      }
+    }
+    totals.recaudoTotal = totals.recaudoEfectivo + totals.recaudoConsignacion + totals.recaudoOtros
+    totals.efectivoEntregar = totals.recaudoEfectivo + totals.recaudoConsignacion + totals.baseTotal - totals.prestamosTotal - totals.gastosTotal
+    return { totals, counts }
+  }
+
+  function buildDetailLists(items = []) {
+    const abonos = []
+    items.forEach(item => {
+      if (!item) return
+      if (item.type === 'abono:add') {
+        abonos.push({
+          id: String(item.id || item.id_temporal || `${item.tarjeta_codigo || 'tarjeta'}-${item.ts || Date.now()}`),
+          tarjeta: item.tarjeta_codigo,
+          monto: Number(item.monto) || 0,
+          metodo: (item.metodo_pago || 'efectivo').toLowerCase(),
+          ts: item.ts || Date.now(),
+        })
+      }
+    })
+    abonos.sort((a, b) => (a.ts || 0) - (b.ts || 0))
+    return { abonos }
+  }
+
+  function buildSignature(items = []) {
+    return items
+      .map(item => {
+        if (!item) return null
+        if (item.id) return String(item.id)
+        const fallback = `${item.type || 'op'}-${item.ts || '0'}-${item.tarjeta_codigo || item.temp_id || ''}`
+        return fallback
+      })
+      .filter(Boolean)
+      .sort()
+  }
+
+  function signaturesEqual(a = [], b = []) {
+    if (a.length !== b.length) return false
+    for (let i = 0; i < a.length; i += 1) {
+      if (a[i] !== b[i]) return false
+    }
+    return true
+  }
+
+  async function buildPreflightSummary(empleadoId) {
+    const snapshot = await collectEmpleadoOutboxData(empleadoId)
+    if (!hasSyncableData(snapshot.empleadoData) && !(snapshot.shadowData?.length)) {
+      throw new Error('No hay datos válidos para sincronizar del empleado actual.')
+    }
+    const { totals, counts } = summarizeEmpleadoData(snapshot.empleadoData, snapshot.shadowData)
+    const details = buildDetailLists(snapshot.empleadoData)
+    const signature = buildSignature([...(snapshot.empleadoData || []), ...(snapshot.shadowData || [])])
+    const empleadoNombre = localStorage.getItem('empleado_nombre') || empleadoId
+    return { empleadoId, empleadoNombre, totals, counts, signature, shadowData: snapshot.shadowData || [], details }
+  }
+
   async function refresh(){
     try {
       const outbox = await offlineDB.readOutbox()
@@ -48,22 +201,23 @@ export default function SubirPage(){
       // Obtener las tarjetas del empleado actual para filtrar abonos
       const tarjetasEmpleado = await offlineDB.getTarjetas()
       const codigosTarjetasEmpleado = new Set(
-        tarjetasEmpleado
-          .filter(t => t.empleado_identificacion === currentEmpleadoId)
-          .map(t => t.codigo)
+        (tarjetasEmpleado || [])
+          .filter(t => t && String(t.empleado_identificacion) === String(currentEmpleadoId))
+          .map(t => String(t.codigo))
       )
       
       // Filtrar solo los datos del empleado actualmente seleccionado
       const empleadoData = outbox.filter(item => {
-        const itemEmpleadoId = item.empleado_identificacion || item.empleado_id
-        
-        // Para abonos, verificar que la tarjeta pertenezca al empleado actual
-        if (item.type === 'abono:add') {
-          return codigosTarjetasEmpleado.has(item.tarjeta_codigo)
+        if (!item) return false
+        if (item.shadow_only || item.type === 'tarjeta:shadow' || item.type === 'shadow:tarjeta') {
+          return false
         }
-        
-        // Para otros tipos, usar el empleado_identificacion
-        return itemEmpleadoId === currentEmpleadoId
+        if (item.type === 'abono:add') {
+          if (item.tarjeta_codigo == null) return false
+          return codigosTarjetasEmpleado.has(String(item.tarjeta_codigo))
+        }
+        const itemEmpleadoId = item.empleado_identificacion || item.empleado_id
+        return itemEmpleadoId != null && String(itemEmpleadoId) === String(currentEmpleadoId)
       })
       
       const count = empleadoData.length
@@ -140,12 +294,7 @@ export default function SubirPage(){
   }
 
   async function handleUpload(){
-    const p = debugProfile ? profiler() : null
-    if (pending === 0) {
-      showMessage('No hay operaciones para sincronizar.', 'error')
-      return
-    }
-    
+    if (busy) return
     const currentEmpleadoId = localStorage.getItem('empleado_identificacion')
     
     if (!currentEmpleadoId) {
@@ -153,86 +302,85 @@ export default function SubirPage(){
       return
     }
 
-    // Verificar permisos ANTES de empezar cualquier trabajo
+    setBusy(true)
     try {
-      const perms = await apiClient.getEmpleadoPermissions(currentEmpleadoId)
-      const today = getLocalDateString()
-      const last = String(perms?.fecha_accion || '')
-      const canByDate = !last || last < today
-      const canUpload = Boolean(perms?.subir)
-      
-      if (!canUpload) {
-        showMessage('❌ PERMISO DENEGADO: No tienes autorización para subir datos. Contacta al administrador para habilitar el permiso de subida.', 'error')
-        return
-      }
-      
-      if (!canByDate) {
-        showMessage('❌ FECHA BLOQUEADA: Ya se realizó una subida hoy. La próxima subida estará disponible mañana.', 'error')
-        return
-      }
-      
-      if (!(canByDate && canUpload)) {
-        showMessage('❌ ACCESO DENEGADO: No cumples con las condiciones para subir datos. Verifica permisos y fecha de última acción.', 'error')
-        return
-      }
+      const summary = await buildPreflightSummary(currentEmpleadoId)
+      setPreflightModal(summary)
+      showMessage('Revisa la liquidación y confirma para iniciar la sincronización.', 'info')
     } catch (e) {
-      showMessage('❌ ERROR DE PERMISOS: No se pudo verificar los permisos de subida. Verifica tu conexión y contacta al administrador si el problema persiste.', 'error')
-      return
+      showMessage(e?.message || 'No fue posible preparar la sincronización.', 'error')
+    } finally {
+      setBusy(false)
     }
-    
+  }
+
+  function cancelPreflight() {
+    setPreflightModal(null)
+    showMessage('Sincronización cancelada antes de enviarse.', 'info')
+  }
+
+  async function confirmPreflight() {
+    if (!preflightModal) return
+    const snapshot = preflightModal
+    setPreflightModal(null)
+    await performSync(snapshot)
+  }
+
+  async function performSync(preflight) {
+    if (!preflight) return
+    const currentEmpleadoId = preflight.empleadoId
+    const p = debugProfile ? profiler() : null
+
     setBusy(true)
     showMessage('Sincronizando datos...', 'info')
-    
-    // Timeout de seguridad para evitar que se quede colgado
+
     const timeoutId = setTimeout(() => {
       if (busy) {
         setBusy(false)
         showMessage('❌ TIMEOUT: La sincronización tardó demasiado. Verifica tu conexión e inténtalo de nuevo.', 'error')
       }
-    }, 180000) // 3 minutos
-    
+    }, 180000)
+
     try {
       p && p.mark('start')
-      const outbox = await offlineDB.readOutbox()
-      p && p.mark('readOutbox')
-      
-      // Obtener las tarjetas del empleado actual para filtrar abonos
-      const tarjetasEmpleado = await offlineDB.getTarjetas()
-      p && p.mark('getTarjetas')
-      const codigosTarjetasEmpleado = new Set(
-        tarjetasEmpleado
-          .filter(t => t.empleado_identificacion === currentEmpleadoId)
-          .map(t => t.codigo)
-      )
-      
-      // Filtrar solo los datos del empleado actualmente seleccionado
-      const empleadoData = outbox.filter(item => {
-        const itemEmpleadoId = item.empleado_identificacion || item.empleado_id
-        
-        // Para abonos, verificar que la tarjeta pertenezca al empleado actual
-        if (item.type === 'abono:add') {
-          return codigosTarjetasEmpleado.has(item.tarjeta_codigo)
-        }
-        
-        // Para otros tipos, usar el empleado_identificacion
-        return itemEmpleadoId === currentEmpleadoId
-      })
-      p && p.mark('filterOutbox')
-      
-      // Validar que hay datos para sincronizar del empleado actual
-      const hasData = empleadoData.some(item => 
-        (item.type === 'tarjeta:new' && item.temp_id?.startsWith('tmp-')) ||
-        item.type === 'abono:add' ||
-        item.type === 'gasto:new' ||
-        item.type === 'base:set'
-      )
-      
-      if (!hasData) {
-        showMessage('No hay datos válidos para sincronizar del empleado actual.', 'error')
+      const snapshot = await collectEmpleadoOutboxData(currentEmpleadoId, p)
+      const empleadoData = snapshot.empleadoData
+      const outbox = snapshot.outbox
+      const shadowData = snapshot.shadowData || []
+      const currentSignature = buildSignature([...(empleadoData || []), ...shadowData])
+      if (!signaturesEqual(currentSignature, preflight.signature)) {
+        showMessage('Los datos cambiaron mientras revisabas la liquidación. Genera nuevamente el resumen antes de sincronizar.', 'error')
         return
       }
 
-      // Construir payload según /sync
+      if (!hasSyncableData(empleadoData)) {
+        if (shadowData.length > 0) {
+          showMessage('No hay operaciones pendientes para subir. Los préstamos realizados en línea ya quedaron en el servidor; la liquidación se guardó como referencia.', 'info')
+        } else {
+          showMessage('No hay datos válidos para sincronizar del empleado actual.', 'error')
+        }
+        return
+      }
+
+      // Verificar permisos justo antes de sincronizar
+      try {
+        const perms = await apiClient.getEmpleadoPermissions(currentEmpleadoId)
+        const canUpload = Boolean(perms?.puede_subir ?? false)
+        if (!canUpload) {
+          if (!perms?.subir) {
+            showMessage('❌ PERMISO DENEGADO: No tienes autorización para subir datos. Contacta al administrador para habilitar el permiso de subida.', 'error')
+          } else {
+            showMessage('❌ FECHA BLOQUEADA: Ya se realizó una subida hoy. La próxima subida estará disponible mañana.', 'error')
+          }
+          return
+        }
+      } catch (e) {
+        showMessage('❌ ERROR DE PERMISOS: No se pudo verificar los permisos de subida. Verifica tu conexión y contacta al administrador si el problema persiste.', 'error')
+        return
+      }
+
+      p && p.mark('verifyPerms')
+
       const idempotencyKey = `sync-${Date.now()}`
       const payload = {
         idempotency_key: idempotencyKey,
@@ -246,7 +394,6 @@ export default function SubirPage(){
       
       for (const item of empleadoData) {
         if (item.type === 'tarjeta:new') {
-          // Solo sincronizar tarjetas creadas offline con id temporal
           if (!item.temp_id || typeof item.temp_id !== 'string' || !item.temp_id.startsWith('tmp-')) {
             continue
           }
@@ -264,7 +411,6 @@ export default function SubirPage(){
           })
           syncCount++
         } else if (item.type === 'abono:add') {
-          // Los abonos ya están filtrados por tarjetas del empleado actual
           payload.abonos.push({
             id_temporal: item.id_temporal,
             tarjeta_codigo: item.tarjeta_codigo,
@@ -297,7 +443,6 @@ export default function SubirPage(){
         return
       }
 
-      // Debug: Mostrar datos que se van a sincronizar
       console.log('=== DATOS A SINCRONIZAR ===')
       console.log('Empleado actual:', currentEmpleadoId)
       console.log('Gastos:', payload.gastos)
@@ -305,7 +450,6 @@ export default function SubirPage(){
       console.log('Tarjetas:', payload.tarjetas_nuevas.length)
       console.log('Abonos:', payload.abonos.length)
 
-      // Obtener empleado_identificacion (truncado a 20 caracteres)
       const rawEmpleadoId = localStorage.getItem('empleado_identificacion')
       const empleadoId = rawEmpleadoId ? String(rawEmpleadoId).substring(0, 20) : null
       
@@ -314,30 +458,25 @@ export default function SubirPage(){
         return
       }
 
-      // Asegurar que todos los gastos tengan empleado_identificacion
       payload.gastos = payload.gastos.map(gasto => ({
         ...gasto,
         empleado_identificacion: gasto.empleado_identificacion || empleadoId
       }))
 
-      // Asegurar que todas las bases tengan empleado_id
       payload.bases = payload.bases.map(base => ({
         ...base,
         empleado_id: base.empleado_id || empleadoId
       }))
       p && p.mark('normalizePayload')
 
-
       const res = await apiClient.sync(payload)
       p && p.mark('apiSync')
       
-      // Debug: Mostrar respuesta de sincronización
       console.log('=== RESPUESTA DE SINCRONIZACIÓN ===')
       console.log('Respuesta completa:', res)
       console.log('Gastos creados:', res?.data?.created_gastos)
       console.log('Bases creadas:', res?.data?.created_bases)
 
-      // Manejo explícito de estados/resultados
       if (!res?.success) {
         const status = res?.status
         const type = res?.type
@@ -382,7 +521,6 @@ export default function SubirPage(){
         return
       }
 
-      // Mapear IDs temporales de tarjetas a códigos reales
       if (res?.data?.created_tarjetas?.length) {
         const tarjetas = await offlineDB.getTarjetas()
         const map = new Map(res.data.created_tarjetas.map(x => [x.temp_id, x.codigo]))
@@ -391,28 +529,23 @@ export default function SubirPage(){
       }
       p && p.mark('mapTempIds')
 
-      // Limpiar outbox tras éxito
       await Promise.all(outbox.map(item => offlineDB.removeOutbox(item.id)))
       p && p.mark('clearOutbox')
 
-      // Marcar fin de jornada: limpiar caches auxiliares
       await offlineDB.resetWorkingMemory()
       localStorage.removeItem('tarjetas_data')
       localStorage.removeItem('tarjetas_stats')
       localStorage.removeItem('tarjetas_last_download')
       p && p.mark('resetCache')
 
-      // Permisos: el backend ajusta estados al finalizar /sync. Evitar llamada extra desde frontend
       p && p.mark('updatePerm')
 
-      // Actualizar UI inmediatamente (panel a 0) antes de mostrar mensaje
       setPending(0)
       setOutboxData({ tarjetas: 0, abonos: 0, gastos: 0, bases: 0 })
       setLocalGastos([])
       setLocalBases([])
       setBusy(false)
 
-      // Calcular resumen desde la respuesta para precisión
       const createdTarjetas = Number(res?.data?.created_tarjetas?.length || 0)
       const createdAbonos = Number(res?.data?.created_abonos?.length || 0)
       const createdGastos = Number(res?.data?.created_gastos || 0)
@@ -423,16 +556,19 @@ export default function SubirPage(){
         ? 'Operación idempotente: ya había sido procesada anteriormente.'
         : `Sincronización completada. Cambios aplicados — Tarjetas: ${createdTarjetas}, Abonos: ${createdAbonos}, Gastos: ${createdGastos}, Bases: ${createdBases}.`
 
-      showMessage(`${successMsg} Total: ${totalSync}.`, 'success')
+      const totals = preflight?.totals
+      const formulaText = totals
+        ? ` Efectivo a entregar: ${currency(totals.efectivoEntregar)} = (Recaudo ${currency(totals.recaudoEfectivo)} efectivo + ${currency(totals.recaudoConsignacion)} consignación${totals.recaudoOtros ? ` + ${currency(totals.recaudoOtros)} otros` : ''}) + Base ${currency(totals.baseTotal)} - Préstamos ${currency(totals.prestamosTotal)} - Gastos ${currency(totals.gastosTotal)}.`
+        : ''
+
+      showMessage(`${successMsg} Total: ${totalSync}.${formulaText}`, 'success')
       localStorage.setItem('flash_message', 'Sincronización completada con éxito. Listo para nueva jornada.')
       p && p.table()
       
-      // Mantener mensaje de éxito visible 10s y luego volver a inicio
       try { await refresh() } catch {}
       setTimeout(() => { navigate('/home') }, 10000)
       
     } catch (e) {
-      // Errores inesperados fuera del flujo de apiClient.sync
       console.error('Error en sincronización (inesperado):', e)
       showMessage('❌ ERROR INESPERADO — Etapa: cliente. ' + (e?.message || 'Revisa la consola y tu conexión'), 'error')
     } finally {
@@ -658,6 +794,88 @@ export default function SubirPage(){
           </div>
         </div>
       </main>
+      {preflightModal && (
+        <div style={{position:'fixed', inset:0, background:'rgba(0,0,0,.7)', zIndex:9999, display:'grid', placeItems:'center'}} role="dialog" aria-modal="true">
+          <div className="card" style={{width:'94%', maxWidth:720, maxHeight:'90vh', overflowY:'auto', background:'#0e1526', border:'1px solid #223045'}}>
+            <h2 style={{marginBottom:8}}>Liquidación previa a sincronizar</h2>
+            <p style={{marginBottom:12, color:'var(--muted)'}}>
+              Confirma que los valores corresponden al efectivo del día antes de enviarlo al servidor.
+            </p>
+            <div style={{display:'grid', gap:12}}>
+              <div style={{background:'#111b32', padding:12, borderRadius:8}}>
+                <strong>Recaudo del día</strong>
+                <div style={{display:'flex', justifyContent:'space-between', marginTop:6}}>
+                  <span>Efectivo</span>
+                  <b>{currency(preflightModal.totals.recaudoEfectivo)}</b>
+                </div>
+                <div style={{display:'flex', justifyContent:'space-between', marginTop:4}}>
+                  <span>Consignación</span>
+                  <b>{currency(preflightModal.totals.recaudoConsignacion)}</b>
+                </div>
+                {preflightModal.totals.recaudoOtros > 0 && (
+                  <div style={{display:'flex', justifyContent:'space-between', marginTop:4}}>
+                    <span>Otros métodos</span>
+                    <b>{currency(preflightModal.totals.recaudoOtros)}</b>
+                  </div>
+                )}
+                <div style={{display:'flex', justifyContent:'space-between', marginTop:8, borderTop:'1px solid #1f2a44', paddingTop:6}}>
+                  <span>Total recaudo</span>
+                  <b>{currency(preflightModal.totals.recaudoTotal)}</b>
+                </div>
+              </div>
+              <div style={{display:'grid', gap:8, background:'#111b32', padding:12, borderRadius:8}}>
+                <div style={{display:'flex', justifyContent:'space-between'}}>
+                  <span>Base registrada</span>
+                  <b>{currency(preflightModal.totals.baseTotal)}</b>
+                </div>
+                <div style={{display:'flex', justifyContent:'space-between'}}>
+                  <span>Préstamos nuevos</span>
+                  <b>{currency(preflightModal.totals.prestamosTotal)}</b>
+                </div>
+                <div style={{display:'flex', justifyContent:'space-between'}}>
+                  <span>Gastos</span>
+                  <b>{currency(preflightModal.totals.gastosTotal)}</b>
+                </div>
+              </div>
+              <div style={{background:'#14532d', padding:12, borderRadius:8, color:'white'}}>
+                <strong>Efectivo a entregar</strong>
+                <div style={{fontSize:24}}>{currency(preflightModal.totals.efectivoEntregar)}</div>
+                <small style={{display:'block', marginTop:4, color:'#bbf7d0'}}>
+                  Recaudo (efectivo + consignación) + Base - Préstamos - Gastos
+                </small>
+              </div>
+              <div style={{display:'grid', gap:4, fontSize:13, color:'var(--muted)'}}>
+                <span>Tarjetas nuevas: <b>{preflightModal.counts.tarjetas}</b></span>
+                <span>Abonos: <b>{preflightModal.counts.abonos}</b></span>
+                <span>Gastos: <b>{preflightModal.counts.gastos}</b></span>
+                <span>Bases: <b>{preflightModal.counts.bases}</b></span>
+              </div>
+              {preflightModal.details?.abonos?.length > 0 && (
+                <div style={{background:'#0b1224', padding:12, borderRadius:8, border:'1px solid #1f2a44'}}>
+                  <strong>Detalle de abonos ({preflightModal.details.abonos.length})</strong>
+                  <div style={{marginTop:8, display:'grid', gap:6}}>
+                    {preflightModal.details.abonos.map(item => (
+                      <div key={item.id} style={{display:'grid', gridTemplateColumns:'1fr auto', gap:8, fontSize:13, borderBottom:'1px dashed #1f2a44', paddingBottom:4, alignItems:'center'}}>
+                        <div>
+                          <div><b>{currency(item.monto)}</b> — {item.metodo === 'consignacion' ? 'Consignación' : 'Efectivo'}</div>
+                          <small style={{color:'var(--muted)'}}>Tarjeta: {item.tarjeta || '—'}</small>
+                        </div>
+                        <div style={{textAlign:'right', color:'var(--muted)', fontSize:12}}>
+                          {formatHour(item.ts)}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+            <div style={{display:'flex', justifyContent:'flex-end', gap:10, marginTop:18}}>
+              <button onClick={cancelPreflight}>Cancelar</button>
+              <button className="primary" onClick={confirmPreflight}>Aceptar y sincronizar</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

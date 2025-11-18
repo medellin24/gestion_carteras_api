@@ -7,3 +7,6 @@ python-jose[cryptography]
 python-multipart
 python-dotenv
 email-validator
+SQLAlchemy>=2.0,<2.1
+alembic>=1.12
+tzdata>=2024.1

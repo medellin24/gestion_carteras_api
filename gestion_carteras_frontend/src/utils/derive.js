@@ -1,16 +1,24 @@
 function parseISODateToLocal(dateStr) {
   if (!dateStr) return null
   try {
-    // Maneja 'YYYY-MM-DD' como local
+    // YYYY-MM-DD => local day
     if (/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
       const [y, m, d] = dateStr.split('-').map(Number)
       return new Date(y, m - 1, d)
     }
+    // ISO con zona explícita
+    if (/[zZ]|[\+\-]\d{2}:\d{2}$/.test(dateStr)) {
+      const d = new Date(dateStr)
+      return isNaN(d.getTime()) ? null : d
+    }
+    // ISO con 'T' sin zona -> tratar como UTC naive
+    if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d{1,6})?)?$/.test(dateStr)) {
+      const d = new Date(dateStr + 'Z')
+      return isNaN(d.getTime()) ? null : d
+    }
     const d = new Date(dateStr)
     return isNaN(d.getTime()) ? null : d
-  } catch {
-    return null
-  }
+  } catch { return null }
 }
 
 function startOfDay(d) {
@@ -65,31 +73,38 @@ export function computeDerived(tarjeta, abonos = [], hoy = new Date()) {
   const fechaCreacion = parseISODateToLocal(String(tarjeta?.fecha_creacion || '')) || new Date(0)
   const totalAbonado = sumAbonos(abonos)
   const saldoPendiente = Math.max(0, total - totalAbonado)
-  const cuotasPagadas = cuotaMonto > 0 ? Math.floor(totalAbonado / cuotaMonto) : 0
+  const cuotasPagadasExactas = cuotaMonto > 0 ? totalAbonado / cuotaMonto : 0
+  const cuotasPagadas = Math.floor(cuotasPagadasExactas)
   const diasTranscurridos = Math.max(0, diffDays(hoy, fechaCreacion))
   // Periodicidad diaria: una cuota por día
   const cuotasEsperadas = Math.min(cuotas, diasTranscurridos)
   const cuotasRestantes = Math.max(0, cuotas - cuotasPagadas)
-  const diferenciaCuotas = cuotasPagadas - cuotasEsperadas // + adelantadas, - atrasadas
+  const cuotasBalanceDecimal = cuotaMonto > 0
+    ? Number(((totalAbonado - (cuotasEsperadas * cuotaMonto)) / cuotaMonto).toFixed(2))
+    : 0
   const fechaVencimiento = cuotas > 0 ? addDays(fechaCreacion, cuotas) : null
   const diasPasadosVenc = fechaVencimiento ? Math.max(0, diffDays(hoy, fechaVencimiento)) : 0
   // Cuotas completas restantes y saldo parcial restante (si la división no es exacta)
   const cuotasRestantesCompletas = cuotaMonto > 0 ? Math.max(0, Math.floor(saldoPendiente / cuotaMonto)) : 0
-  const saldoRestanteParcial = Math.max(0, saldoPendiente - (cuotasRestantesCompletas * cuotaMonto))
+  const saldoRestanteParcialRaw = Math.max(0, saldoPendiente - (cuotasRestantesCompletas * cuotaMonto))
+  const saldoRestanteParcial = Number(saldoRestanteParcialRaw.toFixed(2))
   const abonoDelDia = sumAbonosDelDia(abonos, hoy)
+  const cuotasAdelantadas = cuotasBalanceDecimal > 0 ? cuotasBalanceDecimal : 0
+  const cuotasAtrasadas = cuotasBalanceDecimal < 0 ? Math.abs(cuotasBalanceDecimal) : 0
 
   return {
     total_abonado: totalAbonado,
     saldo_pendiente: saldoPendiente,
     cuotas_restantes: cuotasRestantes,
-    cuotas_adelantadas: Math.max(0, diferenciaCuotas),
-    cuotas_atrasadas: Math.max(0, -diferenciaCuotas),
+    cuotas_adelantadas: cuotasAdelantadas,
+    cuotas_atrasadas: cuotasAtrasadas,
     dias_pasados_cancelacion: diasPasadosVenc,
     fecha_vencimiento: fechaVencimiento ? toYYYYMMDD(fechaVencimiento) : null,
     abono_del_dia: abonoDelDia,
     cuota_monto: cuotaMonto,
     cuotas_restantes_completas: cuotasRestantesCompletas,
     saldo_restante: saldoRestanteParcial,
+    cuotas_balance_decimal: cuotasBalanceDecimal,
   }
 }
 

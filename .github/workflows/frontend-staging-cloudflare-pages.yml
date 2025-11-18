@@ -1,0 +1,48 @@
+name: Frontend (staging) - Deploy to Cloudflare Pages
+
+on:
+  push:
+    branches: [ develop ]
+    paths:
+      - 'gestion_carteras_frontend/**'
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      deployments: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+          cache-dependency-path: gestion_carteras_frontend/package-lock.json
+
+      - name: Install deps
+        working-directory: gestion_carteras_frontend
+        run: npm ci
+
+      - name: Build (staging)
+        working-directory: gestion_carteras_frontend
+        env:
+          VITE_API_BASE_URL: ${{ secrets.VITE_API_BASE_URL_STAGING }}
+          VITE_HTTP_TIMEOUT_MS: 120000
+        run: npm run build
+
+      - name: Publish to Cloudflare Pages (staging)
+        uses: cloudflare/pages-action@v1
+        with:
+          apiToken: ${{ secrets.CF_API_TOKEN }}
+          accountId: ${{ secrets.CF_ACCOUNT_ID }}
+          projectName: ${{ secrets.CF_PAGES_PROJECT_STAGING }}
+          directory: gestion_carteras_frontend/dist
+        env:
+          # Forzar a que el action NO cree GitHub Deployments (causa 403)
+          GITHUB_TOKEN: ""
+
+

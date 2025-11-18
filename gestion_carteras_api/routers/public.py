@@ -16,6 +16,7 @@ class SignupRequest(BaseModel):
     contacto: Optional[str] = None
     plan_max_empleados: Optional[int] = None  # si None => trial 1 empleado
     password_admin: str
+    timezone: Optional[str] = None  # IANA, ej: 'America/Bogota'
 
 
 class SignupResponse(BaseModel):
@@ -37,11 +38,16 @@ def signup(body: SignupRequest):
         if cur.fetchone():
             raise HTTPException(status_code=409, detail="Email ya registrado. Inicia sesión o usa otro email.")
 
-        # crear cuenta
+        # crear cuenta (guardar timezone_default si se envía)
         cur.execute(
             """
-            INSERT INTO cuentas_admin (nombre, estado_suscripcion, plan, fecha_inicio, fecha_fin, max_empleados, trial_until)
-            VALUES (%s, %s, %s, %s, %s, %s, %s)
+            ALTER TABLE cuentas_admin ADD COLUMN IF NOT EXISTS timezone_default TEXT
+            """
+        )
+        cur.execute(
+            """
+            INSERT INTO cuentas_admin (nombre, estado_suscripcion, plan, fecha_inicio, fecha_fin, max_empleados, trial_until, timezone_default)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
             RETURNING id
             """,
             (
@@ -52,19 +58,20 @@ def signup(body: SignupRequest):
                 (hoy + timedelta(days=30)) if not trial else trial_until,  # fecha_fin para planes pagos (placeholder 30 días) o None en trial
                 max_emp,
                 trial_until,
+                (body.timezone or 'UTC'),
             ),
         )
         cuenta_id = cur.fetchone()[0]
 
-        # crear admin
+        # crear admin (guardar timezone si se envía, default UTC)
         pwd_hash = get_password_hash(body.password_admin)
         cur.execute(
             """
-            INSERT INTO usuarios (username, password_hash, role, cuenta_id, is_active)
-            VALUES (%s, %s, 'admin', %s, TRUE)
+            INSERT INTO usuarios (username, password_hash, role, cuenta_id, is_active, timezone)
+            VALUES (%s, %s, 'admin', %s, TRUE, %s)
             RETURNING id
             """,
-            (body.email, pwd_hash, cuenta_id),
+            (body.email, pwd_hash, cuenta_id, (body.timezone or 'UTC')),
         )
 
     return SignupResponse(cuenta_id=cuenta_id, trial=trial, max_empleados=max_emp)

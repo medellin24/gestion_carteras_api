@@ -1,5 +1,9 @@
 name: Backend - Build to ECR and Update App Runner
 
+concurrency:
+  group: apprunner-deploy-${{ github.ref }}
+  cancel-in-progress: true
+
 on:
   push:
     branches: [ main ]
@@ -29,26 +33,60 @@ jobs:
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Login to Amazon ECR
+        uses: aws-actions/amazon-ecr-login@v2
+        with:
+          mask-password: true
+
+      - name: Sanitize and validate ECR URI
         run: |
-          aws ecr get-login-password --region "$AWS_REGION" | docker login --username AWS --password-stdin "${ECR_URI%/*}"
+          RAW="$ECR_URI"
+          RAW=$(echo "$RAW" | tr '[:upper:]' '[:lower:]')
+          RAW=$(echo "$RAW" | sed 's/\"//g; s/'"'"'//g')
+          RAW=$(echo "$RAW" | xargs)
+          echo "$RAW" | grep -Eq '^[a-z0-9]+\.dkr\.ecr\.[a-z0-9-]+\.amazonaws\.com/.+' || { echo "ECR_URI inválida: valor no parece un repositorio ECR"; exit 1; }
+          echo "ECR_REPO=$RAW" >> $GITHUB_ENV
 
       - name: Build Docker image (:prod)
         run: |
-          docker build -t "$ECR_URI:prod" .
+          docker build -t "$ECR_REPO:prod" .
 
       - name: Push to ECR (:prod)
         run: |
-          docker push "$ECR_URI:prod"
+          docker push "$ECR_REPO:prod"
 
-      - name: Update App Runner service to prod tag
+      - name: Wait for App Runner to be idle
+        shell: bash
         run: |
-          aws apprunner update-service \
-            --service-arn "$APP_RUNNER_SERVICE_ARN" \
-            --source-configuration '{
-              "ImageRepository": {
-                "ImageIdentifier": "'"$ECR_URI:prod"'",
-                "ImageRepositoryType": "ECR",
-                "ImageConfiguration": {"Port": "8000"}
-              }
-            }'
+          set -e
+          for i in {1..40}; do
+            STATUS=$(aws apprunner describe-service --service-arn "$APP_RUNNER_SERVICE_ARN" --query 'Service.Status' --output text)
+            echo "Status: $STATUS"
+            if [[ "$STATUS" == "RUNNING" || "$STATUS" == "PAUSED" ]]; then
+              break
+            fi
+            sleep 15
+          done
+          if [[ "$STATUS" != "RUNNING" && "$STATUS" != "PAUSED" ]]; then
+            echo "Service not idle after wait. Status=$STATUS"; exit 1
+          fi
+
+      - name: Update App Runner service to prod tag (retry)
+        run: |
+          set -e
+          for i in 0 5 10 20 30; do
+            sleep $i
+            if aws apprunner update-service \
+              --service-arn "$APP_RUNNER_SERVICE_ARN" \
+              --source-configuration '{
+                "ImageRepository": {
+                  "ImageIdentifier": "'"$ECR_REPO:prod"'",
+                  "ImageRepositoryType": "ECR",
+                  "ImageConfiguration": {"Port": "8000"}
+                }
+              }'; then
+              echo "Update succeeded"; exit 0
+            fi
+            echo "Update failed, retrying..."
+          done
+          echo "Update failed after retries"; exit 1
 

@@ -2,6 +2,7 @@ import json
 import time
 import logging
 from typing import Dict, List, Optional, Any, Union
+import base64 as _b64
 from datetime import date, datetime
 from decimal import Decimal
 
@@ -36,6 +37,12 @@ class APIClient:
         self.session = requests.Session()
         self.session.headers.update(self.config.default_headers)
         self.session.timeout = self.config.timeout
+        # Caches simples en memoria (TTL segundos)
+        self._cache_store: Dict[str, Dict[str, Any]] = {}
+        self._cache_ttl_s: Dict[str, int] = {
+            'empleados': 300,
+            'tipos_gastos': 3600,
+        }
     
     def _make_request(self, method: str, endpoint: str, data: Optional[Dict] = None, params: Optional[Dict] = None) -> Union[Dict, List]:
         """Realiza una petición HTTP con manejo de errores y reintentos"""
@@ -101,6 +108,11 @@ class APIClient:
         self.session.headers['Authorization'] = f"Bearer {access}"
         self._refresh_token = tokens.get('refresh_token')
         self._role = tokens.get('role')
+        # Capturar timezone desde el JWT si está disponible
+        try:
+            self._set_timezone_from_token(access)
+        except Exception:
+            pass
         return tokens
 
     def refresh(self) -> Dict:
@@ -114,7 +126,30 @@ class APIClient:
         self.session.headers['Authorization'] = f"Bearer {access}"
         self._refresh_token = tokens.get('refresh_token')
         self._role = tokens.get('role')
+        try:
+            self._set_timezone_from_token(access)
+        except Exception:
+            pass
         return tokens
+
+    # --- Utilidades JWT/timezone ---
+    def _set_timezone_from_token(self, jwt_token: str) -> None:
+        """Decodifica el payload del JWT (sin verificar firma) para leer 'timezone'."""
+        if not jwt_token or '.' not in jwt_token:
+            return
+        try:
+            payload_b64 = jwt_token.split('.')[1]
+            pad = '=' * (-len(payload_b64) % 4)
+            payload_json = _b64.urlsafe_b64decode((payload_b64 + pad).encode('utf-8')).decode('utf-8')
+            payload = json.loads(payload_json)
+            tz = payload.get('timezone')
+            if isinstance(tz, str) and tz:
+                self._timezone = tz
+        except Exception:
+            pass
+
+    def get_user_timezone(self) -> Optional[str]:
+        return getattr(self, '_timezone', None)
 
     # --- Registro público (signup/trial o con plan) ---
     def signup_public(self, nombre_negocio: str, email: str, password_admin: str, plan_max_empleados: Optional[int] = None) -> Dict:
@@ -123,6 +158,14 @@ class APIClient:
             "email": email,
             "password_admin": password_admin,
         }
+        # Detectar zona horaria local del sistema para guardar en el admin
+        try:
+            import tzlocal  # type: ignore
+            tz_name = tzlocal.get_localzone_name()
+            if isinstance(tz_name, str) and tz_name:
+                payload["timezone"] = tz_name
+        except Exception:
+            pass
         if plan_max_empleados is not None:
             payload["plan_max_empleados"] = int(plan_max_empleados)
         return self._make_request('POST', '/public/signup', data=payload)
@@ -200,7 +243,20 @@ class APIClient:
 
     # --- Métodos para Empleados ---
     def list_empleados(self) -> List[Dict]:
-        return self._make_request('GET', '/empleados/')
+        key = 'empleados'
+        ttl = self._cache_ttl_s.get(key, 0)
+        now = time.time()
+        ent = self._cache_store.get(key)
+        if ent and (now - ent.get('t', 0) < ttl):
+            return ent['v']
+        res = self._make_request('GET', '/empleados/')
+        # Guardar en cache si parece una lista válida
+        try:
+            if isinstance(res, list):
+                self._cache_store[key] = {'t': now, 'v': res}
+        except Exception:
+            pass
+        return res
 
     def create_empleado(self, empleado_data: Dict) -> Dict:
         payload = self._convert_types_for_json(empleado_data)
@@ -274,7 +330,19 @@ class APIClient:
 
     def list_tipos_gastos(self) -> List[Dict]:
         """Obtiene la lista de tipos de gastos desde la API."""
-        return self._make_request('GET', '/gastos/tipos')
+        key = 'tipos_gastos'
+        ttl = self._cache_ttl_s.get(key, 0)
+        now = time.time()
+        ent = self._cache_store.get(key)
+        if ent and (now - ent.get('t', 0) < ttl):
+            return ent['v']
+        res = self._make_request('GET', '/gastos/tipos')
+        try:
+            if isinstance(res, list):
+                self._cache_store[key] = {'t': now, 'v': res}
+        except Exception:
+            pass
+        return res
     
     def create_gasto(self, gasto_data: Dict) -> Dict:
         """Crea un nuevo gasto"""
@@ -436,6 +504,50 @@ class APIClient:
         if not payload:
             return {}
         return self._make_request('POST', f'/empleados/{empleado_identificacion}/permissions', data=payload)
+
+    # --- Contabilidad / Caja ---
+
+    def contabilidad_metricas(self, desde: Union[str, date], hasta: Union[str, date], empleado_id: Optional[str] = None) -> Dict:
+        if isinstance(desde, date):
+            desde = desde.isoformat()
+        if isinstance(hasta, date):
+            hasta = hasta.isoformat()
+        body = {"desde": desde, "hasta": hasta, "empleado_id": empleado_id}
+        return self._make_request('POST', '/contabilidad/metricas', data=body)
+
+    def caja_valor(self, empleado_id: str, fecha: Union[str, date]) -> Dict:
+        if isinstance(fecha, date):
+            fecha = fecha.isoformat()
+        return self._make_request('GET', f'/caja/{empleado_id}/{fecha}')
+
+    def registrar_salida_caja(self, fecha: Union[str, date], valor: Union[float, Decimal], concepto: Optional[str] = None, empleado_identificacion: Optional[str] = None) -> Dict:
+        if isinstance(fecha, date):
+            fecha = fecha.isoformat()
+        body: Dict[str, Union[str, float]] = {"fecha": fecha, "valor": float(valor)}
+        if concepto:
+            body["concepto"] = concepto
+        if empleado_identificacion:
+            body["empleado_identificacion"] = empleado_identificacion
+        return self._make_request('POST', '/caja/salidas', data=body)
+
+    def listar_salidas_caja(self, desde: Union[str, date], hasta: Union[str, date], empleado_id: Optional[str] = None) -> List[Dict]:
+        if isinstance(desde, date):
+            desde = desde.isoformat()
+        if isinstance(hasta, date):
+            hasta = hasta.isoformat()
+        params: Dict[str, str] = {"desde": str(desde), "hasta": str(hasta)}
+        if empleado_id:
+            params["empleado_id"] = empleado_id
+        return self._make_request('GET', '/caja/salidas', params=params)
+
+    def recalcular_caja_dia(self, empleado_identificacion: str, fecha: Union[str, date]) -> Dict:
+        if isinstance(fecha, date):
+            fecha = fecha.isoformat()
+        payload = {
+            "empleado_identificacion": empleado_identificacion,
+            "fecha": fecha,
+        }
+        return self._make_request('POST', '/caja/recalcular-dia', data=payload)
 
     # --- Métodos para gestión de suscripciones ---
     

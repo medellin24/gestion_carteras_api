@@ -1,12 +1,13 @@
 from .connection_pool import DatabasePool
 import logging
-from datetime import datetime, date
+from datetime import datetime, date, timezone
+from zoneinfo import ZoneInfo
 from typing import Dict, Optional
 from decimal import Decimal
 
 logger = logging.getLogger(__name__)
 
-def obtener_datos_liquidacion(empleado_identificacion: str, fecha: date) -> Dict:
+def obtener_datos_liquidacion(empleado_identificacion: str, fecha: date, tz_name: str = 'UTC') -> Dict:
     """
     Obtiene todos los datos necesarios para la liquidación diaria de un empleado
     
@@ -29,6 +30,21 @@ def obtener_datos_liquidacion(empleado_identificacion: str, fecha: date) -> Dict
             'total_final': Decimal('0')
         }
         
+        # Calcular límites UTC del día local y la fecha local (DATE)
+        try:
+            tz = ZoneInfo(tz_name or 'UTC')
+        except Exception:
+            tz = ZoneInfo('UTC')
+        start_local = datetime(fecha.year, fecha.month, fecha.day, 0, 0, 0, tzinfo=tz)
+        end_local = datetime(fecha.year, fecha.month, fecha.day, 23, 59, 59, 999000, tzinfo=tz)
+        start_utc = start_local.astimezone(timezone.utc)
+        end_utc = end_local.astimezone(timezone.utc)
+        # Para columnas timestamp sin zona, comparar con límites UTC sin tz (naive)
+        start_naive = start_utc.replace(tzinfo=None)
+        end_naive = end_utc.replace(tzinfo=None)
+        fecha_local = fecha
+        # debug removido
+
         with DatabasePool.get_cursor() as cursor:
             # 1. Contar tarjetas activas (todas las activas)
             cursor.execute('''
@@ -39,26 +55,28 @@ def obtener_datos_liquidacion(empleado_identificacion: str, fecha: date) -> Dict
             
             datos['tarjetas_activas'] = cursor.fetchone()[0]
             
-            # 2. Contar tarjetas canceladas EN LA FECHA específica
+            # 2. Contar tarjetas canceladas EN LA FECHA local (fecha_cancelacion es DATE)
             cursor.execute('''
                 SELECT COUNT(*) 
                 FROM tarjetas 
                 WHERE empleado_identificacion = %s 
                 AND estado = 'cancelada'
-                AND DATE(fecha_cancelacion) = %s
-            ''', (empleado_identificacion, fecha))
+                AND fecha_cancelacion = %s
+            ''', (empleado_identificacion, fecha_local))
             
             datos['tarjetas_canceladas'] = cursor.fetchone()[0]
+            # debug removido
             
             # 3. Contar tarjetas nuevas del día
             cursor.execute('''
                 SELECT COUNT(*) 
                 FROM tarjetas 
                 WHERE empleado_identificacion = %s 
-                AND DATE(fecha_creacion) = %s
-            ''', (empleado_identificacion, fecha))
+                  AND fecha_creacion >= %s AND fecha_creacion <= %s
+            ''', (empleado_identificacion, start_naive, end_naive))
             
             datos['tarjetas_nuevas'] = cursor.fetchone()[0]
+            # debug removido
             
             # 4. Total de registros (abonos del día)
             cursor.execute('''
@@ -66,8 +84,8 @@ def obtener_datos_liquidacion(empleado_identificacion: str, fecha: date) -> Dict
                 FROM abonos a
                 JOIN tarjetas t ON a.tarjeta_codigo = t.codigo
                 WHERE t.empleado_identificacion = %s 
-                AND DATE(a.fecha) = %s
-            ''', (empleado_identificacion, fecha))
+                  AND a.fecha >= %s AND a.fecha <= %s
+            ''', (empleado_identificacion, start_naive, end_naive))
             
             total_registros = cursor.fetchone()[0]
             datos['total_registros'] = total_registros
@@ -79,8 +97,8 @@ def obtener_datos_liquidacion(empleado_identificacion: str, fecha: date) -> Dict
                 FROM abonos a
                 JOIN tarjetas t ON a.tarjeta_codigo = t.codigo
                 WHERE t.empleado_identificacion = %s 
-                AND DATE(a.fecha) = %s
-            ''', (empleado_identificacion, fecha))
+                  AND a.fecha >= %s AND a.fecha <= %s
+            ''', (empleado_identificacion, start_naive, end_naive))
             
             result = cursor.fetchone()[0]
             datos['total_recaudado'] = Decimal(str(result)) if result else Decimal('0')
@@ -102,16 +120,23 @@ def obtener_datos_liquidacion(empleado_identificacion: str, fecha: date) -> Dict
                 SELECT COALESCE(SUM(monto), 0)
                 FROM tarjetas 
                 WHERE empleado_identificacion = %s 
-                AND DATE(fecha_creacion) = %s
-            ''', (empleado_identificacion, fecha))
+                  AND fecha_creacion >= %s AND fecha_creacion <= %s
+            ''', (empleado_identificacion, start_naive, end_naive))
             
             result = cursor.fetchone()[0]
             datos['prestamos_otorgados'] = Decimal(str(result)) if result else Decimal('0')
             logger.info(f"Préstamos otorgados: ${datos['prestamos_otorgados']} para {empleado_identificacion} en {fecha}")
             
             # 8. Total de gastos del día
-            from .gastos_db import obtener_total_gastos_fecha_empleado
-            datos['total_gastos'] = obtener_total_gastos_fecha_empleado(fecha, empleado_identificacion)
+            # Total gastos del día local (usar fecha_creacion entre límites UTC)
+            cursor.execute('''
+                SELECT COALESCE(SUM(valor), 0)
+                FROM gastos
+                WHERE empleado_identificacion = %s
+                  AND fecha_creacion >= %s AND fecha_creacion <= %s
+            ''', (empleado_identificacion, start_naive, end_naive))
+            result = cursor.fetchone()[0]
+            datos['total_gastos'] = Decimal(str(result)) if result is not None else Decimal('0')
             
             # 9. Calcular totales
             # Subtotal = Recaudado + Base - Préstamos

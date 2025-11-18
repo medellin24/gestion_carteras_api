@@ -100,15 +100,12 @@ def agregar_gasto(empleado_identificacion: str, tipo: str, valor: Decimal,
             logger.error(f"Tipo de gasto inválido: {tipo}")
             return None
         
-        # Usar fecha/hora local del sistema en lugar de CURRENT_TIMESTAMP del servidor
-        fecha_creacion_local = datetime.now()
-            
         with DatabasePool.get_cursor() as cursor:
             cursor.execute('''
                 INSERT INTO gastos (empleado_identificacion, tipo, fecha, valor, observacion, fecha_creacion)
-                VALUES (%s, %s, %s, %s, %s, %s)
+                VALUES (%s, %s, %s, %s, %s, NOW())
                 RETURNING id
-            ''', (empleado_identificacion, tipo, fecha, valor, observacion, fecha_creacion_local))
+            ''', (empleado_identificacion, tipo, fecha, valor, observacion))
             
             return cursor.fetchone()[0]
             

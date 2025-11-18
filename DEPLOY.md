@@ -30,13 +30,33 @@
 
 ## 2) Frontend en Cloudflare Pages
 
-1. Conectar el repositorio
+1. Conecta el repositorio
 2. Configuración de build:
    - Build command: `cd gestion_carteras_frontend && npm ci && npm run build`
    - Output directory: `gestion_carteras_frontend/dist`
-   - Variables:
-     - `    VITE_API_BASE_URL=https://<apprunner-url>`
-3. Deploy y prueba (Application tab → Manifest, Service Worker)
+
+3. Variables y secretos (GitHub Actions)
+   - Producción (workflow: `.github/workflows/frontend-cloudflare-pages.yml`):
+     - `CF_API_TOKEN` (API Token de Cloudflare con permisos de Pages)
+     - `CF_ACCOUNT_ID` (tu Account ID de Cloudflare)
+     - `CF_PAGES_PROJECT` (nombre del proyecto de Pages en producción)
+     - `VITE_API_BASE_URL` (URL de App Runner prod)
+       - Ejemplo: `https://asjiz6txe3.us-east-2.awsapprunner.com`
+   - Staging (workflow: `.github/workflows/frontend-staging-cloudflare-pages.yml`):
+     - `CF_API_TOKEN` (mismo de arriba)
+     - `CF_ACCOUNT_ID` (mismo de arriba)
+     - `CF_PAGES_PROJECT_STAGING` (nombre del proyecto de Pages para staging)
+     - `VITE_API_BASE_URL_STAGING` (URL de App Runner para staging)
+       - Ejemplo: `https://fxs84upa3u.us-east-2.awsapprunner.com/`
+
+4. Notas importantes
+   - El frontend ahora exige `VITE_API_BASE_URL` en entornos de despliegue (staging/prod). Si no está definida, el build correrá pero al ejecutar fallará explícitamente. Asegúrate de configurar los secretos anteriores.
+   - En desarrollo local, el cliente usa `http://127.0.0.1:8000` si no estableces variable.
+   - Verifica CORS en el backend para incluir los orígenes de Pages (staging y prod).
+
+5. Deploy y prueba
+   - Tras push a `develop` (staging) o `main` (producción), GitHub Actions construye y publica en Cloudflare Pages.
+   - Abre el sitio y valida en DevTools → Network que las solicitudes van al dominio correcto de App Runner.
 
 ## 3) DNS
 - Frontend: apunta tu dominio o subdominio a Pages (automático en Cloudflare)

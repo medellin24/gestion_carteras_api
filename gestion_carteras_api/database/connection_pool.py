@@ -45,6 +45,8 @@ class DatabasePool:
                         with conn.cursor() as _c:
                             _c.execute('SELECT 1')
                             _ = _c.fetchone()
+                            # Forzar sesión en UTC para coherencia de timestamps
+                            _c.execute("SET TIME ZONE 'UTC'")
                     except Exception:
                         # Reconectar si la conexión está rota
                         try:

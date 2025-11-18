@@ -1,5 +1,9 @@
 name: Backend (staging) - Build to ECR and Update App Runner
 
+concurrency:
+  group: apprunner-deploy-${{ github.ref }}
+  cancel-in-progress: true
+
 on:
   push:
     branches: [ develop ]
@@ -29,8 +33,22 @@ jobs:
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Login to Amazon ECR
+        uses: aws-actions/amazon-ecr-login@v2
+        with:
+          mask-password: true
+
+      - name: Sanitize and validate ECR URI
         run: |
-          aws ecr get-login-password --region "$AWS_REGION" | docker login --username AWS --password-stdin "${ECR_URI%/*}"
+          RAW="$ECR_URI"
+          # minúsculas
+          RAW=$(echo "$RAW" | tr '[:upper:]' '[:lower:]')
+          # quitar comillas simples y dobles
+          RAW=$(echo "$RAW" | sed 's/\"//g; s/'"'"'//g')
+          # trim espacios
+          RAW=$(echo "$RAW" | xargs)
+          # validar formato repo ECR
+          echo "$RAW" | grep -Eq '^[a-z0-9]+\.dkr\.ecr\.[a-z0-9-]+\.amazonaws\.com/.+' || { echo "ECR_URI inválida: valor no parece un repositorio ECR"; exit 1; }
+          echo "ECR_REPO=$RAW" >> $GITHUB_ENV
 
       - name: Set image tags (staging)
         run: |
@@ -39,23 +57,47 @@ jobs:
 
       - name: Build Docker image
         run: |
-          docker build -t "$ECR_URI:$IMAGE_TAG" -t "$ECR_URI:$ALIAS_TAG" .
+          docker build -t "$ECR_REPO:$IMAGE_TAG" -t "$ECR_REPO:$ALIAS_TAG" .
 
       - name: Push to ECR
         run: |
-          docker push "$ECR_URI:$IMAGE_TAG"
-          docker push "$ECR_URI:$ALIAS_TAG"
+          docker push "$ECR_REPO:$IMAGE_TAG"
+          docker push "$ECR_REPO:$ALIAS_TAG"
 
-      - name: Update App Runner service to staging tag
+      - name: Wait for App Runner to be idle
+        shell: bash
         run: |
-          aws apprunner update-service \
-            --service-arn "$APP_RUNNER_SERVICE_ARN" \
-            --source-configuration '{
-              "ImageRepository": {
-                "ImageIdentifier": "'"$ECR_URI:$ALIAS_TAG"'",
-                "ImageRepositoryType": "ECR",
-                "ImageConfiguration": {"Port": "8000"}
-              }
-            }'
+          set -e
+          for i in {1..40}; do
+            STATUS=$(aws apprunner describe-service --service-arn "$APP_RUNNER_SERVICE_ARN" --query 'Service.Status' --output text)
+            echo "Status: $STATUS"
+            if [[ "$STATUS" == "RUNNING" || "$STATUS" == "PAUSED" ]]; then
+              break
+            fi
+            sleep 15
+          done
+          if [[ "$STATUS" != "RUNNING" && "$STATUS" != "PAUSED" ]]; then
+            echo "Service not idle after wait. Status=$STATUS"; exit 1
+          fi
+
+      - name: Update App Runner service to staging tag (retry)
+        run: |
+          set -e
+          for i in 0 5 10 20 30; do
+            sleep $i
+            if aws apprunner update-service \
+              --service-arn "$APP_RUNNER_SERVICE_ARN" \
+              --source-configuration '{
+                "ImageRepository": {
+                  "ImageIdentifier": "'"$ECR_REPO:$ALIAS_TAG"'",
+                  "ImageRepositoryType": "ECR",
+                  "ImageConfiguration": {"Port": "8000"}
+                }
+              }'; then
+              echo "Update succeeded"; exit 0
+            fi
+            echo "Update failed, retrying..."
+          done
+          echo "Update failed after retries"; exit 1
 
 
