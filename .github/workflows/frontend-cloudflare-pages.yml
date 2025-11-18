@@ -40,7 +40,7 @@ jobs:
         with:
           apiToken: ${{ secrets.CF_API_TOKEN }}
           accountId: ${{ secrets.CF_ACCOUNT_ID }}
-          projectName: ${{ secrets.CF_PAGES_PROJECT }}
+          projectName: gestion-carteras-frontend
           directory: gestion_carteras_frontend/dist
         env:
           GITHUB_TOKEN: ""

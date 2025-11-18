@@ -39,7 +39,7 @@ jobs:
         with:
           apiToken: ${{ secrets.CF_API_TOKEN }}
           accountId: ${{ secrets.CF_ACCOUNT_ID }}
-          projectName: ${{ secrets.CF_PAGES_PROJECT_STAGING }}
+          projectName: gestion-carteras-frontend
           directory: gestion_carteras_frontend/dist
         env:
           # Forzar a que el action NO cree GitHub Deployments (causa 403)
