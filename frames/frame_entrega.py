@@ -6,6 +6,8 @@ from decimal import Decimal
 import logging
 from tkinter import Toplevel
 from tkinter import filedialog
+import threading
+import concurrent.futures
 
 # Importar el cliente de la API desde la nueva ruta raíz
 from api_client.client import api_client
@@ -13,6 +15,24 @@ from api_client.client import api_client
 logger = logging.getLogger(__name__)
 
 class FrameEntrega(ttk.Frame):
+    FILTROS = [
+        ('todos', 'Todos'),
+        ('abonos_hoy', 'Abonos del día'),
+        ('excelentes', 'Clientes excelentes'),
+        ('buenos', 'Clientes buenos (1-6 días)'),
+        ('regulares', 'Clientes regulares (7-15 días)'),
+        ('malos', 'Clientes malos (16-60 días)'),
+        ('clavos', 'Clavos (>60 días)'),
+    ]
+
+    FILTRO_TAGS = {
+        'abonos_hoy': ('filtro_abonos', '#86efac'),      # Verde más intenso
+        'excelentes': ('filtro_excelentes', '#d8b4fe'),  # Morado más intenso
+        'buenos': ('filtro_buenos', '#93c5fd'),          # Azul más intenso
+        'regulares': ('filtro_regulares', '#fde047'),    # Amarillo más intenso
+        'malos': ('filtro_malos', '#fb923c'),            # Naranja más intenso
+        'clavos': ('filtro_clavos', '#fca5a5'),          # Rojo más intenso
+    }
     def __init__(self, parent):
         super().__init__(parent)
         # Usar cliente global con token de sesión
@@ -26,10 +46,18 @@ class FrameEntrega(ttk.Frame):
         self.empleados_dict = {}
         # Caché de abonos por código de tarjeta
         self._abonos_cache_por_tarjeta = {}
+        self._abonos_raw_cache = {}
         self._abonos_prefetch_thread = None
         self._empleado_en_prefetch = None
         # Caché de resumen por código de tarjeta
         self._resumen_cache_por_tarjeta = {}
+        self._tarjetas_actuales = []
+        self._tarjeta_por_iid = {}
+        self._row_info = {}
+        self._fecha_actual_local = date.today()
+        self.filtro_actual = 'todos'
+        self._filtro_label_map = {label: key for key, label in self.FILTROS}
+        self._resumen_prefetch_thread = None
         
         style = ttk.Style()
         try:
@@ -51,7 +79,7 @@ class FrameEntrega(ttk.Frame):
         self.frame_izquierdo.pack(side='left', fill='both', expand=True, padx=5, pady=5)
         self.frame_izquierdo.pack_propagate(False)
 
-        self.frame_central = ttk.LabelFrame(self, text="Ver", width=180)
+        self.frame_central = ttk.LabelFrame(self, text="Filtros", width=180)
         self.frame_central.pack(side='left', fill='y', padx=5, pady=5)
         self.frame_central.pack_propagate(False)
 
@@ -111,6 +139,8 @@ class FrameEntrega(ttk.Frame):
         self.tree.tag_configure('row_even', background='white')
         self.tree.tag_configure('row_odd', background='#E6F4FA')  # Azul bondi claro
         self.tree.tag_configure('nueva', foreground='#006400')  # Verde oscuro para el texto
+        for tag_name, color in self.FILTRO_TAGS.values():
+            self.tree.tag_configure(tag_name, background=color)
         
         # Configurar columnas con sus nombres y anchos específicos
         anchos = {
@@ -230,6 +260,7 @@ class FrameEntrega(ttk.Frame):
             
             # Limpiar caché cuando cambia empleado/estado y preparar prefetch
             self._abonos_cache_por_tarjeta = {}
+            self._abonos_raw_cache = {}
             codigos_para_prefetch = []
 
             for idx, tarjeta in enumerate(tarjetas):
@@ -311,31 +342,52 @@ class FrameEntrega(ttk.Frame):
             messagebox.showerror("Error de API", f"Error al mostrar tarjetas: {e}")
 
     def _render_tarjetas_tabla(self, tarjetas, nueva_tarjeta_id, empleado_id):
-        """Pinta las tarjetas ya obtenidas (llamado desde hilo principal)."""
+        """Almacena las tarjetas actuales y renderiza respetando el filtro activo."""
         try:
-            # Calcular "hoy" según la zona horaria del usuario
+            self._tarjetas_actuales = list(tarjetas or [])
             try:
-                fecha_actual = datetime.now(ZoneInfo(self.token_tz)).date()
+                self._fecha_actual_local = datetime.now(ZoneInfo(self.token_tz)).date()
             except Exception:
-                fecha_actual = date.today()
-            # Limpiar caché cuando cambia empleado/estado y preparar prefetch
+                self._fecha_actual_local = date.today()
             self._abonos_cache_por_tarjeta = {}
             codigos_para_prefetch = []
-            for idx, tarjeta in enumerate(tarjetas or []):
-                # Preferir 'fecha' calculada por el backend; si no viene, convertir fecha_creacion a día local
+            for tarjeta in self._tarjetas_actuales:
                 try:
-                    fecha_api = tarjeta.get('fecha')
-                    if fecha_api:
-                        from datetime import date as _date
-                        fecha_tarjeta = _date.fromisoformat(str(fecha_api))
-                    else:
-                        raw_dt = tarjeta.get('fecha_creacion') or tarjeta.get('created_at')
-                        dt = datetime.fromisoformat(str(raw_dt).replace('Z', '+00:00')) if raw_dt else None
-                        if dt and dt.tzinfo is None:
-                            dt = dt.replace(tzinfo=timezone.utc)
-                        fecha_tarjeta = dt.astimezone(ZoneInfo(self.token_tz)).date() if dt else fecha_actual
+                    cod_tar = str(tarjeta.get('codigo') or tarjeta.get('id') or '')
                 except Exception:
-                    fecha_tarjeta = fecha_actual
+                    cod_tar = ''
+                if cod_tar:
+                    codigos_para_prefetch.append(cod_tar)
+            self._render_tarjetas_filtradas(nueva_tarjeta_id)
+            if hasattr(self, 'lbl_fecha') and self._fecha_actual_local:
+                try:
+                    self.lbl_fecha.config(text=self._fecha_actual_local.strftime("%d/%m/%Y"))
+                except Exception:
+                    pass
+            self._lanzar_prefetch_abonos(empleado_id, codigos_para_prefetch)
+        except Exception as e:
+            logger.error(f"Error al renderizar tarjetas: {e}")
+
+    def _render_tarjetas_filtradas(self, nueva_tarjeta_id=None):
+        """Pinta todas las tarjetas y aplica estilos según el filtro seleccionado."""
+        try:
+            try:
+                if '__loading__' in self.tree.get_children():
+                    self.tree.delete('__loading__')
+            except Exception:
+                pass
+            for item in self.tree.get_children():
+                self.tree.delete(item)
+            self._row_info = {}
+            self._tarjeta_por_iid = {}
+            tarjetas = self._tarjetas_actuales or []
+            fecha_actual = self._fecha_actual_local or date.today()
+            self._abonos_cache_por_tarjeta = {}
+            self._abonos_raw_cache = {}
+            visible_idx = 0
+            seleccion_iid = None
+            for tarjeta in tarjetas:
+                fecha_tarjeta = self._obtener_fecha_tarjeta(tarjeta, fecha_actual)
                 es_nueva = fecha_tarjeta == fecha_actual
                 fecha_str = fecha_tarjeta.strftime('%d/%m/%Y')
                 numero_ruta = tarjeta.get('numero_ruta')
@@ -354,38 +406,346 @@ class FrameEntrega(ttk.Frame):
                 apellido_cliente = (
                     (cliente_obj.get('apellido') if cliente_obj and 'apellido' in cliente_obj else tarjeta.get('cliente_apellido', ''))
                 ).upper()
-                row_tag = 'row_odd' if (idx % 2) else 'row_even'
-                item_id = self.tree.insert('', 'end', values=(
+                monto_str = f"${tarjeta.get('monto', 0):,.0f}"
+                cuotas_str = tarjeta.get('cuotas', '')
+                codigo = tarjeta.get('codigo', '')
+                iid = str(tarjeta.get('id', codigo) or f"row_{visible_idx}")
+                row_tag = 'row_odd' if (visible_idx % 2) else 'row_even'
+                tags = [row_tag]
+                if es_nueva:
+                    tags.append('nueva')
+                iid = str(tarjeta.get('id', codigo) or f"row_{visible_idx}")
+                base_tag = 'row_odd' if (visible_idx % 2) else 'row_even'
+                tags = [base_tag]
+                if es_nueva:
+                    tags.append('nueva')
+                self.tree.insert('', 'end', values=(
                     ruta_str,
-                    f"${tarjeta.get('monto',0):,.0f}",
+                    monto_str,
                     nombre_cliente,
                     apellido_cliente,
                     fecha_str,
-                    tarjeta.get('cuotas',''),
-                    tarjeta.get('codigo','')
-                ), iid=tarjeta.get('id', tarjeta.get('codigo')), tags=(row_tag,))
+                    cuotas_str,
+                    codigo
+                ), iid=iid, tags=tuple(tags))
+                self._row_info[iid] = {'base': base_tag, 'nueva': es_nueva}
+                self._tarjeta_por_iid[iid] = tarjeta
+                if nueva_tarjeta_id and iid == nueva_tarjeta_id:
+                    seleccion_iid = iid
+                visible_idx += 1
+            if visible_idx == 0:
                 try:
-                    cod_tar = str(tarjeta.get('codigo') or tarjeta.get('id') or '')
-                    if cod_tar:
-                        codigos_para_prefetch.append(cod_tar)
+                    self.tree.insert('', 'end', values=('', '', 'Sin resultados', '', '', ''), iid='__empty__')
                 except Exception:
                     pass
-                if es_nueva:
-                    current_tags = list(self.tree.item(item_id, 'tags') or [])
-                    if 'nueva' not in current_tags:
-                        current_tags.append('nueva')
-                    self.tree.item(item_id, tags=tuple(current_tags))
-                if nueva_tarjeta_id and (tarjeta.get('id', tarjeta.get('codigo')) == nueva_tarjeta_id):
-                    self.tree.selection_set(item_id)
-                    self.tree.see(item_id)
-                    self.tree.focus(item_id)
-            self._lanzar_prefetch_abonos(empleado_id, codigos_para_prefetch)
+            elif seleccion_iid:
+                self.tree.selection_set(seleccion_iid)
+                self.tree.see(seleccion_iid)
+                self.tree.focus(seleccion_iid)
+            self._apply_filtro_estilos()
         except Exception as e:
-            logger.error(f"Error al renderizar tarjetas: {e}")
+            logger.error(f"Error al pintar tarjetas filtradas: {e}")
+
+    def _apply_filtro_estilos(self):
+        if not self.tree or not self._row_info:
+            return
+        self._maybe_prefetch_resumen()
+        highlight_tag = None
+        if self.filtro_actual and self.filtro_actual != 'todos':
+            tag_info = self.FILTRO_TAGS.get(self.filtro_actual)
+            if tag_info:
+                highlight_tag = tag_info[0]
+                try:
+                    self.tree.tag_configure(highlight_tag, background=tag_info[1])
+                except Exception:
+                    pass
+        for iid in self.tree.get_children():
+            info = self._row_info.get(iid)
+            if not info:
+                continue
+            tags = []
+            tarjeta = self._tarjeta_por_iid.get(iid)
+            aplica_resaltado = (
+                highlight_tag
+                and tarjeta
+                and self._tarjeta_cumple_filtro(tarjeta, self.filtro_actual)
+            )
+            if aplica_resaltado:
+                tags.append(highlight_tag)
+            else:
+                base_tag = info.get('base', 'row_even')
+                if base_tag:
+                    tags.append(base_tag)
+            if info.get('nueva'):
+                tags.append('nueva')
+            self.tree.item(iid, tags=tuple(dict.fromkeys(tags)))
+
+    def _maybe_prefetch_resumen(self):
+        filtros_resumen = {'excelentes', 'buenos', 'regulares', 'malos', 'clavos'}
+        if self.filtro_actual not in filtros_resumen:
+            return
+
+        if self._resumen_prefetch_thread and self._resumen_prefetch_thread.is_alive():
+            return
+
+        # Identificar tarjetas que faltan
+        pendientes = []
+        for tarjeta in self._tarjetas_actuales or []:
+            codigo = str(tarjeta.get('codigo') or tarjeta.get('id') or '')
+            if not codigo:
+                continue
+            
+            tiene_dias = (
+                tarjeta.get('cuotas_pendientes_a_la_fecha') is not None
+                or tarjeta.get('dias_atrasados') is not None
+            )
+            tiene_pasados = tarjeta.get('dias_pasados_cancelacion') is not None
+            
+            # Si ya tiene ambos datos, no necesitamos descargar
+            if tiene_dias and tiene_pasados:
+                continue
+                
+            # Si ya está en caché pero no mergeado en la tarjeta, lo mergeamos ahora
+            if codigo in self._resumen_cache_por_tarjeta:
+                self._merge_tarjeta_con_resumen(codigo, self._resumen_cache_por_tarjeta[codigo])
+                continue
+                
+            pendientes.append(codigo)
+
+        if not pendientes:
+            return
+
+        # Si hay pendientes, mostrar indicador de carga
+        try:
+            self.config(cursor="wait")
+            if self.tree:
+                self.tree.config(cursor="wait")
+        except Exception:
+            pass
+
+        def _fetch_one(cod):
+            try:
+                res = self.api_client.get_tarjeta_resumen(cod)
+                return cod, res
+            except Exception:
+                return cod, None
+
+        def _worker():
+            try:
+                # Descarga paralela con 8 hilos
+                with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
+                    future_to_cod = {executor.submit(_fetch_one, c): c for c in pendientes}
+                    for future in concurrent.futures.as_completed(future_to_cod):
+                        c, res = future.result()
+                        if res:
+                            self._resumen_cache_por_tarjeta[c] = res
+                            self._merge_tarjeta_con_resumen(c, res)
+            except Exception as e:
+                print(f"Error en prefetch paralelo: {e}")
+            finally:
+                # Al terminar, restaurar cursor y aplicar estilos
+                def _finish():
+                    self._resumen_prefetch_thread = None
+                    try:
+                        self.config(cursor="")
+                        if self.tree:
+                            self.tree.config(cursor="")
+                    except Exception:
+                        pass
+                    self._apply_filtro_estilos()
+
+                try:
+                    self.after(0, _finish)
+                except Exception:
+                    pass
+
+        self._resumen_prefetch_thread = threading.Thread(target=_worker, daemon=True)
+        self._resumen_prefetch_thread.start()
+
+    def _merge_tarjeta_con_resumen(self, codigo, resumen):
+        """Enriquece la tarjeta en memoria con datos de resumen para reutilizarlos en filtros."""
+        if not codigo or not resumen:
+            return
+        campos = ('cuotas_pendientes_a_la_fecha', 'dias_pasados_cancelacion')
+        try:
+            for tarjeta in self._tarjetas_actuales or []:
+                if str(tarjeta.get('codigo') or tarjeta.get('id') or '') == codigo:
+                    for campo in campos:
+                        valor = resumen.get(campo)
+                        if valor is not None:
+                            tarjeta[campo] = valor
+                    # Normalizar: cuotas pendientes equivale a días atrasados
+                    if resumen.get('cuotas_pendientes_a_la_fecha') is not None:
+                        tarjeta['dias_atrasados'] = resumen.get('cuotas_pendientes_a_la_fecha')
+                    break
+            for iid, tarjeta in (self._tarjeta_por_iid or {}).items():
+                if str(tarjeta.get('codigo') or tarjeta.get('id') or '') == codigo:
+                    for campo in campos:
+                        valor = resumen.get(campo)
+                        if valor is not None:
+                            tarjeta[campo] = valor
+                    if resumen.get('cuotas_pendientes_a_la_fecha') is not None:
+                        tarjeta['dias_atrasados'] = resumen.get('cuotas_pendientes_a_la_fecha')
+        except Exception:
+            pass
+
+    def _on_filtro_cambiado(self, event=None):
+        label = getattr(self, 'combo_filtros', None).get() if hasattr(self, 'combo_filtros') else None
+        self.filtro_actual = self._filtro_label_map.get(label, 'todos')
+        self._apply_filtro_estilos()
+
+    def _tarjeta_cumple_filtro(self, tarjeta, filtro=None):
+        filtro = filtro or self.filtro_actual or 'todos'
+        if filtro == 'todos' or not tarjeta:
+            return False
+        codigo = str(tarjeta.get('codigo') or tarjeta.get('id') or '')
+        if filtro == 'abonos_hoy':
+            return self._tarjeta_tiene_abono_hoy(codigo)
+        dias_total = self._calcular_dias_atraso_total(codigo, tarjeta)
+        if filtro == 'excelentes':
+            return dias_total == 0
+        if filtro == 'buenos':
+            return 1 <= dias_total <= 6
+        if filtro == 'regulares':
+            return 7 <= dias_total <= 15
+        if filtro == 'malos':
+            return 16 <= dias_total <= 60
+        if filtro == 'clavos':
+            return dias_total > 60
+        return False
+
+    def _calcular_dias_atraso_total(self, codigo, tarjeta):
+        try:
+            raw_cuotas = tarjeta.get('cuotas_pendientes_a_la_fecha')
+            if raw_cuotas is not None:
+                # Si es negativo, son cuotas atrasadas. Si es positivo, son adelantadas (0 atraso)
+                dias_atraso = abs(int(raw_cuotas)) if int(raw_cuotas) < 0 else 0
+            else:
+                dias_atraso = int(tarjeta.get('dias_atrasados') or 0)
+        except Exception:
+            dias_atraso = 0
+        
+        try:
+            dias_pasados = int(tarjeta.get('dias_pasados_cancelacion') or 0)
+        except Exception:
+            dias_pasados = 0
+            
+        # Si no tenemos datos en la tarjeta, buscar en resumen (por si acaso no se hizo merge aun)
+        resumen = self._resumen_cache_por_tarjeta.get(codigo)
+        
+        # Calcular días atrasados (cuotas pendientes a la fecha)
+        if dias_atraso == 0:
+            if resumen:
+                val_resumen_cuotas = resumen.get('cuotas_pendientes_a_la_fecha')
+                if val_resumen_cuotas is not None:
+                    # Negativo significa atraso, positivo adelanto. Tomamos atraso absoluto.
+                    dias_atraso = abs(int(val_resumen_cuotas)) if int(val_resumen_cuotas) < 0 else 0
+                else:
+                    dias_atraso = int(resumen.get('dias_atrasados') or 0)
+            else:
+                # Fallback a cálculo local aproximado si no hay resumen de API aún
+                try:
+                    # Usar fecha local segura para el cálculo
+                    fecha_actual = self._fecha_actual_local or date.today()
+                    fecha_creacion = self._obtener_fecha_tarjeta(tarjeta, fecha_actual)
+                    
+                    # Días transcurridos desde creación (sin contar hoy)
+                    dias_transcurridos = (fecha_actual - fecha_creacion).days
+                    if dias_transcurridos < 0: dias_transcurridos = 0
+                    
+                    # Cuotas esperadas (excluyendo domingos si fuera necesario, pero simplificado por ahora)
+                    # Asumiendo pago diario lunes a sabado
+                    cuotas_esperadas = dias_transcurridos
+                    
+                    # Cuotas pagadas (aproximado por monto)
+                    monto_prestamo = float(tarjeta.get('monto') or 0)
+                    total_abonado = 0 # No tenemos abonos aquí en este punto del bucle, solo tarjeta
+                    # Si tuviéramos 'total_abonado' en tarjeta, podríamos usarlo.
+                    # Como no es fiable sin resumen, dejamos dias_atraso en 0 o lo que venga de tarjeta
+                    pass
+                except Exception:
+                    pass
+
+        # Calcular días pasados de cancelación
+        if dias_pasados == 0 and resumen:
+             try:
+                dias_pasados = int(resumen.get('dias_pasados_cancelacion') or 0)
+             except Exception:
+                pass
+        
+        # Si sigue siendo 0, intentar cálculo local para días pasados
+        if dias_pasados == 0:
+            try:
+                fecha_actual = self._fecha_actual_local or date.today()
+                fecha_creacion = self._obtener_fecha_tarjeta(tarjeta, fecha_actual)
+                num_cuotas = int(tarjeta.get('cuotas') or 0)
+                
+                # Fecha teórica de vencimiento (sin festivos por ahora, cálculo simple)
+                # Si cobro diario: fecha_creacion + cuotas (días)
+                from datetime import timedelta
+                fecha_vencimiento = fecha_creacion + timedelta(days=num_cuotas)
+                
+                delta_vencido = (fecha_actual - fecha_vencimiento).days
+                if delta_vencido > 0:
+                    dias_pasados = delta_vencido
+            except Exception:
+                pass
+
+        return dias_atraso + max(dias_pasados, 0)
+
+    def _tarjeta_tiene_abono_hoy(self, codigo):
+        if not codigo:
+            return False
+        abonos = self._abonos_raw_cache.get(codigo)
+        if abonos is None:
+            return False
+        hoy = self._fecha_actual_local or date.today()
+        for abono in abonos or []:
+            fecha_local = self._parse_fecha_local(abono.get('fecha') or abono.get('created_at'))
+            if fecha_local == hoy:
+                return True
+        return False
+
+    def _parse_fecha_local(self, raw_fecha):
+        if not raw_fecha:
+            return None
+        try:
+            if isinstance(raw_fecha, datetime):
+                dt = raw_fecha
+            else:
+                raw_str = str(raw_fecha)
+                if raw_str.endswith('Z'):
+                    raw_str = raw_str.replace('Z', '+00:00')
+                dt = datetime.fromisoformat(raw_str)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return dt.astimezone(ZoneInfo(self.token_tz)).date()
+        except Exception:
+            try:
+                return datetime.strptime(str(raw_fecha)[:10], "%Y-%m-%d").date()
+            except Exception:
+                return None
+
+    def _obtener_fecha_tarjeta(self, tarjeta, default_date):
+        try:
+            fecha_api = tarjeta.get('fecha')
+            if fecha_api:
+                return date.fromisoformat(str(fecha_api))
+        except Exception:
+            pass
+        raw_dt = tarjeta.get('fecha_creacion') or tarjeta.get('created_at')
+        if raw_dt:
+            try:
+                dt = datetime.fromisoformat(str(raw_dt).replace('Z', '+00:00'))
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                return dt.astimezone(ZoneInfo(self.token_tz)).date()
+            except Exception:
+                pass
+        return default_date
 
     def _lanzar_prefetch_abonos(self, empleado_id: str, codigos: list):
         """Dispara un hilo que precarga abonos para los códigos dados y los guarda en caché."""
-        import threading
         try:
             self._empleado_en_prefetch = empleado_id
 
@@ -400,7 +760,13 @@ class FrameEntrega(ttk.Frame):
                         abonos = self.api_client.list_abonos_by_tarjeta(codigo)
                         abonos = self._sort_abonos_asc(abonos)
                         rows = self._build_abono_rows(abonos, codigo)
+                        self._abonos_raw_cache[codigo] = abonos
                         self._abonos_cache_por_tarjeta[codigo] = rows
+                        if self.filtro_actual == 'abonos_hoy':
+                            try:
+                                self.after(0, self._apply_filtro_estilos)
+                            except Exception:
+                                pass
                         # Si esta tarjeta está seleccionada actualmente, actualizar UI con caché
                         try:
                             if self.lbl_codigo_tarjeta.cget('text') == codigo:
@@ -467,9 +833,13 @@ class FrameEntrega(ttk.Frame):
     def setup_seccion_ver(self):
         padding_y = 8
 
-        # Botón Ver
-        ttk.Button(self.frame_central, text="Ver", style='Bondi.TButton', padding=(0, 5)).pack(
-            fill='x', padx=5, pady=padding_y)
+        ttk.Label(self.frame_central, text="Filtro").pack(anchor='w', padx=5, pady=(padding_y, 0))
+        filtro_labels = [label for _, label in self.FILTROS]
+        self.combo_filtros = ttk.Combobox(self.frame_central, values=filtro_labels, state="readonly", style='Ocre.TCombobox')
+        self.combo_filtros.pack(fill='x', padx=5, pady=(0, padding_y))
+        if filtro_labels:
+            self.combo_filtros.current(0)
+        self.combo_filtros.bind('<<ComboboxSelected>>', self._on_filtro_cambiado)
 
         # Label para la fecha
         self.lbl_fecha = ttk.Label(self.frame_central, 

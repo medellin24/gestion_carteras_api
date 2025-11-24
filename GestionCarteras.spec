@@ -3,18 +3,10 @@
 from pathlib import Path
 
 project_dir = Path.cwd()
-collected_datas = []
-
-icons_dir = project_dir / 'assets' / 'icons'
-if icons_dir.exists():
-    for item in icons_dir.glob('*.png'):
-        collected_datas.append((str(item), f"assets/icons/{item.name}"))
-
-sounds_dir = project_dir / 'assets' / 'sounds'
-if sounds_dir.exists():
-    for item in sounds_dir.iterdir():
-        if item.is_file():
-            collected_datas.append((str(item), f"assets/sounds/{item.name}"))
+collected_datas = [
+    ('assets', 'assets'),
+    ('.env', '.')
+]
 
 
 a = Analysis(
@@ -22,7 +14,7 @@ a = Analysis(
     pathex=[str(project_dir)],
     binaries=[],
     datas=collected_datas,
-    hiddenimports=[],
+    hiddenimports=['tkcalendar', 'babel.numbers'],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

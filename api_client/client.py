@@ -43,6 +43,11 @@ class APIClient:
             'empleados': 300,
             'tipos_gastos': 3600,
         }
+
+    def _invalidate_cache(self, key: str):
+        """Invalida una entrada específica del caché"""
+        if key in self._cache_store:
+            del self._cache_store[key]
     
     def _make_request(self, method: str, endpoint: str, data: Optional[Dict] = None, params: Optional[Dict] = None) -> Union[Dict, List]:
         """Realiza una petición HTTP con manejo de errores y reintentos"""
@@ -260,14 +265,20 @@ class APIClient:
 
     def create_empleado(self, empleado_data: Dict) -> Dict:
         payload = self._convert_types_for_json(empleado_data)
-        return self._make_request('POST', '/empleados/', data=payload)
+        res = self._make_request('POST', '/empleados/', data=payload)
+        self._invalidate_cache('empleados')
+        return res
         
     def update_empleado(self, identificacion: str, empleado_data: Dict) -> Dict:
         payload = self._convert_types_for_json(empleado_data)
-        return self._make_request('PUT', f'/empleados/{identificacion}', data=payload)
+        res = self._make_request('PUT', f'/empleados/{identificacion}', data=payload)
+        self._invalidate_cache('empleados')
+        return res
         
     def delete_empleado(self, identificacion: str) -> Dict:
-        return self._make_request('DELETE', f'/empleados/{identificacion}')
+        res = self._make_request('DELETE', f'/empleados/{identificacion}')
+        self._invalidate_cache('empleados')
+        return res
 
     def transferir_tarjetas_empleado(self, empleado_origen: str, empleado_destino: str) -> Dict:
         """Transfiere todas las tarjetas de un empleado a otro empleado."""
@@ -275,6 +286,10 @@ class APIClient:
             "empleado_destino": empleado_destino,
             "confirmar_transferencia": True
         }
+        # Al transferir tarjetas, los contadores/estado de los empleados pueden cambiar, 
+        # pero principalmente invalidamos para mantener consistencia si algo más dependiera de esto.
+        # Aunque la lista de empleados per-se no cambia, es buena práctica.
+        self._invalidate_cache('empleados')
         return self._make_request('POST', f'/empleados/{empleado_origen}/transferir-tarjetas', data=payload)
 
     def eliminar_empleado_forzado(self, identificacion: str) -> Dict:
@@ -283,7 +298,9 @@ class APIClient:
             "confirmar_eliminacion": True,
             "eliminar_tarjetas": True
         }
-        return self._make_request('DELETE', f'/empleados/{identificacion}/forzar-eliminacion', data=payload)
+        res = self._make_request('DELETE', f'/empleados/{identificacion}/forzar-eliminacion', data=payload)
+        self._invalidate_cache('empleados')
+        return res
 
     # --- Métodos para Bases ---
     def get_base_by_empleado_fecha(self, empleado_id: str, fecha: str) -> Optional[Dict]:
@@ -529,6 +546,16 @@ class APIClient:
         if empleado_identificacion:
             body["empleado_identificacion"] = empleado_identificacion
         return self._make_request('POST', '/caja/salidas', data=body)
+
+    def registrar_entrada_caja(self, fecha: Union[str, date], valor: Union[float, Decimal], concepto: Optional[str] = None, empleado_identificacion: Optional[str] = None) -> Dict:
+        if isinstance(fecha, date):
+            fecha = fecha.isoformat()
+        body: Dict[str, Union[str, float]] = {"fecha": fecha, "valor": float(valor)}
+        if concepto:
+            body["concepto"] = concepto
+        if empleado_identificacion:
+            body["empleado_identificacion"] = empleado_identificacion
+        return self._make_request('POST', '/caja/entradas', data=body)
 
     def listar_salidas_caja(self, desde: Union[str, date], hasta: Union[str, date], empleado_id: Optional[str] = None) -> List[Dict]:
         if isinstance(desde, date):
