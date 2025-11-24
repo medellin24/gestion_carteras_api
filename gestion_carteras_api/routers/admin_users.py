@@ -1,5 +1,10 @@
 from typing import Optional
-from datetime import date, timedelta
+from datetime import date, timedelta, datetime
+try:
+    from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+except ImportError:
+    # Fallback para python < 3.9 si fuera necesario, aunque fastapi suele correr en 3.9+
+    from backports.zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
@@ -10,6 +15,14 @@ from ..database.connection_pool import DatabasePool
 
 router = APIRouter()
 
+def get_hoy_local(timezone_str: Optional[str]) -> date:
+    """Obtiene la fecha actual respetando la zona horaria del usuario."""
+    if not timezone_str:
+        timezone_str = 'America/Bogota' # Default razonable para este proyecto
+    try:
+        return datetime.now(ZoneInfo(timezone_str)).date()
+    except (ZoneInfoNotFoundError, Exception):
+        return datetime.now(ZoneInfo('UTC')).date()
 
 def enforce_account_state(cuenta_id: str) -> bool:
     """
@@ -351,7 +364,8 @@ def get_permisos_empleado(empleado_id: str, principal: dict = Depends(require_ad
     Lógica simple: puede descargar si descargar=TRUE Y fecha_accion < hoy
     """
     cuenta_id = principal.get("cuenta_id")
-    hoy = date.today()
+    # Usar fecha local para consistencia
+    hoy = get_hoy_local(principal.get("timezone"))
     
     with DatabasePool.get_cursor() as cur:
         # Obtener permisos del empleado
@@ -369,7 +383,7 @@ def get_permisos_empleado(empleado_id: str, principal: dict = Depends(require_ad
         
         # Si es la primera vez (fecha_accion es NULL), inicializar con valores por defecto
         if fecha_accion is None:
-            ayer = date.today() - timedelta(days=1)
+            ayer = hoy - timedelta(days=1)
             cur.execute("""
                 UPDATE empleados 
                 SET descargar=TRUE, subir=TRUE, fecha_accion=%s 
@@ -397,10 +411,12 @@ def rehabilitar_permisos(empleado_id: str, body: RehabilitarPermisosRequest, pri
     Lógica: pone descargar/subir en TRUE y fecha_accion en ayer para permitir hoy.
     """
     cuenta_id = principal.get("cuenta_id")
-    ayer = date.today() - timedelta(days=1)
+    # Usar fecha local - 1 día para asegurar que fecha_accion < hoy sea True para el usuario
+    hoy = get_hoy_local(principal.get("timezone"))
+    ayer = hoy - timedelta(days=1)
     
     with DatabasePool.get_cursor() as cur:
-        # Verificar que el empleado existe
+        # Verificar que el empleado existe y pertenece a la cuenta
         cur.execute("""
             SELECT 1 FROM empleados 
             WHERE identificacion=%s AND cuenta_id=%s
@@ -409,24 +425,24 @@ def rehabilitar_permisos(empleado_id: str, body: RehabilitarPermisosRequest, pri
         if not cur.fetchone():
             raise HTTPException(status_code=404, detail="Empleado no encontrado")
         
-        # Re-habilitar permisos según lo solicitado
+        # Re-habilitar permisos: Forzar actualización de flags y fecha
         updates = []
-        params = []
-        
         if body.descargar:
             updates.append("descargar=TRUE")
         if body.subir:
             updates.append("subir=TRUE")
-        
-        if updates:
-            updates.append("fecha_accion=%s")
-            params.extend([ayer, empleado_id, cuenta_id])
             
-            cur.execute(f"""
-                UPDATE empleados 
-                SET {', '.join(updates)}
-                WHERE identificacion=%s AND cuenta_id=%s
-            """, params)
+        if not updates:
+             updates = ["descargar=TRUE", "subir=TRUE"]
+
+        updates.append("fecha_accion=%s")
+        
+        sql = f"""
+            UPDATE empleados 
+            SET {', '.join(updates)}
+            WHERE identificacion=%s AND cuenta_id=%s
+        """
+        cur.execute(sql, [ayer, empleado_id, cuenta_id])
         
         # Devolver estado actualizado
         cur.execute("""
@@ -438,9 +454,8 @@ def rehabilitar_permisos(empleado_id: str, body: RehabilitarPermisosRequest, pri
         row = cur.fetchone()
         descargar, subir, fecha_accion = row
         
-        hoy = date.today()
-        puede_descargar = bool(descargar) and fecha_accion < hoy
-        puede_subir = bool(subir) and fecha_accion < hoy
+        puede_descargar = bool(descargar) and (fecha_accion is None or fecha_accion < hoy)
+        puede_subir = bool(subir) and (fecha_accion is None or fecha_accion < hoy)
         
         return PermisosEmpleado(
             descargar=bool(descargar),
@@ -460,7 +475,8 @@ def usar_permisos(empleado_id: str, body: UsarPermisosRequest, principal: dict =
     - Al subir: descargar=TRUE, subir=FALSE, fecha_accion=hoy
     """
     cuenta_id = principal.get("cuenta_id")
-    hoy = date.today()
+    # Usar fecha local para marcar el uso en el día correcto del usuario
+    hoy = get_hoy_local(principal.get("timezone"))
     
     with DatabasePool.get_cursor() as cur:
         # Verificar que el empleado existe
@@ -500,8 +516,8 @@ def usar_permisos(empleado_id: str, body: UsarPermisosRequest, principal: dict =
             descargar, subir, fecha_accion = descargar_actual, subir_actual, fecha_accion_actual
         
         # Calcular permisos efectivos
-        puede_descargar = bool(descargar) and fecha_accion < hoy
-        puede_subir = bool(subir) and fecha_accion < hoy
+        puede_descargar = bool(descargar) and (fecha_accion is None or fecha_accion < hoy)
+        puede_subir = bool(subir) and (fecha_accion is None or fecha_accion < hoy)
         
         return PermisosEmpleado(
             descargar=bool(descargar),

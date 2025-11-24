@@ -40,44 +40,84 @@ export default function DescargarPage() {
     return false
   }
 
+  // Función auxiliar para reintentos con backoff exponencial
+  async function retryOperation(operation, retries = 3, delay = 1000) {
+    try {
+      return await operation()
+    } catch (err) {
+      if (retries <= 0) throw err
+      await new Promise(resolve => setTimeout(resolve, delay))
+      return retryOperation(operation, retries - 1, delay * 1.5)
+    }
+  }
+
+  // Función auxiliar para procesar en lotes (concurrency limit)
+  async function processInBatches(items, batchSize, fn) {
+    const results = []
+    for (let i = 0; i < items.length; i += batchSize) {
+      const batch = items.slice(i, i + batchSize)
+      const batchResults = await Promise.all(batch.map(fn))
+      results.push(...batchResults)
+    }
+    return results
+  }
+
   async function enrichTarjetasWithResumen(tarjetas) {
     const hoy = new Date()
     logDownload('tarjetas_raw', { total: tarjetas?.length || 0, sample: (tarjetas||[]).slice(0,3) })
-    const enriched = await Promise.all(tarjetas.map(async (t) => {
-      // completar datos de cliente si falta CUALQUIER campo clave (incluye teléfono)
+    
+    // Procesar en lotes de 5 para evitar saturación de red en Android y timeouts
+    const enriched = await processInBatches(tarjetas, 5, async (t) => {
+      // 1. Completar datos de cliente
       try {
         if (t?.cliente_identificacion) {
           const needCliente = !t?.cliente?.nombre || !t?.cliente?.apellido || !t?.cliente?.telefono || !t?.cliente?.direccion
           if (needCliente) {
-            const cli = await apiClient.getClienteByIdentificacion(t.cliente_identificacion)
-            t.cliente = t.cliente || {}
-            t.cliente.nombre = cli?.nombre || t.cliente.nombre
-            t.cliente.apellido = cli?.apellido || t.cliente.apellido
-            t.cliente.telefono = cli?.telefono || t.cliente.telefono
-            t.cliente.direccion = cli?.direccion || t.cliente.direccion
-            // refuerzos a nivel raíz por compatibilidad en UI
-            t.telefono = t.telefono || cli?.telefono || t?.cliente?.telefono
-            t.cliente_telefono = t.cliente_telefono || cli?.telefono || t?.cliente?.telefono
-            // identificación en objeto cliente si no viene
-            if (!t?.cliente?.identificacion && t?.cliente_identificacion) t.cliente.identificacion = t.cliente_identificacion
-            logDownload('cliente_completado', { tarjeta: t.codigo, cliente_identificacion: t.cliente_identificacion, cliente: cli })
+            // Reintentar obtención de cliente si falla
+            await retryOperation(async () => {
+              const cli = await apiClient.getClienteByIdentificacion(t.cliente_identificacion)
+              t.cliente = t.cliente || {}
+              t.cliente.nombre = cli?.nombre || t.cliente.nombre
+              t.cliente.apellido = cli?.apellido || t.cliente.apellido
+              t.cliente.telefono = cli?.telefono || t.cliente.telefono
+              t.cliente.direccion = cli?.direccion || t.cliente.direccion
+              t.telefono = t.telefono || cli?.telefono || t?.cliente?.telefono
+              t.cliente_telefono = t.cliente_telefono || cli?.telefono || t?.cliente?.telefono
+              if (!t?.cliente?.identificacion && t?.cliente_identificacion) t.cliente.identificacion = t.cliente_identificacion
+            }, 2, 500)
+            logDownload('cliente_completado', { tarjeta: t.codigo, cliente_identificacion: t.cliente_identificacion })
           }
         }
-      } catch {}
-      // obtener abonos para derivar el resumen localmente
+      } catch (e) {
+        console.warn(`No se pudo completar info de cliente para ${t.codigo}`, e)
+        // No es crítico, continuamos
+      }
+
+      // 2. Obtener abonos (CRÍTICO: Con reintentos y fallo explícito)
       let abonos = []
       try {
-        abonos = await apiClient.getAbonosByTarjeta(t.codigo)
-        logDownload('abonos_tarjeta', { tarjeta: t.codigo, num: (abonos||[]).length, sample: (abonos||[]).slice(0,3) })
-      } catch { abonos = [] }
-      // guardar abonos offline por tarjeta
+        abonos = await retryOperation(async () => {
+          return await apiClient.getAbonosByTarjeta(t.codigo)
+        }, 3, 1000) // 3 intentos, espera inicial 1s
+        
+        logDownload('abonos_tarjeta', { tarjeta: t.codigo, num: (abonos||[]).length })
+      } catch (err) {
+        // Si falla después de 3 reintentos, ES UN ERROR REAL DE RED.
+        // NO debemos asumir abonos=[], porque eso corrompe el saldo.
+        // Lanzamos el error para detener la descarga completa.
+        console.error(`Fallo crítico descargando abonos tarjeta ${t.codigo}`, err)
+        throw new Error(`Error de red descargando abonos de tarjeta ${t.codigo}. Revisa tu conexión.`)
+      }
+
+      // 3. Guardar abonos offline
       try { await offlineDB.setAbonos(t.codigo, abonos) } catch {}
-      // computar resumen derivado localmente
+      
+      // 4. Computar resumen
       const resumen = computeDerived(t, abonos, hoy)
       const enrichedT = { ...t, resumen }
-      logDownload('tarjeta_enriched', { tarjeta: t.codigo, resumen })
       return enrichedT
-    }))
+    })
+    
     return enriched
   }
 
@@ -258,3 +298,5 @@ export default function DescargarPage() {
     </div>
   )
 }
+
+

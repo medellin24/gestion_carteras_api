@@ -224,20 +224,23 @@ export default function TarjetasPage() {
     }
   }, [filtradas.length, scrollToCodigo])
 
-function RecaudosOverlay({ tarjetas, onClose }){
+function RecaudosOverlay({ tarjetas, abonosPorTarjeta, onClose }){
   const today = formatDateYYYYMMDD()
   const [abonosHoyPorTarjeta, setAbonosHoyPorTarjeta] = useState({})
   const [totalHoy, setTotalHoy] = useState(0)
   const [noAbonan, setNoAbonan] = useState([])
   const [siAbonan, setSiAbonan] = useState([])
   const [tarjetasNuevas, setTarjetasNuevas] = useState([])
+  const [canceladasHoy, setCanceladasHoy] = useState([])
 
   useEffect(()=>{
     let cancelled = false
     ;(async()=>{
       try {
-        // Obtener tarjetas nuevas del outbox (offline)
+        // Obtener outbox para verificar operaciones locales pendientes
         const outOps = await offlineDB.readOutbox().catch(()=>[])
+        
+        // --- 1. TARJETAS NUEVAS ---
         const tarjetasNuevasOffline = outOps.filter(op => 
           op && op.type === 'tarjeta:new' && 
           op.ts && formatDateYYYYMMDD(new Date(op.ts)) === today
@@ -247,11 +250,9 @@ function RecaudosOverlay({ tarjetas, onClose }){
           monto: op.monto || 0
         }))
         
-        // Obtener tarjetas nuevas de la base de datos (online - ya sincronizadas)
         const tarjetasNuevasOnline = (tarjetas || []).filter(t => {
-          const fechaCreacion = t?.fecha_creacion
+          const fechaCreacion = t?.fecha_creacion || t?.created_at
           if (!fechaCreacion) return false
-          // Convertir fecha a string local para comparar
           const fecha = fechaCreacion instanceof Date ? 
             formatDateYYYYMMDD(fechaCreacion) : 
             formatDateYYYYMMDD(parseISODateToLocal(String(fechaCreacion)))
@@ -262,30 +263,47 @@ function RecaudosOverlay({ tarjetas, onClose }){
           monto: t.monto || 0
         }))
         
-        // Combinar ambas fuentes, evitando duplicados por código
         const tarjetasNuevasHoy = [...tarjetasNuevasOnline, ...tarjetasNuevasOffline]
           .filter((t, index, arr) => arr.findIndex(other => other.codigo === t.codigo) === index)
-        
-        // Obtener abonos del outbox para el día actual
+
+        // --- 2. ABONOS DEL DÍA (Online + Offline/Outbox) ---
+        // Abonos en outbox hechos hoy
         const abonosOutboxHoy = outOps.filter(op => 
           op && op.op === 'abono' && 
           op.ts && formatDateYYYYMMDD(new Date(op.ts)) === today
         )
+        // IDs de abonos en outbox para evitar duplicar si ya se sincronizaron parcialmente
         const abonoOutboxIds = new Set(
           abonosOutboxHoy.map(op => String(op?.id || `${op?.tarjeta_codigo || ''}-${op?.ts || 0}`))
         )
         
-        const entries = await Promise.all((tarjetas||[]).map(async (t)=>{
-          const list = await offlineDB.getAbonos(t.codigo).catch(()=>[])
+        // Calcular totales por tarjeta
+        const entries = (tarjetas||[]).map(t => {
+          const list = abonosPorTarjeta[t.codigo] || []
           const seenIds = new Set()
-          const sum = (list||[]).reduce((s,a)=>{
+          
+          // Sumar abonos de la DB que sean de hoy
+          const sumDB = list.reduce((s,a)=>{
             const d = a?.fecha ? parseISODateToLocal(String(a.fecha)) : (a?.ts ? new Date(a.ts): null)
             if (d && formatDateYYYYMMDD(d) === today) {
               const entryId = a && (a.id || a.outbox_id)
               if (entryId) {
                 seenIds.add(String(entryId))
+                // Si este abono ya está en outbox (porque se bajó pero sigue pendiente de confirmación o algo así),
+                // o si la lógica de outbox lo cubre, hay que tener cuidado.
+                // Simplificación: si está en DB y es de hoy, lo sumamos. 
+                // PERO si también está en outbox, la lógica de abajo lo sumaría de nuevo?
+                // `abonosOutboxHoy` son operaciones pendientes. 
+                // Si ya se sincronizó, debería desaparecer de outbox.
+                // Si está en outbox, NO debería estar en DB todavía (a menos que sea un update?).
+                // Asumimos que si está en DB es "confirmado" o "sincronizado".
+                // EXCEPCIÓN: Si acabamos de agregar a DB localmente (optimistic UI) y TAMBIÉN a outbox.
+                // `handlePagarCuota` hace ambas cosas: `offlineDB.queueOperation` Y `offlineDB.setAbonos`.
+                // Por tanto, debemos evitar duplicados.
                 if (abonoOutboxIds.has(String(entryId))) {
-                  return s
+                   // Ya lo contaremos desde el outbox o viceversa.
+                   // Mejor contarlo aquí (DB) y excluirlo de la suma de outbox si ya está "visto".
+                   return s + Number(a?.monto||0)
                 }
               }
               return s + Number(a?.monto||0)
@@ -293,27 +311,72 @@ function RecaudosOverlay({ tarjetas, onClose }){
             return s
           }, 0)
           
-          // Incluir abonos del outbox que aún no estén reflejados en el cache local
-          const outboxSum = abonosOutboxHoy
-            .filter(op => op.tarjeta_codigo === t.codigo && (!op.id || !seenIds.has(String(op.id))))
-            .reduce((s, op) => s + Number(op.monto || 0), 0)
-          
-          return [t.codigo, sum + outboxSum]
-        }))
+          // Sumar abonos del outbox que NO estén ya en la lista de DB (por ID)
+          const sumOutbox = abonosOutboxHoy
+            .filter(op => op.tarjeta_codigo === t.codigo)
+            .reduce((s, op) => {
+              // Si el abono de outbox tiene ID y ese ID ya fue visto en la DB, no lo sumamos de nuevo
+              if (op.id && seenIds.has(String(op.id))) return s
+              return s + Number(op.monto || 0)
+            }, 0)
+
+          return [t.codigo, sumDB + sumOutbox]
+        })
+        
         if (cancelled) return
         const map = Object.fromEntries(entries)
         const tot = Object.values(map).reduce((s,v)=>s+Number(v||0),0)
         const si = (tarjetas||[]).filter(t => Number(map[t.codigo]||0) > 0)
         const no = (tarjetas||[]).filter(t => !map[t.codigo] || Number(map[t.codigo])===0)
+        
+        // --- 3. TARJETAS CANCELADAS HOY ---
+        // Buscar actualizaciones de estado en outbox
+        const updatesMap = {}
+        outOps.forEach(op => {
+          if (op.type === 'tarjeta:update' && op.payload && (op.tarjeta_id || op.codigo)) {
+            const cid = String(op.tarjeta_id || op.codigo)
+            if (!updatesMap[cid] || op.ts > updatesMap[cid].ts) {
+              updatesMap[cid] = { ...op.payload, ts: op.ts }
+            }
+          }
+        })
+
+        const canceladas = (tarjetas || []).filter(t => {
+          const update = updatesMap[String(t.codigo)]
+          
+          // Estado efectivo
+          let estado = t.estado
+          if (update && update.estado) estado = update.estado
+          estado = (estado||'').toLowerCase()
+          
+          if (estado !== 'cancelada' && estado !== 'canceladas') return false
+          
+          // Fecha cancelación efectiva
+          let fechaCancel = t.fecha_cancelacion ? parseISODateToLocal(String(t.fecha_cancelacion)) : null
+          if (update) {
+            if (update.fecha_cancelacion) {
+              fechaCancel = parseISODateToLocal(String(update.fecha_cancelacion))
+            } else if (update.estado === 'cancelada' && !fechaCancel) {
+              // Si se canceló en outbox pero no tiene fecha explícita, usar timestamp de la op
+              fechaCancel = new Date(update.ts)
+            }
+          }
+          
+          if (!fechaCancel) return false
+          return formatDateYYYYMMDD(fechaCancel) === today
+        })
+
         setAbonosHoyPorTarjeta(map)
         setTotalHoy(tot)
         setSiAbonan(si)
         setNoAbonan(no)
         setTarjetasNuevas(tarjetasNuevasHoy)
+        setCanceladasHoy(canceladas)
+
       } catch {}
     })()
     return ()=>{ cancelled = true }
-  }, [tarjetas])
+  }, [tarjetas, abonosPorTarjeta])
 
   return (
     <div style={{position:'fixed', inset:0, zIndex:9998, background:'rgba(0,0,0,.6)', display:'grid', placeItems:'center'}} onClick={onClose}>
@@ -334,6 +397,20 @@ function RecaudosOverlay({ tarjetas, onClose }){
                   {tarjetasNuevas.map(t => (
                     <div key={t.codigo} className="val-info">
                       {(t?.cliente?.nombre||'')+' '+(t?.cliente?.apellido||'')} - {currency(t.monto)}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Tarjetas canceladas hoy */}
+            {canceladasHoy.length > 0 && (
+              <div>
+                <div className="neon-sub" style={{marginBottom:6, color:'#ef4444'}}>Canceladas hoy ({canceladasHoy.length})</div>
+                <div style={{display:'grid', gap:6}}>
+                  {canceladasHoy.map(t => (
+                    <div key={t.codigo} className="val-info" style={{color:'#fca5a5'}}>
+                      {(t?.cliente?.nombre||'')+' '+(t?.cliente?.apellido||'')}
                     </div>
                   ))}
                 </div>
@@ -440,7 +517,7 @@ function RecaudosOverlay({ tarjetas, onClose }){
       </div>
       {showAdd && <AddTarjetaModal posicionAnterior={addCtx.posicionAnterior} posicionSiguiente={addCtx.posicionSiguiente} onClose={()=>setShowAdd(false)} onCreated={()=>{ setShowAdd(false); window.dispatchEvent(new Event('outbox-updated')) }} />}
       {showRecaudos && (
-        <RecaudosOverlay tarjetas={tarjetas} onClose={()=>setShowRecaudos(false)} />
+        <RecaudosOverlay tarjetas={tarjetas} abonosPorTarjeta={abonosPorTarjeta} onClose={()=>setShowRecaudos(false)} />
       )}
       {/* Overlay para rutas hijas (detalle/abonos) sin desmontar el listado */}
       {hasChildRoute && (

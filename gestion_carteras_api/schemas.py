@@ -268,10 +268,12 @@ class ContabilidadMetricas(BaseModel):
     total_gastos: float
     total_bases: float
     total_salidas: float
+    total_entradas: float = 0.0
     caja: float  # saldo_caja desde control_caja en la fecha 'hasta'
     total_intereses: float = 0.0
     ganancia: float = 0.0
     cartera_en_calle: float = 0.0
+    cartera_en_calle_desde: float = 0.0
     abonos_count: int = 0
     dias_en_rango: int = 0
 
@@ -289,6 +291,15 @@ class CajaSalidaCreate(CajaSalidaBase):
     pass
 
 class CajaSalida(CajaSalidaBase):
+    id: int
+
+    class Config:
+        orm_mode = True
+
+class CajaEntradaCreate(CajaSalidaBase):
+    pass
+
+class CajaEntrada(CajaSalidaBase):
     id: int
 
     class Config:

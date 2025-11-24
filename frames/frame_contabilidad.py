@@ -195,7 +195,7 @@ class FrameContabilidad(ttk.Frame):
         # Selector de información (popup con checkbuttons)
         ttk.Label(header, text="Información:").grid(row=0, column=5, sticky='w', padx=(6,0))
         metrics = [
-            'Valor cobrado', 'Préstamos', 'Intereses', 'Gastos', 'Base', 'Ganancia',
+            'Valor cobrado', 'Préstamos', 'Intereses', 'Gastos', 'Entradas', 'Base', 'Ganancia',
             'Salidas', 'Caja', 'Cartera en calle', 'Número de abonos', 'Todo'
         ]
         self.metrics_combo = MultiSelectCombobox(header, metrics)
@@ -279,6 +279,24 @@ class FrameContabilidad(ttk.Frame):
             style='Cafe.TButton'
         )
         self.btn_registrar_salida.grid(row=4, column=0, columnspan=3, pady=6, padx=6, sticky='ew')
+
+        # Separador o espacio
+        ttk.Separator(caja_box, orient='horizontal').grid(row=5, column=0, columnspan=3, sticky='ew', padx=6, pady=4)
+
+        # Sección Entrada
+        ttk.Label(caja_box, text="Dar entrada:").grid(row=6, column=0, sticky='w', padx=6, pady=(4,2))
+        self.entrada_val = ttk.Entry(caja_box, font=('Segoe UI', 10, 'bold'))
+        self.entrada_val.grid(row=6, column=1, columnspan=2, padx=6, pady=(4,2), sticky='ew')
+        ttk.Label(caja_box, text="Observación:").grid(row=7, column=0, sticky='w', padx=6)
+        self.entrada_conc = ttk.Entry(caja_box)
+        self.entrada_conc.grid(row=7, column=1, columnspan=2, padx=6, pady=(0,6), sticky='ew')
+        self.btn_registrar_entrada = ttk.Button(
+            caja_box,
+            text="Registrar entrada",
+            command=self._registrar_entrada,
+            style='Blue.TButton'  # Diferente color para diferenciar
+        )
+        self.btn_registrar_entrada.grid(row=8, column=0, columnspan=3, pady=6, padx=6, sticky='ew')
         
         # Fila inferior de acciones (debajo de Datos y centrados)
         actions_frame = ttk.Frame(body)
@@ -385,7 +403,7 @@ class FrameContabilidad(ttk.Frame):
             # Mostrar según selección múltiple
             seleccion = self.metrics_combo.get_selected()
             if not seleccion or ('Todo' in seleccion):
-                seleccion = ['Valor cobrado','Préstamos','Intereses','Gastos','Base','Ganancia','Salidas','Caja','Cartera en calle','Número de abonos']
+                seleccion = ['Valor cobrado','Préstamos','Intereses','Gastos','Entradas','Base','Ganancia','Salidas','Caja','Cartera en calle','Número de abonos']
             self._render_outputs(data, seleccion)
             # Si se necesita cartera en calle y el backend dio 0, disparar cálculo async sin bloquear (con deduplicación)
             if ('Cartera en calle' in seleccion) and f.get('empleado_id') and float(data.get('cartera_en_calle', 0) or 0) == 0.0:
@@ -462,6 +480,52 @@ class FrameContabilidad(ttk.Frame):
         except Exception as e:
             messagebox.showerror('Error', f"No se pudo registrar la salida: {e}")
 
+    def _registrar_entrada(self):
+        try:
+            fecha = datetime.strptime(self.caja_fecha.get().strip(), '%Y-%m-%d').date()
+        except Exception:
+            messagebox.showerror('Error', 'Fecha inválida (YYYY-MM-DD)')
+            return
+        # Parseo robusto de monto
+        try:
+            raw = self.entrada_val.get().strip()
+            valor = self._parse_money_input(raw)
+        except Exception:
+            messagebox.showerror('Error', 'Valor inválido')
+            return
+        if valor is None or valor <= 0:
+            messagebox.showerror('Error', 'El valor debe ser mayor a 0')
+            return
+        # Mostrar formateado en el campo
+        try:
+            self.entrada_val.delete(0, tk.END)
+            self.entrada_val.insert(0, f"$ {valor:,.2f}")
+        except Exception:
+            pass
+        try:
+            sel = self.tree.selection()
+            empleado_id = None
+            if sel:
+                val = self.tree.item(sel[0]).get('values')
+                if val and val[0] != 'ALL':
+                    empleado_id = str(val[0])
+            if not empleado_id:
+                messagebox.showerror('Error', 'Seleccione un empleado para registrar una entrada de caja')
+                return
+            _ = api_client.registrar_entrada_caja(
+                fecha=fecha,
+                valor=valor,
+                concepto=(self.entrada_conc.get().strip() or None),
+                empleado_identificacion=empleado_id,
+            )
+            messagebox.showinfo('OK', 'Entrada registrada')
+            # Marcar como pendiente de recálculo
+            self._stale = True
+        except APIError as e:
+            messagebox.showerror('Error', f"No se pudo registrar la entrada: {e.message}")
+        except Exception as e:
+            messagebox.showerror('Error', f"No se pudo registrar la entrada: {e}")
+
     def _leer_caja(self):
         try:
             # Empleado seleccionado
@@ -523,13 +587,16 @@ class FrameContabilidad(ttk.Frame):
             d += step
 
         total_salidas = 0.0
-        caja_calculada = total_cobrado + total_bases - total_prestamos - total_gastos - total_salidas
+        total_entradas = 0.0
+        # Fallback simple sin entradas (requeriría nueva API) y SIN BASE (nueva fórmula)
+        caja_calculada = total_cobrado - total_prestamos - total_gastos - total_salidas + total_entradas
         return {
             'total_cobrado': total_cobrado,
             'total_prestamos': total_prestamos,
             'total_gastos': total_gastos,
             'total_bases': total_bases,
             'total_salidas': total_salidas,
+            'total_entradas': total_entradas,
             # En fallback devolvemos 'caja' para compatibilidad con la UI
             'caja': caja_calculada,
         }
@@ -625,6 +692,7 @@ class FrameContabilidad(ttk.Frame):
                             'Gastos': float(data.get('total_gastos', 0)),
                             'Ganancias': float(data.get('ganancia', 0)),
                             'Salidas': float(data.get('total_salidas', 0)),
+                            'Entradas': float(data.get('total_entradas', 0) or 0), # Asegurar valor no nulo
                             'Caja': float(data.get('caja', 0)),
                             'Cartera en calle': float(data.get('cartera_en_calle', 0)),
                         }
@@ -638,8 +706,8 @@ class FrameContabilidad(ttk.Frame):
                     t_fetch = _pc() - t_fetch0
 
                     # Construir filas finales con semanas y total mes
-                    cols = ['Fecha','Número de abonos','Valor cobrado','Préstamos','Intereses','Bases','Gastos','Ganancias','Salidas','Caja','Cartera en calle']
-                    sum_keys = ['Número de abonos','Valor cobrado','Préstamos','Intereses','Bases','Gastos','Ganancias','Salidas']
+                    cols = ['Fecha','Número de abonos','Valor cobrado','Préstamos','Intereses','Bases','Gastos','Ganancias','Salidas','Entradas','Caja','Cartera en calle']
+                    sum_keys = ['Número de abonos','Valor cobrado','Préstamos','Intereses','Bases','Gastos','Ganancias','Salidas','Entradas']
                     last_keys = ['Caja','Cartera en calle']
 
                     def _zero_accum():
@@ -738,6 +806,7 @@ class FrameContabilidad(ttk.Frame):
                         'Gastos': 20,
                         'Ganancias': 20,
                         'Salidas': 20,
+                        'Entradas': 20,
                         'Caja': 20,
                         'Cartera en calle': 20,
                     }
@@ -866,6 +935,7 @@ class FrameContabilidad(ttk.Frame):
             'Base': ('total_bases', 'moneda'),
             'Ganancia': ('ganancia', 'moneda'),
             'Salidas': ('total_salidas', 'moneda'),
+            'Entradas': ('total_entradas', 'moneda'),
             'Caja': ('caja', 'moneda'),
             'Cartera en calle': ('cartera_en_calle', 'moneda'),
             'Número de abonos': ('abonos_count', 'entero'),
@@ -924,11 +994,12 @@ class FrameContabilidad(ttk.Frame):
         sel = set(seleccion or [])
         if ('Todo' in sel) or (not sel):
             # Considerar todo habilitado si selección vacía o 'Todo'
-            sel = {'Valor cobrado','Préstamos','Intereses','Gastos','Base','Salidas','Caja','Cartera en calle','Número de abonos'}
+            sel = {'Valor cobrado','Préstamos','Intereses','Gastos','Base','Entradas','Salidas','Caja','Cartera en calle','Número de abonos'}
 
         # Operandos requeridos por cada ecuación
         need_utilidad = ('Intereses', 'Gastos')
-        need_caja = ('Valor cobrado', 'Base', 'Préstamos', 'Gastos', 'Salidas')
+        # Caja: Cobrado - Prestamos - Gastos - Salidas + Entradas (Base eliminada)
+        need_caja = ('Valor cobrado', 'Préstamos', 'Gastos', 'Salidas', 'Entradas')
         # Crecimiento de cartera requiere dos puntos (desde/hasta) → no forzamos llamadas adicionales
         # Usamos solo 'Cartera en calle' si existiese par (desde/hasta) en data; si no, marcamos no solicitado
 
@@ -956,19 +1027,26 @@ class FrameContabilidad(ttk.Frame):
         self.txt_resumen.insert('end', fmt_money(util_val) if util_val is not None else ' —', ('utilidad',))
         self.txt_resumen.insert('end', '\n\n')
 
-        # 2) Caja del periodo = Cobrado + Base − Préstamos − Gastos − Salidas
+        # 2) Caja del periodo = Cobrado - Préstamos - Gastos - Salidas + Entradas
         c_val = data.get('total_cobrado') if 'Valor cobrado' in sel else None
-        b_val = data.get('total_bases') if 'Base' in sel else None
+        # b_val = data.get('total_bases') if 'Base' in sel else None  <-- Base eliminada de ecuación caja
         p_val = data.get('total_prestamos') if 'Préstamos' in sel else None
         g2_val = data.get('total_gastos') if 'Gastos' in sel else None
         s_val = data.get('total_salidas') if 'Salidas' in sel else None
-        caja_calc = (float(c_val) + float(b_val) - float(p_val) - float(g2_val) - float(s_val)) if all(v is not None for v in (c_val,b_val,p_val,g2_val,s_val)) else None
+        e_val = data.get('total_entradas') if 'Entradas' in sel else None
+        
+        # Asegurar que si Entradas no está en metrics, se trate como 0 si no fue solicitada, o None si era requerida
+        # Pero para consistencia, si el usuario no pidió Entradas, no mostramos la ecuación completa o mostramos parcial
+        # Asumiremos que Entradas es parte esencial ahora.
+        
+        caja_calc = (float(c_val) - float(p_val) - float(g2_val) - float(s_val) + float(e_val)) if all(v is not None for v in (c_val,p_val,g2_val,s_val,e_val)) else None
+        
         self.txt_resumen.insert('end', 'Caja del periodo: ', ('caja',))
         self.txt_resumen.insert('end', '\n')
         self.txt_resumen.insert('end', '  Cobrado ', ('mono',))
         self.txt_resumen.insert('end', fmt_money(c_val) if c_val is not None else ' (no solicitado)', (None if c_val is not None else 'muted',))
-        self.txt_resumen.insert('end', '  +  Base ', ('mono',))
-        self.txt_resumen.insert('end', fmt_money(b_val) if b_val is not None else ' (no solicitado)', (None if b_val is not None else 'muted',))
+        self.txt_resumen.insert('end', '  +  Entradas ', ('mono',))
+        self.txt_resumen.insert('end', fmt_money(e_val) if e_val is not None else ' (no solicitado)', (None if e_val is not None else 'muted',))
         self.txt_resumen.insert('end', '  −  Préstamos ', ('mono',))
         self.txt_resumen.insert('end', fmt_money(p_val) if p_val is not None else ' (no solicitado)', (None if p_val is not None else 'muted',))
         self.txt_resumen.insert('end', '  −  Gastos ', ('mono',))
@@ -980,18 +1058,38 @@ class FrameContabilidad(ttk.Frame):
         self.txt_resumen.insert('end', '\n\n')
 
         # 3) Crecimiento de la cartera = Cartera(desde) − Cartera(hasta)
-        # Usar claves opcionales si alguna vez se añaden; si no, marcar como no solicitado
-        car_desde = data.get('cartera_en_calle_desde') if 'Cartera en calle' in sel else None
-        car_hasta = data.get('cartera_en_calle_hasta') if 'Cartera en calle' in sel else (data.get('cartera_en_calle') if 'Cartera en calle' in sel else None)
-        crecimiento = (float(car_desde) - float(car_hasta)) if (car_desde is not None and car_hasta is not None) else None
+        if 'Cartera en calle' in sel:
+            car_desde = data.get('cartera_en_calle_desde')
+            # Intentar obtener 'cartera_en_calle_hasta', si no existe (None), usar 'cartera_en_calle'
+            car_hasta = data.get('cartera_en_calle_hasta')
+            if car_hasta is None:
+                car_hasta = data.get('cartera_en_calle')
+        else:
+            car_desde = None
+            car_hasta = None
+            
+        crecimiento = (float(car_hasta) - float(car_desde)) if (car_desde is not None and car_hasta is not None) else None
+        pct = None
+        if crecimiento is not None and car_desde not in (None, 0):
+            try:
+                pct = (crecimiento / float(car_desde)) * 100
+            except Exception:
+                pct = None
+
         self.txt_resumen.insert('end', 'Crecimiento de la cartera: ', ('cartera',))
         self.txt_resumen.insert('end', '\n')
-        self.txt_resumen.insert('end', '  Cartera (desde) ', ('mono',))
-        self.txt_resumen.insert('end', fmt_money(car_desde) if car_desde is not None else ' (no solicitado)', (None if car_desde is not None else 'muted',))
-        self.txt_resumen.insert('end', '  −  Cartera (hasta) ', ('mono',))
+        self.txt_resumen.insert('end', '  Cartera (hasta) ', ('mono',))
         self.txt_resumen.insert('end', fmt_money(car_hasta) if car_hasta is not None else ' (no solicitado)', (None if car_hasta is not None else 'muted',))
+        self.txt_resumen.insert('end', '  −  Cartera (desde) ', ('mono',))
+        self.txt_resumen.insert('end', fmt_money(car_desde) if car_desde is not None else ' (no solicitado)', (None if car_desde is not None else 'muted',))
         self.txt_resumen.insert('end', '  =  ', ('mono',))
         self.txt_resumen.insert('end', fmt_money(crecimiento) if crecimiento is not None else ' —', ('cartera',))
+        self.txt_resumen.insert('end', '\n')
+        if pct is not None:
+            signo = '+' if pct >= 0 else ''
+            self.txt_resumen.insert('end', f"  Variación porcentual: {signo}{pct:.2f}%", ('cartera',))
+        else:
+            self.txt_resumen.insert('end', '  Variación porcentual: (no disponible)', ('muted',))
 
     def _compute_cartera_fallback_async(self, empleado_id: str, fecha_hasta: date) -> None:
         t0 = _pc()
@@ -1006,7 +1104,7 @@ class FrameContabilidad(ttk.Frame):
                 self._cached_metrics['cartera_en_calle'] = float(val)
                 seleccion = self.metrics_combo.get_selected()
                 if not seleccion or ('Todo' in seleccion):
-                    seleccion = ['Valor cobrado','Préstamos','Intereses','Gastos','Base','Ganancia','Salidas','Caja','Cartera en calle','Número de abonos']
+                    seleccion = ['Valor cobrado','Préstamos','Intereses','Gastos','Entradas','Base','Ganancia','Salidas','Caja','Cartera en calle','Número de abonos']
                 self._render_outputs(self._cached_metrics, seleccion)
                 self._cartera_fb_key = None
         try:

@@ -85,7 +85,8 @@ def get_ultima_caja_antes(empleado_identificacion: str, fecha: date) -> Decimal:
     return Decimal('0')
 
 def recalcular_caja_dia(empleado_identificacion: str, fecha: date, timezone_name: Optional[str] = None) -> Decimal:
-    """Recalcula la caja del día como: caja_prev + cobrado + base - prestamos - gastos - salidas.
+    """Recalcula la caja del día como: caja_prev + cobrado - prestamos - gastos - salidas + entradas.
+    La 'base' se ha eliminado de la ecuación.
     Usa la zona horaria de la cuenta/usuario para calcular los límites diarios.
     """
     try:
@@ -107,7 +108,7 @@ def recalcular_caja_dia(empleado_identificacion: str, fecha: date, timezone_name
         # Para tablas con timestamp sin zona, usar límites UTC sin tz (naive)
         start_naive = start_utc.replace(tzinfo=None)
         end_naive = end_utc.replace(tzinfo=None)
-        cobrado = Decimal('0'); prestamos = Decimal('0'); gastos = Decimal('0'); base = Decimal('0'); salidas = Decimal('0')
+        cobrado = Decimal('0'); prestamos = Decimal('0'); gastos = Decimal('0'); salidas = Decimal('0'); entradas = Decimal('0')
         with DatabasePool.get_cursor() as cur:
             # cobrado del día por empleado
             cur.execute(
@@ -139,16 +140,7 @@ def recalcular_caja_dia(empleado_identificacion: str, fecha: date, timezone_name
                 (empleado_identificacion, start_utc, end_utc),
             )
             r = cur.fetchone(); gastos = Decimal(str((r[0] if (r and len(r)>0) else 0) or 0))
-            # base del día (fecha DATE exacta)
-            cur.execute(
-                """
-                SELECT COALESCE(SUM(b.monto),0)
-                FROM bases b
-                WHERE b.empleado_id = %s AND b.fecha = %s
-                """,
-                (empleado_identificacion, fecha),
-            )
-            r = cur.fetchone(); base = Decimal(str((r[0] if (r and len(r)>0) else 0) or 0))
+            
             # salidas del día (leer de caja_salidas o control_caja)
             if _tabla_existe(cur, 'public.caja_salidas'):
                 cur.execute(
@@ -163,15 +155,18 @@ def recalcular_caja_dia(empleado_identificacion: str, fecha: date, timezone_name
             elif _tabla_existe(cur, 'public.control_caja'):
                 cur.execute(
                     """
-                    SELECT COALESCE(dividendos,0)
+                    SELECT COALESCE(dividendos,0), COALESCE(entradas,0)
                     FROM control_caja
                     WHERE empleado_identificacion = %s AND fecha = %s
                     """,
                     (empleado_identificacion, fecha),
                 )
-                r = cur.fetchone(); salidas = Decimal(str((r[0] if (r and len(r)>0) else 0) or 0))
+                r = cur.fetchone()
+                if r:
+                    salidas = Decimal(str(r[0] or 0))
+                    entradas = Decimal(str(r[1] or 0))
 
-        valor = prev + cobrado + base - prestamos - gastos - salidas
+        valor = prev + cobrado - prestamos - gastos - salidas + entradas
         # Guardar en 'caja' o fallback en 'control_caja.saldo_caja'
         ok = upsert_caja(empleado_identificacion, fecha, valor)
         if not ok:
@@ -202,8 +197,8 @@ def upsert_caja(empleado_identificacion: str, fecha: date, valor: Decimal) -> bo
             # Insertar si no existe
             cur.execute(
             """
-            INSERT INTO control_caja (empleado_identificacion, fecha, saldo_caja, dividendos, observaciones)
-            VALUES (%s, %s, %s, 0, NULL)
+            INSERT INTO control_caja (empleado_identificacion, fecha, saldo_caja, dividendos, entradas, observaciones)
+            VALUES (%s, %s, %s, 0, 0, NULL)
             ON CONFLICT (empleado_identificacion, fecha)
             DO UPDATE SET saldo_caja = EXCLUDED.saldo_caja
             RETURNING 1
@@ -260,8 +255,8 @@ def registrar_salida(fecha: date, valor: Decimal, concepto: Optional[str] = None
             # Insertar si no existe
             cur.execute(
                 """
-                INSERT INTO control_caja (empleado_identificacion, fecha, saldo_caja, dividendos, observaciones)
-                VALUES (%s, %s, NULL, %s, %s)
+                INSERT INTO control_caja (empleado_identificacion, fecha, saldo_caja, dividendos, entradas, observaciones)
+                VALUES (%s, %s, NULL, %s, 0, %s)
                 RETURNING 1
                 """,
                 (empleado_identificacion, fecha, valor, concepto),
@@ -269,6 +264,39 @@ def registrar_salida(fecha: date, valor: Decimal, concepto: Optional[str] = None
             return 0 if cur.fetchone() else None
     except Exception as e:
         logger.error(f"Error al registrar salida de caja: {e}")
+        return None
+
+
+def registrar_entrada(fecha: date, valor: Decimal, concepto: Optional[str] = None, empleado_identificacion: Optional[str] = None) -> Optional[int]:
+    """Acumula una entrada de caja en control_caja.entradas (insert/update)."""
+    try:
+        with DatabasePool.get_cursor() as cur:
+            # Intentar actualizar fila del día
+            cur.execute(
+                """
+                UPDATE control_caja
+                SET entradas = COALESCE(entradas, 0) + %s,
+                    observaciones = COALESCE(observaciones, '') || CASE WHEN %s IS NOT NULL THEN CONCAT(' [Entrada: ', %s, ']') ELSE '' END
+                WHERE empleado_identificacion = %s AND fecha = %s
+                RETURNING 1
+                """,
+                (valor, concepto, concepto, empleado_identificacion, fecha),
+            )
+            row = cur.fetchone()
+            if row:
+                return 0
+            # Insertar si no existe
+            cur.execute(
+                """
+                INSERT INTO control_caja (empleado_identificacion, fecha, saldo_caja, dividendos, entradas, observaciones)
+                VALUES (%s, %s, NULL, 0, %s, %s)
+                RETURNING 1
+                """,
+                (empleado_identificacion, fecha, valor, f"[Entrada: {concepto}]" if concepto else None),
+            )
+            return 0 if cur.fetchone() else None
+    except Exception as e:
+        logger.error(f"Error al registrar entrada de caja: {e}")
         return None
 
 
@@ -304,15 +332,88 @@ def obtener_salidas(fecha_desde: date, fecha_hasta: date, empleado_id: Optional[
         return []
 
 
-def obtener_metricas_contabilidad(desde: date, hasta: date, empleado_id: Optional[str] = None, timezone_name: Optional[str] = None) -> Dict:
-    """Calcula métricas de contabilidad para el rango.
-    - total_cobrado: suma de abonos (UTC) filtrado por tarjetas de empleado si aplica.
-    - total_prestamos: suma de monto de tarjetas creadas en el rango (UTC).
-    - total_gastos: suma de gastos en el rango (usar fecha_creacion UTC) y/o por empleado.
-    - total_bases: suma de bases del rango (DATE local exacta, comparando por fecha).
-    - total_salidas: suma de caja_salidas en el rango (DATE).
+def _calcular_cartera_al_corte(cur, fecha_corte_utc, fecha_corte_local_date, empleado_id=None) -> Decimal:
+    """Calcula el saldo pendiente de la cartera activa a una fecha de corte.
+    
+    Snapshot histórico preciso:
+    - Incluye tarjetas creadas antes del corte.
+    - Incluye tarjetas que estaban activas en esa fecha (no canceladas O canceladas después de esa fecha).
+    - Resta solo los abonos realizados hasta ese momento.
     """
-    from datetime import datetime as _dt, timezone as _tz
+    try:
+        # Condición de estado:
+        # Si la tarjeta NO es cancelada HOY, estaba activa antes.
+        # Si es cancelada HOY, verificamos si se canceló DESPUÉS de la fecha de corte local.
+        # fecha_cancelacion es DATE.
+        
+        filtros_estado = """
+            AND (
+                COALESCE(estado,'activa') NOT ILIKE 'cancelad%%' 
+                OR (t.fecha_cancelacion IS NOT NULL AND t.fecha_cancelacion > %s)
+            )
+        """
+        
+        if empleado_id:
+            sql = (
+                f"""
+                WITH tarjetas_emp AS (
+                  SELECT codigo, monto, COALESCE(interes,0)::numeric AS interes
+                  FROM tarjetas t
+                  WHERE empleado_identificacion = %s
+                    AND t.fecha_creacion <= %s
+                    {filtros_estado}
+                ),
+                tot_abonos AS (
+                  SELECT a.tarjeta_codigo, COALESCE(SUM(a.monto),0) AS abonado
+                  FROM abonos a
+                  WHERE a.fecha <= %s
+                    AND a.tarjeta_codigo IN (SELECT codigo FROM tarjetas_emp)
+                  GROUP BY a.tarjeta_codigo
+                )
+                SELECT COALESCE(SUM(
+                  GREATEST( (t.monto * (1 + t.interes/100.0)) - COALESCE(ta.abonado,0), 0)
+                ),0)
+                FROM tarjetas_emp t
+                LEFT JOIN tot_abonos ta ON ta.tarjeta_codigo = t.codigo
+                """
+            )
+            # Parámetros: empleado, fecha_limite_creacion(UTC), fecha_corte_cancelacion(DATE), fecha_limite_abonos(UTC)
+            cur.execute(sql, (empleado_id, fecha_corte_utc, fecha_corte_local_date, fecha_corte_utc))
+        else:
+            sql = (
+                f"""
+                WITH tarjetas_all AS (
+                  SELECT codigo, monto, COALESCE(interes,0)::numeric AS interes
+                  FROM tarjetas t
+                  WHERE t.fecha_creacion <= %s
+                    {filtros_estado}
+                ),
+                tot_abonos AS (
+                  SELECT a.tarjeta_codigo, COALESCE(SUM(a.monto),0) AS abonado
+                  FROM abonos a
+                  WHERE a.fecha <= %s
+                  GROUP BY a.tarjeta_codigo
+                )
+                SELECT COALESCE(SUM(
+                  GREATEST( (t.monto * (1 + t.interes/100.0)) - COALESCE(ta.abonado,0), 0)
+                ),0)
+                FROM tarjetas_all t
+                LEFT JOIN tot_abonos ta ON ta.tarjeta_codigo = t.codigo
+                """
+            )
+            # Parámetros: fecha_limite_creacion(UTC), fecha_corte_cancelacion(DATE), fecha_limite_abonos(UTC)
+            cur.execute(sql, (fecha_corte_utc, fecha_corte_local_date, fecha_corte_utc))
+            
+        r = cur.fetchone()
+        return Decimal(str((r[0] if (r and len(r) > 0) else 0) or 0))
+    except Exception as e:
+        logger.error(f"Error calculando cartera al corte: {e}")
+        return Decimal('0')
+
+
+def obtener_metricas_contabilidad(desde: date, hasta: date, empleado_id: Optional[str] = None, timezone_name: Optional[str] = None) -> Dict:
+    """Calcula métricas de contabilidad para el rango."""
+    from datetime import datetime as _dt, timezone as _tz, timedelta
     # Preparar zona horaria local (desde token/cuenta) para convertir a UTC
     try:
         from zoneinfo import ZoneInfo  # Python >=3.9
@@ -325,8 +426,10 @@ def obtener_metricas_contabilidad(desde: date, hasta: date, empleado_id: Optiona
         "total_gastos": Decimal('0'),
         "total_bases": Decimal('0'),
         "total_salidas": Decimal('0'),
+        "total_entradas": Decimal('0'),
         "total_intereses": Decimal('0'),
         "cartera_en_calle": Decimal('0'),
+        "cartera_en_calle_desde": Decimal('0'),
         "abonos_count": 0,
     }
     try:
@@ -339,7 +442,9 @@ def obtener_metricas_contabilidad(desde: date, hasta: date, empleado_id: Optiona
         start_naive = start_utc.replace(tzinfo=None)
         end_naive = end_utc.replace(tzinfo=None)
         with DatabasePool.get_cursor() as cur:
-            # COBRADO (abonos)
+            # ... (código existente de cobrado, prestamos, gastos, bases, salidas) ...
+
+
             if empleado_id:
                 cur.execute(
                     """
@@ -459,7 +564,7 @@ def obtener_metricas_contabilidad(desde: date, hasta: date, empleado_id: Optiona
             if empleado_id:
                 cur.execute(
                     """
-                    SELECT COALESCE(SUM(COALESCE(dividendos,0)),0)
+                    SELECT COALESCE(SUM(COALESCE(dividendos,0)),0), COALESCE(SUM(COALESCE(entradas,0)),0)
                     FROM control_caja
                     WHERE fecha >= %s AND fecha <= %s AND empleado_identificacion = %s
                     """,
@@ -468,7 +573,7 @@ def obtener_metricas_contabilidad(desde: date, hasta: date, empleado_id: Optiona
             else:
                 cur.execute(
                     """
-                    SELECT COALESCE(SUM(COALESCE(dividendos,0)),0)
+                    SELECT COALESCE(SUM(COALESCE(dividendos,0)),0), COALESCE(SUM(COALESCE(entradas,0)),0)
                     FROM control_caja
                     WHERE fecha >= %s AND fecha <= %s
                     """,
@@ -476,65 +581,24 @@ def obtener_metricas_contabilidad(desde: date, hasta: date, empleado_id: Optiona
                 )
             r = cur.fetchone()
             totals["total_salidas"] = Decimal(str((r[0] if (r and len(r)>0) else 0) or 0))
+            totals["total_entradas"] = Decimal(str((r[1] if (r and len(r)>1) else 0) or 0))
 
-            # CARTERA EN CALLE (saldo pendiente) con filtros y saneo:
-            # saldo = GREATEST(monto*(1+COALESCE(interes,0)/100) - SUM(abonos hasta end_utc), 0)
-            # Filtrado por tarjetas activas; por empleado si aplica
+            # CARTERA EN CALLE (saldo pendiente)
+            # 1. Cartera al final del periodo (hasta)
             if hasta:
-                try:
-                    if empleado_id:
-                        _sql = (
-                            """
-                            WITH tarjetas_emp AS (
-                              SELECT codigo, monto, COALESCE(interes,0)::numeric AS interes
-                              FROM tarjetas
-                              WHERE empleado_identificacion = %s
-                                AND (COALESCE(estado,'activa') NOT ILIKE 'cancelad%%')
-                            ),
-                            tot_abonos AS (
-                              SELECT a.tarjeta_codigo, COALESCE(SUM(a.monto),0) AS abonado
-                              FROM abonos a
-                              WHERE a.fecha <= %s
-                                AND a.tarjeta_codigo IN (SELECT codigo FROM tarjetas_emp)
-                              GROUP BY a.tarjeta_codigo
-                            )
-                            SELECT COALESCE(SUM(
-                              GREATEST( (t.monto * (1 + t.interes/100.0)) - COALESCE(ta.abonado,0), 0)
-                            ),0)
-                            FROM tarjetas_emp t
-                            LEFT JOIN tot_abonos ta ON ta.tarjeta_codigo = t.codigo
-                            """
-                        )
-                        _params = (empleado_id, end_naive)
-                        cur.execute(_sql, _params)
-                    else:
-                        _sql = (
-                            """
-                            WITH tarjetas_all AS (
-                              SELECT codigo, monto, COALESCE(interes,0)::numeric AS interes
-                              FROM tarjetas
-                              WHERE (COALESCE(estado,'activa') NOT ILIKE 'cancelad%%')
-                            ),
-                            tot_abonos AS (
-                              SELECT a.tarjeta_codigo, COALESCE(SUM(a.monto),0) AS abonado
-                              FROM abonos a
-                              WHERE a.fecha <= %s
-                              GROUP BY a.tarjeta_codigo
-                            )
-                            SELECT COALESCE(SUM(
-                              GREATEST( (t.monto * (1 + t.interes/100.0)) - COALESCE(ta.abonado,0), 0)
-                            ),0)
-                            FROM tarjetas_all t
-                            LEFT JOIN tot_abonos ta ON ta.tarjeta_codigo = t.codigo
-                            """
-                        )
-                        _params = (end_naive,)
-                        cur.execute(_sql, _params)
-                    _r = cur.fetchone()
-                    totals["cartera_en_calle"] = Decimal(str((_r[0] if (_r and len(_r) > 0) else 0) or 0))
-                except Exception as e:
-                    logger.error(f"Error calculando cartera_en_calle (emp={empleado_id}, hasta={hasta}): {e}")
-                    totals["cartera_en_calle"] = Decimal('0')
+                # end_naive es el fin del día 'hasta' en UTC.
+                # 'hasta' es la fecha local. Si se cancela mañana, hoy sigue activa.
+                totals["cartera_en_calle"] = _calcular_cartera_al_corte(cur, end_naive, hasta, empleado_id)
+            
+            # 2. Cartera al inicio del periodo (desde)
+            # start_naive es el inicio del día 'desde' en UTC (00:00 local).
+            if desde:
+                # Para el saldo INICIAL del día 'desde', una tarjeta cancelada DURANTE el día 'desde'
+                # debe contar como activa (existía a las 00:00).
+                # Por eso usamos (desde - 1 día) como referencia de corte para cancelación.
+                # fecha_cancelacion (hoy) > (ayer) -> True -> Activa.
+                ayer = desde - timedelta(days=1)
+                totals["cartera_en_calle_desde"] = _calcular_cartera_al_corte(cur, start_naive, ayer, empleado_id)
 
         # Agregar caja (saldo_caja) usando el último registro <= 'hasta'
         with DatabasePool.get_cursor() as cur2:

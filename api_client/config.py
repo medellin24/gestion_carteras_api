@@ -15,6 +15,10 @@ def _load_env_flexible() -> None:
     except Exception:
         return
 
+    import resource_loader
+    # 0) Recurso empaquetado (prioridad máxima si está frozen, o local en dev)
+    env_paths = [str(resource_loader.project_path('.env'))]
+
     # 1) Directorio del ejecutable/script
     exe_dir = os.path.dirname(getattr(sys, 'executable', sys.argv[0])) if getattr(sys, 'frozen', False) else os.path.dirname(os.path.abspath(sys.argv[0]))
     env_paths = [os.path.join(exe_dir, '.env')]

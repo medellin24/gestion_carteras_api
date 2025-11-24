@@ -75,7 +75,6 @@ class VentanaLogin(tk.Toplevel):
         self._img_h = 0
         try:
             from PIL import Image, ImageTk
-            import os
             candidates = [
                 asset_path('assets', 'icons', 'login_image.png'),
                 asset_path('assets', 'iconos', 'login_image.png'),
@@ -297,7 +296,6 @@ class VentanaSignup(tk.Toplevel):
         self._bg_img = None
         try:
             from PIL import Image, ImageTk
-            import os
             candidates = [
                 asset_path('assets', 'icons', 'login_image.png'),
                 asset_path('assets', 'iconos', 'login_image.png'),
