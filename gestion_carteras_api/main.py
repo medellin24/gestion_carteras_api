@@ -25,6 +25,7 @@ from .database.caja_db import (
     upsert_caja,
     get_caja_en_fecha,
     registrar_salida,
+    registrar_entrada,
     obtener_salidas,
     obtener_metricas_contabilidad,
     recalcular_caja_dia,
@@ -36,12 +37,13 @@ from .schemas import (
     BaseCreate, BaseUpdate, TipoGasto, Gasto, GastoCreate, GastoUpdate,
     ResumenGasto, LiquidacionDiaria, ResumenFinanciero,
     SyncRequest, SyncResponse,
-    ContabilidadQuery, ContabilidadMetricas, CajaValor, CajaSalida, CajaSalidaCreate, VerificacionEsquemaCaja
+    ContabilidadQuery, ContabilidadMetricas, CajaValor, CajaSalida, CajaSalidaCreate, CajaEntrada, CajaEntradaCreate, VerificacionEsquemaCaja
 )
 
 # Configuración del logging
 logging.basicConfig(level=logging.INFO)
 # Elevar niveles a DEBUG para ver trazas de diagnóstico durante desarrollo
+# Forzar recarga para esquema pydantic
 logging.getLogger().setLevel(logging.DEBUG)
 for _name in (
     "gestion_carteras_api",
@@ -190,10 +192,12 @@ def contabilidad_metricas_endpoint(query: ContabilidadQuery, principal: dict = D
             'total_gastos': float(datos.get('total_gastos', 0)),
             'total_bases': float(datos.get('total_bases', 0)),
             'total_salidas': float(datos.get('total_salidas', 0)),
+            'total_entradas': float(datos.get('total_entradas', 0)),
             'caja': float(datos.get('caja', 0)),
             'total_intereses': float(datos.get('total_intereses', 0)),
             'ganancia': float(datos.get('total_intereses', 0)) - float(datos.get('total_gastos', 0)),
             'cartera_en_calle': float(datos.get('cartera_en_calle', 0)),
+            'cartera_en_calle_desde': float(datos.get('cartera_en_calle_desde', 0)),
             'abonos_count': int(datos.get('abonos_count', 0)),
             'dias_en_rango': int(dias),
         }
@@ -240,6 +244,34 @@ def caja_registrar_salida_endpoint(payload: CajaSalidaCreate, principal: dict = 
     except Exception as e:
         logger.error(f"Error al registrar salida de caja: {e}")
         raise HTTPException(status_code=500, detail="Error interno al registrar salida de caja")
+
+
+@app.post("/caja/entradas", response_model=CajaEntrada, status_code=201)
+def caja_registrar_entrada_endpoint(payload: CajaEntradaCreate, principal: dict = Depends(get_current_principal)):
+    try:
+        from decimal import Decimal as _Dec
+        sid = registrar_entrada(
+            fecha=payload.fecha,
+            valor=_Dec(str(payload.valor)),
+            concepto=payload.concepto,
+            empleado_identificacion=payload.empleado_identificacion,
+        )
+        if sid is None:
+            raise HTTPException(status_code=400, detail="No se pudo registrar la entrada de caja")
+        # Recalcular caja del día si hay empleado
+        try:
+            if payload.empleado_identificacion:
+                _ = recalcular_caja_dia(payload.empleado_identificacion, payload.fecha, principal.get("timezone"))
+        except Exception:
+            pass
+        return { 'id': sid, **payload.dict() }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error al registrar entrada de caja: {e}")
+        raise HTTPException(status_code=500, detail="Error interno al registrar entrada de caja")
+
+
 @app.post("/caja/recalcular-dia", response_model=CajaValor)
 def caja_recalcular_dia_endpoint(body: dict, principal: dict = Depends(get_current_principal)):
     try:
@@ -483,6 +515,7 @@ def delete_empleado_endpoint(identificacion: str, principal: dict = Depends(requ
             "bases": 0,
             "permisos_cobrador": 0,
             "usuarios_cobrador": 0,
+            "control_caja": 0,
         }
 
         # Consultar otras tablas que referencian a empleados
@@ -498,6 +531,11 @@ def delete_empleado_endpoint(identificacion: str, principal: dict = Depends(requ
             except Exception:
                 pass
             try:
+                cursor.execute("SELECT COUNT(*) FROM control_caja WHERE empleado_identificacion=%s", (identificacion,))
+                deps["control_caja"] = int(cursor.fetchone()[0] or 0)
+            except Exception:
+                pass
+            try:
                 cursor.execute("SELECT COUNT(*) FROM cobrador_permisos_diarios WHERE empleado_identificacion=%s", (identificacion,))
                 deps["permisos_cobrador"] = int(cursor.fetchone()[0] or 0)
             except Exception:
@@ -508,7 +546,7 @@ def delete_empleado_endpoint(identificacion: str, principal: dict = Depends(requ
             except Exception:
                 pass
 
-        if any([tiene_tarjetas, deps["gastos"] > 0, deps["bases"] > 0, deps["permisos_cobrador"] > 0, deps["usuarios_cobrador"] > 0]):
+        if any([tiene_tarjetas, deps["gastos"] > 0, deps["bases"] > 0, deps["permisos_cobrador"] > 0, deps["usuarios_cobrador"] > 0, deps["control_caja"] > 0]):
             tarjetas_serializables = []
             tarjetas_activas = []
             tarjetas_canceladas = []
@@ -704,6 +742,7 @@ def eliminar_empleado_con_tarjetas_endpoint(identificacion: str, request: Elimin
         tarjetas_eliminadas = 0
         gastos_eliminados = 0
         bases_eliminadas = 0
+        control_caja_eliminados = 0
         permisos_cobrador_eliminados = 0
         usuarios_cobrador_eliminados = 0
 
@@ -737,7 +776,17 @@ def eliminar_empleado_con_tarjetas_endpoint(identificacion: str, request: Elimin
             """, (identificacion,))
             bases_eliminadas = cursor.rowcount or 0
 
-            # 4) Eliminar permisos diarios de cobrador (si existen)
+            # 4) Eliminar control_caja asociado al empleado
+            try:
+                cursor.execute("""
+                    DELETE FROM control_caja
+                    WHERE empleado_identificacion = %s
+                """, (identificacion,))
+                control_caja_eliminados = cursor.rowcount or 0
+            except Exception:
+                control_caja_eliminados = 0
+
+            # 5) Eliminar permisos diarios de cobrador (si existen)
             try:
                 cursor.execute("""
                     DELETE FROM cobrador_permisos_diarios
@@ -748,7 +797,18 @@ def eliminar_empleado_con_tarjetas_endpoint(identificacion: str, request: Elimin
                 # La tabla puede no existir en algunas instalaciones
                 permisos_cobrador_eliminados = 0
 
-            # 5) Eliminar usuarios con role=cobrador vinculados a este empleado
+            # 5) Eliminar permisos diarios de cobrador (si existen)
+            try:
+                cursor.execute("""
+                    DELETE FROM cobrador_permisos_diarios
+                    WHERE empleado_identificacion = %s
+                """, (identificacion,))
+                permisos_cobrador_eliminados = cursor.rowcount or 0
+            except Exception:
+                # La tabla puede no existir en algunas instalaciones
+                permisos_cobrador_eliminados = 0
+
+            # 6) Eliminar usuarios con role=cobrador vinculados a este empleado
             try:
                 cursor.execute("""
                     DELETE FROM usuarios
@@ -758,7 +818,7 @@ def eliminar_empleado_con_tarjetas_endpoint(identificacion: str, request: Elimin
             except Exception:
                 usuarios_cobrador_eliminados = 0
 
-        # 6) Finalmente, eliminar el empleado (usa cuenta_id)
+        # 7) Finalmente, eliminar el empleado (usa cuenta_id)
         ok = eliminar_empleado(identificacion, cuenta_id)
         if not ok:
             raise HTTPException(status_code=500, detail="Error al eliminar el empleado.")
@@ -771,6 +831,7 @@ def eliminar_empleado_con_tarjetas_endpoint(identificacion: str, request: Elimin
                 "tarjetas_eliminadas": tarjetas_eliminadas if request.eliminar_tarjetas else 0,
                 "gastos_eliminados": gastos_eliminados,
                 "bases_eliminadas": bases_eliminadas,
+                "control_caja_eliminados": control_caja_eliminados,
                 "permisos_cobrador_eliminados": permisos_cobrador_eliminados,
                 "usuarios_cobrador_eliminados": usuarios_cobrador_eliminados,
             }
