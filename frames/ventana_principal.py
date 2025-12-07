@@ -38,7 +38,7 @@ class VentanaPrincipal:
         self.crear_botones_principales()
         self.crear_barra_estado()  # ✅ Crear ANTES del contenedor
         self.crear_contenedor_frames()
-
+        
     def crear_menu(self):
         """Crear barra de menú superior"""
         self.menu_bar = tk.Menu(self.root)

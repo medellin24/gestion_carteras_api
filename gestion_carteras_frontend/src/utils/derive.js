@@ -8,8 +8,8 @@ function parseISODateToLocal(dateStr) {
     }
     // ISO con zona explícita
     if (/[zZ]|[\+\-]\d{2}:\d{2}$/.test(dateStr)) {
-      const d = new Date(dateStr)
-      return isNaN(d.getTime()) ? null : d
+    const d = new Date(dateStr)
+    return isNaN(d.getTime()) ? null : d
     }
     // ISO con 'T' sin zona -> tratar como UTC naive
     if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d{1,6})?)?$/.test(dateStr)) {

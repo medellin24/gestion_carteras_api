@@ -304,6 +304,16 @@ def upsert_cobrador(empleado_id: str, body: UpsertCobradorRequest, principal: di
         raise HTTPException(status_code=400, detail="Usuario y contraseña (>=4) son requeridos")
     cuenta_id = principal.get("cuenta_id")
     with DatabasePool.get_cursor() as cur:
+        # Validar que el username no esté tomado por otro usuario de la misma cuenta
+        cur.execute(
+            """
+            SELECT id FROM usuarios
+             WHERE username=%s AND cuenta_id=%s
+            """,
+            (body.username, cuenta_id),
+        )
+        username_row = cur.fetchone()
+        
         # ¿Existe activo?
         cur.execute(
             """
@@ -315,6 +325,9 @@ def upsert_cobrador(empleado_id: str, body: UpsertCobradorRequest, principal: di
         row = cur.fetchone()
         pwd_hash = get_password_hash(body.password)
         if row:
+            # Si el username pertenece a otro usuario, bloquear
+            if username_row and username_row[0] != row[0]:
+                raise HTTPException(status_code=409, detail="El usuario ya está en uso por otro cobrador")
             # Actualizar username y password
             cur.execute(
                 "UPDATE usuarios SET username=%s, password_hash=%s WHERE id=%s",

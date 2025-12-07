@@ -15,6 +15,40 @@ class ClienteBase(BaseModel):
     referencia_telefono: Optional[str] = None
     observaciones: Optional[str] = None
 
+# --- Modelos para DataCrédito Interno ---
+
+class IndicadoresTarjeta(BaseModel):
+    # ID de la tarjeta original (o código)
+    id_referencia: str
+    fecha_inicio: Optional[date] = None
+    monto: float
+    
+    # Los 4 Indicadores Clave
+    dias_retraso_final: int
+    frecuencia_pagos: float  # 0-100
+    promedio_atraso: float   # Cuotas promedio
+    puntaje_atraso_cierre: float # Foto final de estrés
+    
+    score_individual: float # 0-100
+    estado_final: str # "Cancelada", "Castigada", etc.
+    empresa_anonym: Optional[str] = "Entidad Externa" # Para privacidad
+
+class DataCreditoReport(BaseModel):
+    cliente_identificacion: str
+    cliente_nombre: Optional[str] = "Cliente"
+    cliente_apellido: Optional[str] = ""
+    score_global: int # 0-100
+    
+    # Resumen de indicadores globales
+    total_creditos_cerrados: int
+    total_creditos_activos: int # Nuevo campo
+    promedio_retraso_historico: float
+    frecuencia_pago_promedio: float
+    
+    # Listas detalladas
+    tarjetas_activas: List[IndicadoresTarjeta] = []
+    historial_compactado: List[IndicadoresTarjeta] = []
+
 class ClienteCreate(ClienteBase):
     pass
 
@@ -32,6 +66,9 @@ class ClienteUpdate(BaseModel):
 
 class Cliente(ClienteBase):
     fecha_creacion: Optional[date] = None
+    # Campos nuevos
+    score_global: Optional[int] = 100
+    historial_crediticio: Optional[List[IndicadoresTarjeta]] = []
 
     class Config:
         from_attributes = True

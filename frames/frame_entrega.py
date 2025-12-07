@@ -8,6 +8,7 @@ from tkinter import Toplevel
 from tkinter import filedialog
 import threading
 import concurrent.futures
+import webbrowser
 
 # Importar el cliente de la API desde la nueva ruta raíz
 from api_client.client import api_client
@@ -58,6 +59,10 @@ class FrameEntrega(ttk.Frame):
         self.filtro_actual = 'todos'
         self._filtro_label_map = {label: key for key, label in self.FILTROS}
         self._resumen_prefetch_thread = None
+        # Control de última actualización para detectar datos obsoletos
+        self._ultima_actualizacion = None
+        self._empleado_actual_id = None
+        self._estado_actual = 'activas'
         
         style = ttk.Style()
         try:
@@ -102,8 +107,8 @@ class FrameEntrega(ttk.Frame):
         self.combo_empleados.pack(side='left', padx=5)
         # Al abrir el combo, recargar empleados desde la API para reflejar altas recientes
         self.combo_empleados.bind('<Button-1>', lambda e: self.cargar_empleados())
-        # Botón de refresco manual
-        ttk.Button(frame_seleccion, text="↻", width=3, command=self.cargar_empleados).pack(side='left', padx=(0,5))
+        # Botón de refresco manual - invalida caché y recarga todo
+        ttk.Button(frame_seleccion, text="↻", width=3, command=self._refrescar_todo).pack(side='left', padx=(0,5))
         
         self.combo_estado = ttk.Combobox(frame_seleccion, width=14, 
                                        values=['activas', 'cancelada', 'pendiente'],
@@ -184,6 +189,59 @@ class FrameEntrega(ttk.Frame):
         self.combo_empleados.bind('<<ComboboxSelected>>', self.on_seleccion_cambio)
         self.combo_estado.bind('<<ComboboxSelected>>', self.on_seleccion_cambio)
 
+    def _invalidar_cache_tarjetas(self):
+        """Invalida todos los cachés relacionados con tarjetas para forzar recarga desde API."""
+        self._abonos_cache_por_tarjeta = {}
+        self._abonos_raw_cache = {}
+        self._resumen_cache_por_tarjeta = {}
+        self._tarjetas_actuales = []
+        self._tarjeta_por_iid = {}
+        self._row_info = {}
+        self._ultima_actualizacion = None
+        logger.debug("Caché de tarjetas invalidado")
+
+    def _refrescar_todo(self):
+        """Refresca completamente la vista invalidando cachés y recargando desde API."""
+        logger.info("Iniciando refresco completo...")
+        # Guardar selección actual antes de refrescar
+        empleado_seleccionado = self.combo_empleados.get()
+        estado_seleccionado = self.combo_estado.get()
+        # Invalidar caché de empleados en el API client
+        self.api_client._invalidate_cache('empleados')
+        # Invalidar cachés locales de tarjetas
+        self._invalidar_cache_tarjetas()
+        # Resetear tracking de empleado/estado para forzar recarga
+        self._empleado_actual_id = None
+        self._estado_actual = None
+        # Recargar empleados manteniendo la selección
+        self._cargar_empleados_preservando_seleccion(empleado_seleccionado, estado_seleccionado)
+        logger.info("Vista refrescada completamente")
+
+    def _cargar_empleados_preservando_seleccion(self, empleado_previo: str, estado_previo: str):
+        """Carga empleados desde la API y restaura la selección previa si existe."""
+        try:
+            empleados = self.api_client.list_empleados()
+            
+            if empleados:
+                self.empleados_dict = {emp['nombre_completo']: emp['identificacion'] for emp in empleados}
+                nombres = list(self.empleados_dict.keys())
+                self.combo_empleados['values'] = nombres
+                
+                # Restaurar selección previa si existe, sino usar el primero
+                if empleado_previo and empleado_previo in nombres:
+                    self.combo_empleados.set(empleado_previo)
+                elif nombres:
+                    self.combo_empleados.set(nombres[0])
+                
+                # Restaurar estado previo
+                if estado_previo:
+                    self.combo_estado.set(estado_previo)
+                
+                self.mostrar_tabla_tarjetas()
+        except Exception as e:
+            logger.error(f"Error al cargar empleados desde la API: {e}")
+            messagebox.showerror("Error de API", f"No se pudieron cargar los empleados: {e}")
+
     def cargar_empleados(self):
         """Carga los empleados desde la API."""
         try:
@@ -207,6 +265,15 @@ class FrameEntrega(ttk.Frame):
     def on_seleccion_cambio(self, event=None):
         """Maneja el cambio de selección de empleado o estado"""
         if self.combo_empleados.get() and self.combo_estado.get():
+            empleado_nombre = self.combo_empleados.get()
+            nuevo_empleado_id = self.empleados_dict.get(empleado_nombre)
+            nuevo_estado = self.combo_estado.get()
+            # Si cambió el empleado o el estado, invalidar caché de tarjetas
+            estado_anterior = getattr(self, '_estado_actual', None)
+            if nuevo_empleado_id != self._empleado_actual_id or nuevo_estado != estado_anterior:
+                self._invalidar_cache_tarjetas()
+                self._empleado_actual_id = nuevo_empleado_id
+                self._estado_actual = nuevo_estado
             self.mostrar_tabla_tarjetas()
 
     def mostrar_tabla_tarjetas(self, nueva_tarjeta_id=None):
@@ -229,11 +296,14 @@ class FrameEntrega(ttk.Frame):
                 return
             
             estado = self.combo_estado.get()
+            logger.info(f"Consultando tarjetas para empleado={empleado_id}, estado={estado}")
             # Consultar en segundo plano para no bloquear la UI
             def _worker():
                 try:
                     tarjetas_loc = self.api_client.list_tarjetas(empleado_id=empleado_id, estado=estado, limit=200)
+                    logger.info(f"API retornó {len(tarjetas_loc)} tarjetas")
                 except Exception as _e:
+                    logger.error(f"Error al consultar tarjetas: {_e}")
                     tarjetas_loc = []
                 def _apply():
                     # Limpiar loading si existe
@@ -345,6 +415,7 @@ class FrameEntrega(ttk.Frame):
         """Almacena las tarjetas actuales y renderiza respetando el filtro activo."""
         try:
             self._tarjetas_actuales = list(tarjetas or [])
+            self._ultima_actualizacion = datetime.now()
             try:
                 self._fecha_actual_local = datetime.now(ZoneInfo(self.token_tz)).date()
             except Exception:
@@ -872,6 +943,7 @@ class FrameEntrega(ttk.Frame):
             ('Tarjeta Nueva', self.abrir_ventana_documento),
             ('Tarjeta Editar', self.editar_tarjeta_seleccionada),
             ('Tarjeta Eliminar', self.eliminar_tarjeta_seleccionada),
+            ('Ver DataCrédito 🌐', self.abrir_datacredito_web),
             ('Tarjeta Buscar', None),
             ('Tarjeta Mover', None),
             ('Importar Tarjetas', self.importar_tarjetas)
@@ -886,6 +958,48 @@ class FrameEntrega(ttk.Frame):
         # Activar botones de Tarjeta Nueva y Editar
         self.botones_accion['Tarjeta Nueva'].config(state=tk.NORMAL)
         self.botones_accion['Tarjeta Editar'].config(state=tk.NORMAL)
+
+    def abrir_datacredito_web(self):
+        """Abre el reporte de DataCrédito en el navegador predeterminado"""
+        seleccion = self.tree.selection()
+        if not seleccion:
+            messagebox.showwarning("Selección", "Seleccione una tarjeta (cliente) para ver su historial")
+            return
+            
+        try:
+            # Obtener datos de la selección
+            item_id = seleccion[0]
+            # La tarjeta completa debería estar en cache
+            tarjeta = self._tarjeta_por_iid.get(item_id)
+            
+            identificacion = None
+            if tarjeta:
+                identificacion = tarjeta.get('cliente_identificacion')
+                if not identificacion and tarjeta.get('cliente'):
+                    # Si viene anidado
+                    identificacion = tarjeta['cliente'].get('identificacion')
+            
+            if not identificacion:
+                # Fallback: intentar sacar del treeview si no hay cache, aunque es difícil sin ID
+                messagebox.showerror("Error", "No se pudo identificar al cliente seleccionado.")
+                return
+
+            # URL Base del Frontend (Configurable)
+            # Idealmente leer de config o var de entorno
+            base_url = "http://localhost:5174" 
+            token = getattr(self.api_client.config, 'auth_token', None)
+            url = f"{base_url}/datacredito/{identificacion}"
+            if token:
+                url += f"?token={token}"
+            # Intentar abrir en la misma pestaña (menos bloqueos) si es posible
+            try:
+                webbrowser.open(url, new=0, autoraise=True)
+            except Exception:
+                webbrowser.open(url)
+            
+        except Exception as e:
+            logger.error(f"Error al abrir DataCrédito: {e}")
+            messagebox.showerror("Error", f"No se pudo abrir el navegador: {e}")
 
     def cambiar_tipo_tarjeta(self, event=None):
         """Cambia el tipo de la tarjeta seleccionada"""

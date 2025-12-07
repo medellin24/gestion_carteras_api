@@ -330,17 +330,17 @@ export default function SubirPage(){
     if (!preflight) return
     const currentEmpleadoId = preflight.empleadoId
     const p = debugProfile ? profiler() : null
-
+    
     setBusy(true)
     showMessage('Sincronizando datos...', 'info')
-
+    
     const timeoutId = setTimeout(() => {
       if (busy) {
         setBusy(false)
         showMessage('❌ TIMEOUT: La sincronización tardó demasiado. Verifica tu conexión e inténtalo de nuevo.', 'error')
       }
     }, 180000)
-
+    
     try {
       p && p.mark('start')
       const snapshot = await collectEmpleadoOutboxData(currentEmpleadoId, p)
@@ -360,8 +360,8 @@ export default function SubirPage(){
           showMessage('No hay datos válidos para sincronizar del empleado actual.', 'error')
         }
         return
-      }
-
+        }
+        
       // Verificar permisos justo antes de sincronizar
       try {
         const perms = await apiClient.getEmpleadoPermissions(currentEmpleadoId)
@@ -536,6 +536,8 @@ export default function SubirPage(){
       localStorage.removeItem('tarjetas_data')
       localStorage.removeItem('tarjetas_stats')
       localStorage.removeItem('tarjetas_last_download')
+      localStorage.removeItem('jornada_token')
+      localStorage.removeItem('jornada_started_at')
       p && p.mark('resetCache')
 
       p && p.mark('updatePerm')
@@ -590,6 +592,8 @@ export default function SubirPage(){
       localStorage.removeItem('tarjetas_data')
       localStorage.removeItem('tarjetas_stats')
       localStorage.removeItem('tarjetas_last_download')
+      localStorage.removeItem('jornada_token')
+      localStorage.removeItem('jornada_started_at')
       showMessage('Memoria de trabajo limpiada exitosamente.', 'success')
     } catch (e) {
       showMessage('Error al limpiar memoria: ' + (e?.message || 'Error'), 'error')

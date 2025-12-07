@@ -70,7 +70,7 @@ if _env_cors:
 else:
     # Fallback a orígenes locales de desarrollo
     _allowed_origins = [
-        "http://localhost:5173",
+        "http://192.168.100.158:5174",
         "http://127.0.0.1:5173",
         "http://localhost:5174",
         "http://127.0.0.1:5174",
@@ -90,10 +90,13 @@ from .routers import auth as auth_router
 from .routers import billing as billing_router
 from .routers import public as public_router
 from .routers import admin_users as admin_users_router
+from .routers import datacredito as datacredito_router
+
 app.include_router(auth_router.router, prefix="/auth", tags=["auth"])
 app.include_router(billing_router.router, prefix="/billing", tags=["billing"])
 app.include_router(public_router.router, prefix="/public", tags=["public"])
 app.include_router(admin_users_router.router, prefix="/admin", tags=["admin"])
+app.include_router(datacredito_router.router, prefix="/datacredito", tags=["datacredito"])
 
 # Seguridad
 from .security import get_current_principal, require_admin
@@ -1444,8 +1447,11 @@ def read_tarjetas_by_empleado_endpoint(empleado_id: str, estado: str = 'activas'
     try:
         tz_name = principal.get('timezone') or 'UTC'
         # Usar la función existente obtener_tarjetas con empleado_identificacion y estado
+        # use_cache=False: En producción (AWS App Runner) hay múltiples instancias,
+        # cada una con su propio caché en memoria. El _cache.clear() de una instancia
+        # no afecta a las otras, causando datos obsoletos.
         from .database.tarjetas_db import obtener_tarjetas
-        tarjetas_tuplas = obtener_tarjetas(empleado_identificacion=empleado_id, estado=estado, offset=skip, limit=limit)
+        tarjetas_tuplas = obtener_tarjetas(empleado_identificacion=empleado_id, estado=estado, offset=skip, limit=limit, use_cache=False)
         
         # Convertir tuplas a diccionarios para FastAPI con estructura anidada
         tarjetas = []
@@ -1551,19 +1557,29 @@ def update_cliente_endpoint(identificacion: str, cliente: ClienteUpdate):
         raise HTTPException(status_code=500, detail="Error interno al actualizar cliente")
 
 @app.get("/clientes/{identificacion}/historial")
-def read_cliente_historial_endpoint(identificacion: str):
+def read_cliente_historial_endpoint(identificacion: str, principal: dict = Depends(get_current_principal)):
+    """
+    Obtiene el historial de tarjetas de un cliente.
+    Solo muestra tarjetas de empleados de la cuenta del usuario logueado (aislamiento multi-tenant).
+    """
     try:
         from .database.tarjetas_db import obtener_historial_cliente
-        return obtener_historial_cliente(identificacion)
+        cuenta_id = principal.get("cuenta_id")
+        return obtener_historial_cliente(identificacion, cuenta_id=cuenta_id)
     except Exception as e:
         logger.error(f"Error al obtener historial de cliente: {e}")
         raise HTTPException(status_code=500, detail="Error interno al consultar historial")
 
 @app.get("/clientes/{identificacion}/estadisticas")
-def read_cliente_estadisticas_endpoint(identificacion: str):
+def read_cliente_estadisticas_endpoint(identificacion: str, principal: dict = Depends(get_current_principal)):
+    """
+    Obtiene estadísticas de tarjetas de un cliente.
+    Solo cuenta tarjetas de empleados de la cuenta del usuario logueado (aislamiento multi-tenant).
+    """
     try:
         from .database.tarjetas_db import obtener_estadisticas_cliente
-        return obtener_estadisticas_cliente(identificacion)
+        cuenta_id = principal.get("cuenta_id")
+        return obtener_estadisticas_cliente(identificacion, cuenta_id=cuenta_id)
     except Exception as e:
         logger.error(f"Error al obtener estadísticas de cliente: {e}")
         raise HTTPException(status_code=500, detail="Error interno al consultar estadísticas")

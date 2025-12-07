@@ -9,6 +9,12 @@ import AddTarjetaModal from '../components/AddTarjetaModal.jsx'
 
 function currency(n) { try { return new Intl.NumberFormat('es-CO', { style:'currency', currency:'COP', maximumFractionDigits:0 }).format(n||0) } catch { return `$${Number(n||0).toFixed(0)}` } }
 function formatMoney(n){ try { return new Intl.NumberFormat('es-CO', { style:'currency', currency:'COP', maximumFractionDigits:0 }).format(n||0) } catch { return `$${Number(n||0).toFixed(0)}` } }
+function getCurrentJornada(){
+  const token = (typeof localStorage !== 'undefined' && localStorage.getItem('jornada_token')) || ''
+  const startedRaw = (typeof localStorage !== 'undefined' && localStorage.getItem('jornada_started_at')) || '0'
+  const startedAt = Number(startedRaw)
+  return { token, startedAt: Number.isFinite(startedAt) ? startedAt : 0 }
+}
 
 export default function TarjetasPage() {
   const [query, setQuery] = useState('')
@@ -29,6 +35,20 @@ export default function TarjetasPage() {
 
   useEffect(() => {
     async function refreshData() {
+      const { token: jornadaToken, startedAt: jornadaInicio } = getCurrentJornada()
+      const isCurrentOp = (op) => {
+        if (!op) return false
+        if (op.session_id && jornadaToken) return op.session_id === jornadaToken
+        if (jornadaInicio) return Number(op.ts || 0) >= jornadaInicio
+        return true
+      }
+      const isCurrentAbono = (a) => {
+        if (!a) return false
+        if (a.session_id && jornadaToken) return a.session_id === jornadaToken
+        if (jornadaInicio) return Number(a.ts || 0) >= jornadaInicio
+        return true
+      }
+
       const [s, t, outOps] = await Promise.all([
         offlineDB.getStats(),
         offlineDB.getTarjetas(),
@@ -49,19 +69,18 @@ export default function TarjetasPage() {
       }
       setAbonosPorTarjeta(abonosMap)
       
-      // Construir mapa de tarjetas con abonos del día actual (incluye outbox y abonos guardados)
-      const today = formatDateYYYYMMDD()
+      // Construir mapa de tarjetas con abonos de la jornada actual (incluye outbox y abonos guardados)
       const map = {}
       let totalMontoHoy = 0
       let totalCountHoy = 0
       try {
-        // Marcar por outbox (acciones locales del día) y sumar montos
-        const opsHoy = outOps.filter(op => op && op.ts && formatDateYYYYMMDD(new Date(op.ts)) === today)
-        const abonosOutboxHoy = opsHoy.filter(op => op?.op === 'abono')
+        // Marcar por outbox (acciones locales de la jornada) y sumar montos
+        const opsSesion = outOps.filter(isCurrentOp)
+        const abonosOutboxSesion = opsSesion.filter(op => op?.op === 'abono')
         const abonoOutboxIds = new Set(
-          abonosOutboxHoy.map(op => String(op?.id || `${op?.tarjeta_codigo || ''}-${op?.ts || 0}`))
+          abonosOutboxSesion.map(op => String(op?.id || `${op?.tarjeta_codigo || ''}-${op?.ts || 0}`))
         )
-        opsHoy.sort((a,b)=>a.ts-b.ts).forEach(op => {
+        opsSesion.sort((a,b)=>a.ts-b.ts).forEach(op => {
           if (op.op === 'abono') {
             map[op.tarjeta_codigo] = true
             totalMontoHoy += Number(op.monto || 0)
@@ -79,15 +98,13 @@ export default function TarjetasPage() {
           try {
             const ab = await offlineDB.getAbonos(tar.codigo)
             const { totHoy, countHoy } = (ab||[]).reduce((acc,a)=>{
-              const d = a?.fecha ? parseISODateToLocal(String(a.fecha)) : (a?.ts ? new Date(a.ts): null)
-              if (d && formatDateYYYYMMDD(d) === today) {
-                const entryId = a && (a.id || a.outbox_id)
-                if (entryId && abonoOutboxIds.has(String(entryId))) {
-                  return acc
-                }
-                acc.totHoy += Number(a?.monto||0)
-                acc.countHoy += 1
+              if (!isCurrentAbono(a)) return acc
+              const entryId = a && (a.id || a.outbox_id)
+              if (entryId && abonoOutboxIds.has(String(entryId))) {
+                return acc
               }
+              acc.totHoy += Number(a?.monto||0)
+              acc.countHoy += 1
               return acc
             }, { totHoy: 0, countHoy: 0 })
             return { codigo: tar.codigo, totHoy, countHoy }
@@ -657,6 +674,7 @@ function SwipeableTarjeta({ tarjeta, barraColor, nombre, telefono, direccion, sa
     const numeric = Number(monto)
     if (!Number.isFinite(numeric) || numeric <= 0) { alert('Monto inválido'); return }
     if (Number.isFinite(Number(saldo)) && numeric > Number(saldo)) { alert('No puedes abonar más que el saldo pendiente'); return }
+    const { token: jornadaToken } = getCurrentJornada()
     
     const queued = await offlineDB.queueOperation({ 
       type: 'abono:add', 
@@ -664,11 +682,13 @@ function SwipeableTarjeta({ tarjeta, barraColor, nombre, telefono, direccion, sa
       tarjeta_codigo: tarjeta.codigo, 
       monto: numeric, 
       metodo_pago: metodo, 
-      ts: Date.now() 
+      ts: Date.now(),
+      session_id: jornadaToken || undefined,
     })
     try {
       const existentes = await offlineDB.getAbonos(tarjeta.codigo)
-      const nuevo = { id: queued.id, fecha: getLocalDateString(), monto: numeric, metodo: metodo }
+      const now = Date.now()
+      const nuevo = { id: queued.id, fecha: getLocalDateString(), monto: numeric, metodo: metodo, ts: now, session_id: jornadaToken || undefined }
       await offlineDB.setAbonos(tarjeta.codigo, [...(existentes||[]), nuevo])
       window.dispatchEvent(new Event('outbox-updated'))
     } catch {}

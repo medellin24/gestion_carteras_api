@@ -265,7 +265,7 @@ class FrameLiquidacion(ttk.Frame):
         # Botón de generar liquidación (mismas dimensiones que asignar base)
         self.btn_generar_liquidacion = ttk.Button(base_frame, text="💰 Generar Liquidación",
                                                  style='Blue.TButton',
-                                                 command=self.generar_liquidacion)
+                                               command=self.generar_liquidacion)
         self.btn_generar_liquidacion.pack(fill='x', pady=6)
         
         # SECCIÓN INFERIOR: Gestión de Gastos (dos columnas)
@@ -802,9 +802,9 @@ class FrameLiquidacion(ttk.Frame):
         
         # Icono y textos
         ttk.Label(frame_carga, text="💼", font=('Segoe UI', 26)).pack(pady=(0, 6))
-        ttk.Label(frame_carga, text="Generando Liquidación",
+        ttk.Label(frame_carga, text="Generando Liquidación", 
                 font=('Segoe UI', 12, 'bold')).pack()
-        ttk.Label(frame_carga, text="Por favor espere...",
+        ttk.Label(frame_carga, text="Por favor espere...", 
                 font=('Segoe UI', 10), foreground='#6B7280').pack(pady=(4, 0))
         
         # Estilo verde para la barra indeterminada
@@ -1253,7 +1253,7 @@ class FrameLiquidacion(ttk.Frame):
         # Botón de asignar
         self.btn_asignar_base = ttk.Button(input_frame, text="✅ Asignar Base",
                                            style='Blue.TButton',
-                                           command=self.asignar_base_rapida)
+                                        command=self.asignar_base_rapida)
         self.btn_asignar_base.pack(fill='x', pady=(5, 0))
         
         # Mensaje adicional

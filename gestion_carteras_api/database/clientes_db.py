@@ -14,7 +14,9 @@ def buscar_cliente_por_cedula(identificacion: str) -> Optional[Dict]:
             query = '''
                 SELECT 
                     identificacion, nombre, apellido,
-                    telefono, direccion, observaciones
+                    telefono, direccion, observaciones,
+                    COALESCE(historial_crediticio, '[]'::jsonb),
+                    COALESCE(score_global, 100)
                 FROM clientes 
                 WHERE identificacion = %s
             '''
@@ -32,6 +34,8 @@ def buscar_cliente_por_cedula(identificacion: str) -> Optional[Dict]:
                 'telefono': result[3],
                 'direccion': result[4],
                 'observaciones': result[5],
+                'historial_crediticio': result[6],
+                'score_global': result[7],
                 'fecha_creacion': date.today()
             }
             
@@ -190,7 +194,8 @@ def obtener_clientes(offset: int = 0, limit: int = 50) -> List[Dict]:
             query = '''
                 SELECT 
                     identificacion, nombre, apellido,
-                    telefono, direccion, observaciones
+                    telefono, direccion, observaciones,
+                    COALESCE(score_global, 100)
                 FROM clientes 
                 ORDER BY nombre, apellido
                 OFFSET %s LIMIT %s
@@ -206,8 +211,27 @@ def obtener_clientes(offset: int = 0, limit: int = 50) -> List[Dict]:
                 'telefono': cliente[3],
                 'direccion': cliente[4],
                 'observaciones': cliente[5],
+                'score_global': cliente[6],
                 'fecha_creacion': date.today()
             } for cliente in clientes]
     except Exception as e:
         logger.error(f"Error al obtener clientes: {e}")
-        return [] 
+        return []
+
+def actualizar_score_historial(identificacion: str, score: int, historial: List[Dict]) -> bool:
+    """Actualiza el score y el historial compactado del cliente"""
+    try:
+        import json
+        historial_json = json.dumps(historial)
+        with DatabasePool.get_cursor() as cursor:
+            query = '''
+                UPDATE clientes 
+                SET score_global = %s,
+                    historial_crediticio = %s::jsonb
+                WHERE identificacion = %s
+            '''
+            cursor.execute(query, (score, historial_json, identificacion))
+            return True
+    except Exception as e:
+        logger.error(f"Error al actualizar score/historial: {e}")
+        return False 

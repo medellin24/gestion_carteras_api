@@ -181,6 +181,9 @@ export const apiClient = {
   getClienteEstadisticas: async (identificacion) => {
     return request(`/clientes/${encodeURIComponent(identificacion)}/estadisticas`, { method: 'GET' })
   },
+  getDataCreditoReport: async (identificacion) => {
+    return request(`/datacredito/clientes/${encodeURIComponent(identificacion)}/reporte`, { method: 'GET' })
+  },
   getTarjeta: async (codigo) => {
     return request(`/tarjetas/${encodeURIComponent(codigo)}`, { method: 'GET' })
   },

@@ -208,6 +208,13 @@ export default function DescargarPage() {
       } catch (e) {
         console.warn('Error limpiando outbox:', e)
       }
+      // Iniciar una nueva jornada local: token + timestamp. Esto separa las sesiones dentro del mismo día.
+      try {
+        const now = Date.now()
+        const token = `jor-${now}-${Math.random().toString(36).slice(2, 8)}`
+        localStorage.setItem('jornada_token', token)
+        localStorage.setItem('jornada_started_at', String(now))
+      } catch {}
       
       const tarjetas = await apiClient.getTarjetasByEmpleado(id, 'activas')
       logDownload('tarjetas_empleado', { empleado: id, total: tarjetas?.length || 0 })

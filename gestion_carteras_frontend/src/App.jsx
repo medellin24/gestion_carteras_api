@@ -1,13 +1,15 @@
 import React, { useEffect, useState } from 'react'
 import { Routes, Route, useNavigate, Navigate, Link, useLocation } from 'react-router-dom'
 import LoginForm from './components/LoginForm.jsx'
-import { Download, FolderOpenDot, Wallet, Upload, LogOut, Settings } from 'lucide-react'
+import { Download, FolderOpenDot, Wallet, Upload, LogOut, Settings, Search } from 'lucide-react'
 import DescargarPage from './pages/Descargar.jsx'
 import TarjetasPage from './pages/Tarjetas.jsx'
 import TarjetaDetallePage from './pages/TarjetaDetalle.jsx'
 import AbonosListadoPage from './pages/AbonosListado.jsx'
 import SubirPage from './pages/Subir.jsx'
 import GastosBasePage from './pages/GastosBase.jsx'
+import DataCreditoPage from './pages/DataCreditoPage.jsx'
+import BusquedaDataCreditoPage from './pages/BusquedaDataCreditoPage.jsx'
 import { apiClient } from './api/client.js'
 import { formatDateYYYYMMDD } from './utils/date.js'
 import { readPlanInfo, persistPlanInfoFromLimits } from './utils/plan.js'
@@ -134,6 +136,7 @@ function Home() {
           <Link className="tile" to="/tarjetas"><FolderOpenDot style={{marginRight:8}} size={20}/> Ver tarjetas</Link>
           <Link className="tile" to="/gastos"><Wallet style={{marginRight:8}} size={20}/> Gastos y base</Link>
           <Link className="tile" to="/subir"><Upload style={{marginRight:8}} size={20}/> Subir tarjetas</Link>
+          <Link className="tile" to="/busqueda-datacredito"><Search style={{marginRight:8}} size={20}/> Consultar DataCrédito</Link>
           <Link className="tile" to="/logout"><LogOut style={{marginRight:8}} size={20}/> Cerrar sesión</Link>
           <Link className="tile" to="/opciones"><Settings style={{marginRight:8}} size={20}/> Opciones</Link>
         </nav>
@@ -153,19 +156,42 @@ function Logout() {
 function App() {
   const [isAuthenticated, setIsAuthenticated] = useState(false)
   const [userRole, setUserRole] = useState(null)
+  const [authReady, setAuthReady] = useState(false)
   const navigate = useNavigate()
   const location = useLocation()
 
+  // Autologin por query ?token=... (usado desde escritorio) y chequeo inicial de token
   useEffect(() => {
-    const token = localStorage.getItem('access_token')
-    const role = localStorage.getItem('user_role')
-    if (token) {
+    const params = new URLSearchParams(window.location.search)
+    const tokenFromQuery = params.get('token')
+    const storedToken = localStorage.getItem('access_token')
+    const storedRole = localStorage.getItem('user_role')
+
+    if (tokenFromQuery) {
+      localStorage.setItem('access_token', tokenFromQuery)
+      // Limpiar el token de la URL para evitar reuso accidental
+      params.delete('token')
+      const newUrl = `${window.location.pathname}${params.toString() ? '?' + params.toString() : ''}${window.location.hash}`
+      window.history.replaceState({}, '', newUrl)
       setIsAuthenticated(true)
-      setUserRole(role)
-      // Si ya está logueado, ir a Home
+    } else if (storedToken) {
+      setIsAuthenticated(true)
+    }
+
+    if (storedRole) {
+      setUserRole(storedRole)
+    }
+
+    setAuthReady(true)
+  }, [])
+
+  // Redirigir a /home solo cuando ya sabemos el estado de auth y estamos en portada
+  useEffect(() => {
+    if (!authReady) return
+    if (isAuthenticated && location.pathname === '/') {
       navigate('/home', { replace: true })
     }
-  }, [])
+  }, [authReady, isAuthenticated, location.pathname, navigate])
 
   // Alternar clase para permitir pull-to-refresh sólo en / y /home (si quieres sólo /, deja solo '/')
   useEffect(() => {
@@ -206,6 +232,10 @@ function App() {
     }
   }, [])
 
+  if (!authReady) {
+    return null
+  }
+
   return (
     <Routes>
       <Route path="/" element={
@@ -224,6 +254,8 @@ function App() {
       </Route>
       <Route path="/gastos" element={isAuthenticated ? <GastosBasePage /> : <Navigate to="/" replace />} />
       <Route path="/subir" element={isAuthenticated ? <SubirPage /> : <Navigate to="/" replace />} />
+      <Route path="/busqueda-datacredito" element={isAuthenticated ? <BusquedaDataCreditoPage /> : <Navigate to="/" replace />} />
+      <Route path="/datacredito/:identificacion" element={isAuthenticated ? <DataCreditoPage /> : <Navigate to="/" replace />} />
       <Route path="/opciones" element={isAuthenticated ? <div className="app-shell"><header className="app-header"><h1>Opciones</h1></header><main><p>Placeholder opciones.</p></main></div> : <Navigate to="/" replace />} />
       <Route path="/logout" element={<Logout />} />
     </Routes>

@@ -1028,13 +1028,25 @@ class VentanaUsuarioCobrador(tk.Toplevel):
         self.btn_actualizar = ttk.Button(cont, text="Actualizar credenciales", style='Primary.TButton', command=self.on_actualizar)
         self.btn_actualizar.pack(fill='x', pady=(10,0))
 
-        def actualizar_preview(*args):
+        def copiar_a_preview(*args):
+            """Mantener preview sincronizado cuando se editan los campos superiores."""
             self.preview_user_entry.delete(0, tk.END)
             self.preview_user_entry.insert(0, self.entry_user.get().strip())
             self.preview_pass_entry.delete(0, tk.END)
             self.preview_pass_entry.insert(0, self.entry_pass.get().strip())
-        self.entry_user.bind('<KeyRelease>', actualizar_preview)
-        self.entry_pass.bind('<KeyRelease>', actualizar_preview)
+
+        def copiar_desde_preview(*args):
+            """Permitir que la edición en la vista previa también actualice los campos base."""
+            self.entry_user.delete(0, tk.END)
+            self.entry_user.insert(0, self.preview_user_entry.get().strip())
+            self.entry_pass.delete(0, tk.END)
+            self.entry_pass.insert(0, self.preview_pass_entry.get().strip())
+
+        # Sincronización bidireccional
+        self.entry_user.bind('<KeyRelease>', copiar_a_preview)
+        self.entry_pass.bind('<KeyRelease>', copiar_a_preview)
+        self.preview_user_entry.bind('<KeyRelease>', copiar_desde_preview)
+        self.preview_pass_entry.bind('<KeyRelease>', copiar_desde_preview)
 
         # Permisos de hoy (lado a lado, estilo robusto)
         perms = ttk.LabelFrame(cont, text="Permisos de hoy (app móvil)", padding=12, style='Section.TLabelframe')
@@ -1087,10 +1099,14 @@ class VentanaUsuarioCobrador(tk.Toplevel):
             if username:
                 self.entry_user.delete(0, tk.END)
                 self.entry_user.insert(0, username)
+                self.preview_user_entry.delete(0, tk.END)
+                self.preview_user_entry.insert(0, username)
             if password:
                 # Cargar password real si está disponible
                 self.entry_pass.delete(0, tk.END)
                 self.entry_pass.insert(0, password)
+                self.preview_pass_entry.delete(0, tk.END)
+                self.preview_pass_entry.insert(0, password)
                 
             # Sincronizar preview
             for _ in range(2):
@@ -1122,8 +1138,9 @@ class VentanaUsuarioCobrador(tk.Toplevel):
             self._pintar_permiso(self.lbl_subir, False)
 
     def on_actualizar(self):
-        username = self.entry_user.get().strip()
-        password = self.entry_pass.get().strip()
+        # Tomar siempre los valores que estén en la "Vista previa del login" (lo que el usuario ve y edita ahí).
+        username = self.preview_user_entry.get().strip()
+        password = self.preview_pass_entry.get().strip()
         if not username or not password or len(password) < 4:
             messagebox.showwarning("Campos requeridos", "Ingrese usuario y contraseña (mín. 4).")
             return

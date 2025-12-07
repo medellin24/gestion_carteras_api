@@ -1,5 +1,4 @@
 from .connection_pool import DatabasePool
-from .connection_pool import DatabasePool
 import logging
 from datetime import datetime, date
 from typing import List, Dict, Optional, Tuple
@@ -10,6 +9,20 @@ logger = logging.getLogger(__name__)
 # Cache para almacenar resultados frecuentes
 _cache = {}
 _cache_timeout = 300  # 5 minutos
+
+def invalidar_cache_tarjetas(empleado_identificacion: Optional[str] = None):
+    """Invalida el caché de tarjetas. Si se especifica empleado, solo invalida ese empleado."""
+    global _cache
+    if empleado_identificacion:
+        # Invalidar solo las entradas de ese empleado
+        keys_to_delete = [k for k in _cache.keys() if f"tarjetas_{empleado_identificacion}_" in k]
+        for k in keys_to_delete:
+            del _cache[k]
+        logger.debug(f"Caché de tarjetas invalidado para empleado {empleado_identificacion}")
+    else:
+        # Invalidar todo el caché
+        _cache = {}
+        logger.debug("Caché de tarjetas invalidado completamente")
 
 def obtener_todas_las_tarjetas(skip: int = 0, limit: int = 100) -> List[Dict]:
     """Obtiene todas las tarjetas con paginación (para endpoint API)"""
@@ -518,30 +531,62 @@ def eliminar_tarjeta(tarjeta_codigo: str) -> bool:
         logger.error(f"Error al eliminar tarjeta: {e}")
         return False
 
-def obtener_historial_cliente(cliente_identificacion: str) -> List[Dict]:
+def obtener_historial_cliente(cliente_identificacion: str, cuenta_id: Optional[int] = None) -> List[Dict]:
+    """
+    Obtiene el historial de tarjetas de un cliente.
+    Si cuenta_id se proporciona, filtra solo tarjetas de empleados de esa cuenta (aislamiento multi-tenant).
+    Si cuenta_id es None, devuelve todas las tarjetas (para DataCrédito global).
+    """
     try:
         with DatabasePool.get_cursor() as cursor:
-            query = """
-                SELECT 
-                    t.fecha_creacion,
-                    t.monto * (1 + t.interes::decimal/100) as monto_total,
-                    t.estado,
-                    t.cuotas,
-                    t.fecha_cancelacion,
-                    CASE 
-                        WHEN t.fecha_cancelacion IS NOT NULL THEN 
-                            (DATE(t.fecha_cancelacion) - DATE(t.fecha_creacion)) - t.cuotas
-                        ELSE
-                            (CURRENT_DATE - DATE(t.fecha_creacion)) - t.cuotas
-                    END as dias_atrasados,
-                    t.interes,
-                    e.nombre as empleado
-                FROM tarjetas t
-                JOIN empleados e ON t.empleado_identificacion = e.identificacion
-                WHERE t.cliente_identificacion = %s
-                ORDER BY t.fecha_creacion DESC
-            """
-            cursor.execute(query, (cliente_identificacion,))
+            if cuenta_id is not None:
+                # Filtrar por empleados de la cuenta específica
+                query = """
+                    SELECT 
+                        t.fecha_creacion,
+                        t.monto * (1 + t.interes::decimal/100) as monto_total,
+                        t.estado,
+                        t.cuotas,
+                        t.fecha_cancelacion,
+                        CASE 
+                            WHEN t.fecha_cancelacion IS NOT NULL THEN 
+                                (DATE(t.fecha_cancelacion) - DATE(t.fecha_creacion)) - t.cuotas
+                            ELSE
+                                (CURRENT_DATE - DATE(t.fecha_creacion)) - t.cuotas
+                        END as dias_atrasados,
+                        t.interes,
+                        e.nombre as empleado
+                    FROM tarjetas t
+                    JOIN empleados e ON t.empleado_identificacion = e.identificacion
+                    WHERE t.cliente_identificacion = %s
+                      AND e.cuenta_id = %s
+                    ORDER BY t.fecha_creacion DESC
+                """
+                cursor.execute(query, (cliente_identificacion, cuenta_id))
+            else:
+                # Sin filtro de cuenta (global)
+                query = """
+                    SELECT 
+                        t.fecha_creacion,
+                        t.monto * (1 + t.interes::decimal/100) as monto_total,
+                        t.estado,
+                        t.cuotas,
+                        t.fecha_cancelacion,
+                        CASE 
+                            WHEN t.fecha_cancelacion IS NOT NULL THEN 
+                                (DATE(t.fecha_cancelacion) - DATE(t.fecha_creacion)) - t.cuotas
+                            ELSE
+                                (CURRENT_DATE - DATE(t.fecha_creacion)) - t.cuotas
+                        END as dias_atrasados,
+                        t.interes,
+                        e.nombre as empleado
+                    FROM tarjetas t
+                    JOIN empleados e ON t.empleado_identificacion = e.identificacion
+                    WHERE t.cliente_identificacion = %s
+                    ORDER BY t.fecha_creacion DESC
+                """
+                cursor.execute(query, (cliente_identificacion,))
+            
             registros = cursor.fetchall()
             
             resultados = []
@@ -561,30 +606,37 @@ def obtener_historial_cliente(cliente_identificacion: str) -> List[Dict]:
         logger.error(f"Error al obtener historial del cliente: {e}")
         return []
 
-def obtener_estadisticas_cliente(cliente_identificacion: str) -> Dict:
+def obtener_estadisticas_cliente(cliente_identificacion: str, cuenta_id: Optional[int] = None) -> Dict:
+    """
+    Obtiene estadísticas de tarjetas de un cliente.
+    Si cuenta_id se proporciona, filtra solo tarjetas de empleados de esa cuenta (aislamiento multi-tenant).
+    Si cuenta_id es None, devuelve estadísticas globales.
+    """
     try:
         with DatabasePool.get_cursor() as cursor:
-            # Verificar si el cliente existe
-            cursor.execute("SELECT * FROM clientes WHERE identificacion = %s", (cliente_identificacion,))
-            cliente = cursor.fetchone()
-
-            # Ver todas las tarjetas en la base de datos
-            cursor.execute("SELECT codigo, cliente_identificacion, monto, estado FROM tarjetas")
-            todas_tarjetas = cursor.fetchall()
-
-            # Ver todos los clientes
-            cursor.execute("SELECT identificacion, nombre, apellido FROM clientes")
-            todos_clientes = cursor.fetchall()
-
-            # Consulta original
-            query = """
-                SELECT 
-                    COUNT(*) as cantidad_tarjetas,
-                    COALESCE(SUM(monto * (1 + interes::decimal/100)), 0) as total_prestado
-                FROM tarjetas
-                WHERE cliente_identificacion = %s
-            """
-            cursor.execute(query, (cliente_identificacion,))
+            if cuenta_id is not None:
+                # Filtrar por empleados de la cuenta específica
+                query = """
+                    SELECT 
+                        COUNT(*) as cantidad_tarjetas,
+                        COALESCE(SUM(t.monto * (1 + t.interes::decimal/100)), 0) as total_prestado
+                    FROM tarjetas t
+                    JOIN empleados e ON t.empleado_identificacion = e.identificacion
+                    WHERE t.cliente_identificacion = %s
+                      AND e.cuenta_id = %s
+                """
+                cursor.execute(query, (cliente_identificacion, cuenta_id))
+            else:
+                # Sin filtro de cuenta (global)
+                query = """
+                    SELECT 
+                        COUNT(*) as cantidad_tarjetas,
+                        COALESCE(SUM(monto * (1 + interes::decimal/100)), 0) as total_prestado
+                    FROM tarjetas
+                    WHERE cliente_identificacion = %s
+                """
+                cursor.execute(query, (cliente_identificacion,))
+            
             row = cursor.fetchone()
             return {
                 'cantidad_tarjetas': row[0],
@@ -593,3 +645,77 @@ def obtener_estadisticas_cliente(cliente_identificacion: str) -> Dict:
     except Exception as e:
         logger.error(f"Error al obtener estadísticas del cliente: {e}")
         return {'cantidad_tarjetas': 0, 'total_prestado': Decimal('0')}
+
+def obtener_tarjetas_cliente(cliente_identificacion: str, cuenta_id: Optional[int] = None) -> List[Dict]:
+    """
+    Obtiene todas las tarjetas de un cliente (activas, canceladas, pendientes)
+    con sus datos crudos para análisis.
+    
+    Si cuenta_id se proporciona, filtra solo tarjetas de empleados de esa cuenta.
+    Si cuenta_id es None, devuelve todas las tarjetas (para DataCrédito global).
+    """
+    try:
+        with DatabasePool.get_cursor() as cursor:
+            if cuenta_id is not None:
+                # Filtrar por empleados de la cuenta específica
+                query = '''
+                    SELECT 
+                        t.codigo,
+                        t.monto,
+                        t.interes,
+                        t.cuotas,
+                        t.numero_ruta,
+                        t.estado,
+                        t.fecha_creacion,
+                        t.fecha_cancelacion,
+                        t.observaciones,
+                        t.empleado_identificacion
+                    FROM tarjetas t
+                    JOIN empleados e ON t.empleado_identificacion = e.identificacion
+                    WHERE t.cliente_identificacion = %s
+                      AND e.cuenta_id = %s
+                    ORDER BY t.fecha_creacion DESC
+                '''
+                cursor.execute(query, (cliente_identificacion, cuenta_id))
+            else:
+                # Sin filtro de cuenta (global para DataCrédito)
+                query = '''
+                    SELECT 
+                        t.codigo,
+                        t.monto,
+                        t.interes,
+                        t.cuotas,
+                        t.numero_ruta,
+                        t.estado,
+                        t.fecha_creacion,
+                        t.fecha_cancelacion,
+                        t.observaciones,
+                        t.empleado_identificacion
+                    FROM tarjetas t
+                    WHERE t.cliente_identificacion = %s
+                    ORDER BY t.fecha_creacion DESC
+                '''
+                cursor.execute(query, (cliente_identificacion,))
+            
+            rows = cursor.fetchall()
+            
+            tarjetas = []
+            for row in rows:
+                tarjeta = {
+                    'codigo': row[0],
+                    'monto': row[1],
+                    'interes': row[2],
+                    'cuotas': row[3],
+                    'numero_ruta': row[4],
+                    'estado': row[5],
+                    'fecha_creacion': row[6],
+                    'fecha_cancelacion': row[7],
+                    'observaciones': row[8],
+                    'empleado_identificacion': row[9]
+                }
+                tarjetas.append(tarjeta)
+            return tarjetas
+            
+    except Exception as e:
+        logger.error(f"Error al obtener tarjetas del cliente: {e}")
+        return []
