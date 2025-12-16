@@ -3,6 +3,17 @@ import { offlineDB } from '../offline/db.js'
 import { getCurrentRoleAndEmpleado } from '../utils/jwt.js'
 import { getLocalDateString } from '../utils/date.js'
 
+const TIPOS_GASTO = ['GASOLINA', 'VIATICOS', 'MANTENIMIENTO', 'SALARIO', 'OTROS']
+
+// Paleta consistente (alto contraste en fondo oscuro)
+const TIPO_STYLES = {
+  GASOLINA: { bg: 'rgba(245, 158, 11, 0.25)', border: 'rgba(245, 158, 11, 0.55)', text: '#fbbf24' },
+  VIATICOS: { bg: 'rgba(59, 130, 246, 0.22)', border: 'rgba(59, 130, 246, 0.55)', text: '#60a5fa' },
+  MANTENIMIENTO: { bg: 'rgba(168, 85, 247, 0.22)', border: 'rgba(168, 85, 247, 0.55)', text: '#c084fc' },
+  SALARIO: { bg: 'rgba(34, 197, 94, 0.20)', border: 'rgba(34, 197, 94, 0.55)', text: '#4ade80' },
+  OTROS: { bg: 'rgba(148, 163, 184, 0.18)', border: 'rgba(148, 163, 184, 0.45)', text: '#cbd5e1' },
+}
+
 export default function GastosBasePage(){
   const [tipo, setTipo] = useState('GASOLINA')
   const [valor, setValor] = useState('')
@@ -204,12 +215,31 @@ export default function GastosBasePage(){
         <div className="card" style={{maxWidth:680, display:'grid', gap:8}}>
           <strong>Agregar gasto</strong>
           <label>Tipo
-            <select value={tipo} onChange={(e)=>setTipo(e.target.value)} disabled={busy}>
-              <option>GASOLINA</option>
-              <option>VIATICOS</option>
-              <option>MANTENIMIENTO</option>
-              <option>SALARIO</option>
-              <option>OTROS</option>
+            <select
+              value={tipo}
+              onChange={(e)=>setTipo(e.target.value)}
+              disabled={busy}
+              style={{
+                marginTop: 6,
+                background: (TIPO_STYLES[tipo] || TIPO_STYLES.OTROS).bg,
+                border: `1px solid ${(TIPO_STYLES[tipo] || TIPO_STYLES.OTROS).border}`,
+                color: 'rgba(255,255,255,0.92)',
+                fontWeight: 700,
+              }}
+            >
+              {TIPOS_GASTO.map((t) => (
+                <option
+                  key={t}
+                  value={t}
+                  // Nota: algunos navegadores móviles ignoran estilos en <option>.
+                  style={{
+                    background: (TIPO_STYLES[t] || TIPO_STYLES.OTROS).bg,
+                    color: '#111827',
+                  }}
+                >
+                  {t}
+                </option>
+              ))}
             </select>
           </label>
           <label>Valor

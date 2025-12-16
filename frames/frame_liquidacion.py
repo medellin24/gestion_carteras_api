@@ -56,11 +56,29 @@ class FrameLiquidacion(ttk.Frame):
         self._detalles_abiertos = {}
         
         self.setup_ui()
+        self._bind_empleados_actualizados_event()
         self.cargar_empleados(force=True)
         self.cargar_tipos_gastos()
         
         # Estado inicial - mostrar que se debe generar liquidación
         self.limpiar_datos_liquidacion()
+
+    def _bind_empleados_actualizados_event(self):
+        """Escucha cambios de empleados (alta/edición/baja) para refrescar el combobox."""
+        try:
+            top = self.winfo_toplevel()
+            # add="+" para no pisar otros bindings existentes
+            top.bind("<<EmpleadosActualizados>>", self._on_empleados_actualizados, add="+")
+        except Exception:
+            # No debe romper la UI si el binding falla por algún motivo
+            pass
+
+    def _on_empleados_actualizados(self, event=None):
+        """Refresca el listado de empleados cuando otro frame lo modifica."""
+        try:
+            self.cargar_empleados(force=True)
+        except Exception:
+            pass
 
     def setup_ui(self):
         """Configura la interfaz según el diseño de la imagen proporcionada"""
@@ -326,6 +344,7 @@ class FrameLiquidacion(ttk.Frame):
         """Carga la lista de empleados desde la API."""
         try:
             t0 = _pc()
+            prev_id = getattr(self, "empleado_actual_id", None)
             # Evitar recargas innecesarias salvo 'force'
             if getattr(self, 'empleados_dict', None) and not force:
                 logger.info(f"[perf][liq] cargar_empleados: skipped (cache), n={len(self.empleados_dict)}")
@@ -338,6 +357,30 @@ class FrameLiquidacion(ttk.Frame):
                 }
                 self.combo_empleado['values'] = list(self.empleados_dict.keys())
                 logger.info(f"Cargados {len(empleados)} empleados correctamente desde la API")
+
+                # Mantener selección previa si todavía existe (p. ej. cambió el nombre)
+                if prev_id:
+                    nombre_prev = None
+                    for nombre, emp_id in self.empleados_dict.items():
+                        if emp_id == prev_id:
+                            nombre_prev = nombre
+                            break
+                    if nombre_prev:
+                        try:
+                            self.combo_empleado.set(nombre_prev)
+                        except Exception:
+                            pass
+                    else:
+                        # Si el empleado fue eliminado, limpiar selección y UI
+                        self.empleado_actual_id = None
+                        try:
+                            self.combo_empleado.set('▼ Elige empleado')
+                        except Exception:
+                            pass
+                        try:
+                            self.limpiar_datos_liquidacion()
+                        except Exception:
+                            pass
             logger.info(f"[perf][liq] cargar_empleados: {(_pc()-t0):.3f}s, n={len(empleados) if empleados else 0}")
         except Exception as e:
             logger.error(f"Error al cargar empleados desde la API: {e}")

@@ -196,8 +196,8 @@ export const apiClient = {
   eliminarUltimoAbono: async (tarjetaCodigo) => {
     return request(`/tarjetas/${encodeURIComponent(tarjetaCodigo)}/abonos/ultimo`, { method: 'DELETE' })
   },
-  crearTarjeta: async ({ cliente_identificacion, empleado_identificacion, monto, cuotas, interes, numero_ruta, observaciones, posicion_anterior, posicion_siguiente }) => {
-    return request('/tarjetas/', { method: 'POST', body: { cliente_identificacion, empleado_identificacion, monto, cuotas, interes, numero_ruta, observaciones, posicion_anterior, posicion_siguiente } })
+  crearTarjeta: async ({ cliente_identificacion, empleado_identificacion, monto, cuotas, interes, modalidad_pago, numero_ruta, observaciones, posicion_anterior, posicion_siguiente }) => {
+    return request('/tarjetas/', { method: 'POST', body: { cliente_identificacion, empleado_identificacion, monto, cuotas, interes, modalidad_pago, numero_ruta, observaciones, posicion_anterior, posicion_siguiente } })
   },
   sync: async (payload) => {
     try {

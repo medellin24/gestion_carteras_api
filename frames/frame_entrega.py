@@ -300,7 +300,20 @@ class FrameEntrega(ttk.Frame):
             # Consultar en segundo plano para no bloquear la UI
             def _worker():
                 try:
-                    tarjetas_loc = self.api_client.list_tarjetas(empleado_id=empleado_id, estado=estado, limit=200)
+                    # Si el usuario elige "cancelada(s)", limitar a los últimos 30 días para evitar cargar histórico completo
+                    desde = None
+                    if str(estado).lower() in ("cancelada", "canceladas"):
+                        try:
+                            from datetime import datetime, timedelta, date as _date
+                            from zoneinfo import ZoneInfo as _ZI
+                            try:
+                                hoy = datetime.now(_ZI(getattr(self, "token_tz", "UTC"))).date()
+                            except Exception:
+                                hoy = _date.today()
+                            desde = hoy - timedelta(days=30)
+                        except Exception:
+                            desde = None
+                    tarjetas_loc = self.api_client.list_tarjetas(empleado_id=empleado_id, estado=estado, limit=200, desde=desde)
                     logger.info(f"API retornó {len(tarjetas_loc)} tarjetas")
                 except Exception as _e:
                     logger.error(f"Error al consultar tarjetas: {_e}")
@@ -752,9 +765,20 @@ class FrameEntrega(ttk.Frame):
                 num_cuotas = int(tarjeta.get('cuotas') or 0)
                 
                 # Fecha teórica de vencimiento (sin festivos por ahora, cálculo simple)
-                # Si cobro diario: fecha_creacion + cuotas (días)
+                # Según modalidad de pago
+                modalidad = str(tarjeta.get('modalidad_pago') or 'diario').strip().lower()
+                if modalidad not in ('diario', 'semanal', 'quincenal', 'mensual'):
+                    modalidad = 'diario'
                 from datetime import timedelta
-                fecha_vencimiento = fecha_creacion + timedelta(days=num_cuotas)
+                if modalidad == 'semanal':
+                    fecha_vencimiento = fecha_creacion + timedelta(days=num_cuotas * 7)
+                elif modalidad == 'quincenal':
+                    fecha_vencimiento = fecha_creacion + timedelta(days=num_cuotas * 15)
+                elif modalidad == 'mensual':
+                    # Regla solicitada: mensual = cada 30 días (no mes calendario)
+                    fecha_vencimiento = fecha_creacion + timedelta(days=num_cuotas * 30)
+                else:
+                    fecha_vencimiento = fecha_creacion + timedelta(days=num_cuotas)
                 
                 delta_vencido = (fecha_actual - fecha_vencimiento).days
                 if delta_vencido > 0:
@@ -1203,6 +1227,7 @@ class FrameEntrega(ttk.Frame):
         self.info_labels = {}
         campos_info = [
             ('Cuotas', '-- cuota(s) de $ --'),
+            ('Modalidad de pago', '--'),
             ('Abono', '$ --'),
             ('Saldo', '$ --'),
             ('Cuotas pendientes a la fecha', '--'),
@@ -1454,6 +1479,14 @@ class FrameEntrega(ttk.Frame):
             # Actualizar labels con valores del resumen
             self.info_labels['Cuotas'].config(
                 text=f"{resumen['cuotas_restantes']} cuota(s) de $ {Decimal(resumen['valor_cuota']):,.0f}")
+
+            # Modalidad (si el backend la incluye; fallback a diario)
+            try:
+                modalidad = str(resumen.get('modalidad_pago') or 'diario')
+            except Exception:
+                modalidad = 'diario'
+            if 'Modalidad de pago' in self.info_labels:
+                self.info_labels['Modalidad de pago'].config(text=modalidad)
             
             self.info_labels['Abono'].config(
                 text=f"$ {Decimal(resumen['total_abonado']):,.0f}")
@@ -1463,10 +1496,24 @@ class FrameEntrega(ttk.Frame):
             self.info_labels['Saldo'].config(
                 text=f"$ {saldo_pendiente:,.0f}", foreground=saldo_color)
             
-            cuotas_atrasadas = resumen.get('cuotas_pendientes_a_la_fecha', 0)
-            atraso_color = '#d32f2f' if cuotas_atrasadas > 0 else '#2e7d32'
+            # Interpretación correcta:
+            # cuotas_pendientes_a_la_fecha = cuotas_pagadas - cuotas_esperadas
+            #   < 0 => atraso, > 0 => adelanto, = 0 => al día
+            try:
+                balance = int(resumen.get('cuotas_pendientes_a_la_fecha', 0) or 0)
+            except Exception:
+                balance = 0
+            if balance < 0:
+                txt_balance = f"{abs(balance)} atraso"
+                color_balance = '#d32f2f'
+            elif balance > 0:
+                txt_balance = f"{balance} adelantado"
+                color_balance = '#2e7d32'
+            else:
+                txt_balance = "Al día"
+                color_balance = '#2e7d32'
             self.info_labels['Cuotas pendientes a la fecha'].config(
-                text=str(cuotas_atrasadas), foreground=atraso_color)
+                text=txt_balance, foreground=color_balance)
             
             dias_vencido = resumen.get('dias_pasados_cancelacion', 0)
             vencido_color = '#d32f2f' if dias_vencido > 0 else '#2e7d32'
@@ -1647,16 +1694,34 @@ class FrameEntrega(ttk.Frame):
         try:
             self.info_labels['Cuotas'].config(
                 text=f"{resumen.get('cuotas_restantes', 0)} cuota(s) de $ {Decimal(resumen.get('valor_cuota', 0)):,.0f}")
+            # Modalidad (si viene en resumen; fallback a diario)
+            try:
+                modalidad = str(resumen.get('modalidad_pago') or 'diario')
+            except Exception:
+                modalidad = 'diario'
+            if 'Modalidad de pago' in self.info_labels:
+                self.info_labels['Modalidad de pago'].config(text=modalidad)
             self.info_labels['Abono'].config(
                 text=f"$ {Decimal(resumen.get('total_abonado', 0)):,.0f}")
             saldo_pendiente = Decimal(resumen.get('saldo_pendiente', 0))
             saldo_color = '#d32f2f' if saldo_pendiente > 0 else '#2e7d32'
             self.info_labels['Saldo'].config(
                 text=f"$ {saldo_pendiente:,.0f}", foreground=saldo_color)
-            cuotas_atrasadas = resumen.get('cuotas_pendientes_a_la_fecha', 0)
-            atraso_color = '#d32f2f' if cuotas_atrasadas > 0 else '#2e7d32'
+            try:
+                balance = int(resumen.get('cuotas_pendientes_a_la_fecha', 0) or 0)
+            except Exception:
+                balance = 0
+            if balance < 0:
+                txt_balance = f"{abs(balance)} atraso"
+                color_balance = '#d32f2f'
+            elif balance > 0:
+                txt_balance = f"{balance} adelantado"
+                color_balance = '#2e7d32'
+            else:
+                txt_balance = "Al día"
+                color_balance = '#2e7d32'
             self.info_labels['Cuotas pendientes a la fecha'].config(
-                text=str(cuotas_atrasadas), foreground=atraso_color)
+                text=txt_balance, foreground=color_balance)
             dias_vencido = resumen.get('dias_pasados_cancelacion', 0)
             vencido_color = '#d32f2f' if dias_vencido > 0 else '#2e7d32'
             self.info_labels['Días pasados de cancelación'].config(

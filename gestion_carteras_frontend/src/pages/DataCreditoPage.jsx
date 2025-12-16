@@ -276,12 +276,15 @@ function getStatusBadge(estado) {
 }
 
 // Generar nombre enmascarado de empresa
-function getEmpresaEnmascarada(empresaAnonym, index) {
-  if (!empresaAnonym || empresaAnonym === 'Esta Empresa') {
+function getEmpresaEnmascarada(empresaAnonym) {
+  if (!empresaAnonym || String(empresaAnonym).trim() === '') {
+    return 'Oficina desconocida'
+  }
+  if (empresaAnonym === 'Esta Empresa') {
     return 'Tu Oficina'
   }
-  // Para empresas externas, usar nombre genérico
-  return `Oficina ${index + 1}`
+  // Ya viene anonimizada desde el backend (ej: "Empresa Externa A")
+  return String(empresaAnonym)
 }
 
 // Componente Gauge con velocímetro/aguja
@@ -459,6 +462,21 @@ export default function DataCreditoPage() {
   if (!report) return null
 
   const scoreColors = getScoreColor(report.score_global)
+  const tarjetasLista = report.tarjetas_activas || []
+  const historialLista = report.historial_compactado || []
+
+  const esActiva = (t) => {
+    const st = String(t?.estado_final || '').toLowerCase()
+    return st.includes('activa') || st.includes('pendiente')
+  }
+  const esCerrada = (t) => {
+    const st = String(t?.estado_final || '').toLowerCase()
+    // cancelada, archivada, castigada, etc. Todo lo que NO sea activa/pendiente lo tratamos como cerrado.
+    return !esActiva(t)
+  }
+
+  const oficinasActivas = new Set(tarjetasLista.filter(esActiva).map(t => t.empresa_anonym).filter(Boolean)).size
+  const oficinasCerradas = new Set([...historialLista, ...tarjetasLista.filter(esCerrada)].map(t => t.empresa_anonym).filter(Boolean)).size
 
   return (
     <div style={styles.page}>
@@ -508,51 +526,81 @@ export default function DataCreditoPage() {
           {/* Gauge con velocímetro */}
           <GaugeChart score={report.score_global} />
           
-          <div style={{fontSize: '14px', color: 'rgba(255,255,255,0.6)', marginTop: '56px', marginBottom: '8px'}}>
-            {report.score_global >= 80 ? '🌟 Excelente historial crediticio' :
-             report.score_global >= 60 ? '✅ Buen comportamiento de pago' :
-             report.score_global >= 40 ? '⚠️ Historial con algunas alertas' :
-             '🚨 Alto riesgo crediticio'}
+          <div style={{fontSize: '18px', fontWeight: 'bold', color: scoreColors.text, marginTop: '56px', marginBottom: '8px', textTransform: 'uppercase', letterSpacing: '1px'}}>
+            {report.score_global >= 80 ? '🌟 EXCELENTE' :
+             report.score_global >= 60 ? '✅ BUENO' :
+             report.score_global >= 40 ? '⚠️ REGULAR' :
+             '🚨 CLAVO'}
+          </div>
+
+          <div style={{fontSize: '14px', color: 'rgba(255,255,255,0.6)', marginBottom: '8px'}}>
+            {report.score_global >= 80 ? 'Cliente altamente recomendado.' :
+             report.score_global >= 60 ? 'Comportamiento de pago aceptable.' :
+             report.score_global >= 40 ? 'Requiere seguimiento cercano.' :
+             'Riesgo alto de impago.'}
           </div>
 
           {/* Stats */}
-          <div style={{...styles.statsGrid, marginTop: '60px'}}>
-            <div style={{...styles.statBox, background: 'rgba(34,197,94,0.1)', borderColor: 'rgba(34,197,94,0.2)'}}>
-              <div style={{...styles.statValue, color: '#22c55e'}}>{report.total_creditos_activos}</div>
-              <div style={styles.statLabel}>Activos</div>
-            </div>
-            <div style={styles.statBox}>
-              <div style={styles.statValue}>{report.total_creditos_cerrados}</div>
-              <div style={styles.statLabel}>Cerrados</div>
-            </div>
-            <div style={styles.statBox}>
-              <div style={{...styles.statValue, color: report.promedio_retraso_historico > 3 ? '#ef4444' : '#22c55e'}}>
-                {report.promedio_retraso_historico}d
-              </div>
-              <div style={{...styles.statLabel, display: 'flex', alignItems: 'center', gap: '4px'}}>
-                Prom. Retraso
-                <button 
-                  style={{...styles.infoBtn, marginTop: 0}}
-                  onClick={() => showTooltip('Promedio de Retraso', 'Días promedio de retraso en el cierre de sus créditos.')}
-                >
-                  <AlertCircle size={10} color="rgba(255,255,255,0.4)" />
-                </button>
-              </div>
-            </div>
-            <div style={styles.statBox}>
-              <div style={{...styles.statValue, color: report.frecuencia_pago_promedio >= 70 ? '#22c55e' : '#fb923c'}}>
-                {report.frecuencia_pago_promedio}%
-              </div>
-              <div style={{...styles.statLabel, display: 'flex', alignItems: 'center', gap: '4px'}}>
-                Puntualidad
-                <button 
-                  style={{...styles.infoBtn, marginTop: 0}}
-                  onClick={() => showTooltip('Puntualidad', 'Porcentaje de días que el cliente estuvo al día con sus pagos.')}
-                >
-                  <AlertCircle size={10} color="rgba(255,255,255,0.4)" />
-                </button>
-              </div>
-            </div>
+          <div style={{marginTop: '40px'}}>
+             <div style={{
+                fontSize: '12px',
+                textTransform: 'uppercase',
+                letterSpacing: '2px',
+                color: 'rgba(255,255,255,0.5)',
+                marginBottom: '16px',
+                textAlign: 'center'
+             }}>
+                Número de Préstamos
+             </div>
+             <div style={{...styles.statsGrid, gridTemplateColumns: '1fr 1fr'}}>
+                <div style={{...styles.statBox, background: 'rgba(34,197,94,0.1)', borderColor: 'rgba(34,197,94,0.2)'}}>
+                  <div style={{...styles.statValue, color: '#22c55e'}}>{report.total_creditos_activos}</div>
+                  <div style={styles.statLabel}>Activos</div>
+                  <div style={{fontSize: '10px', color: 'rgba(255,255,255,0.4)', marginTop: '2px'}}>
+                     En {oficinasActivas} oficinas
+                  </div>
+                </div>
+                <div style={styles.statBox}>
+                  <div style={styles.statValue}>{report.total_creditos_cerrados}</div>
+                  <div style={styles.statLabel}>Cerrados</div>
+                  <div style={{fontSize: '10px', color: 'rgba(255,255,255,0.4)', marginTop: '2px'}}>
+                     En {oficinasCerradas} oficinas
+                  </div>
+                </div>
+             </div>
+             
+             {/* Indicadores Globales Abajo */}
+             <div style={{...styles.statsGrid, marginTop: '12px', gridTemplateColumns: '1fr 1fr'}}>
+                <div style={styles.statBox}>
+                  <div style={{...styles.statValue, color: report.frecuencia_pago_promedio >= 70 ? '#22c55e' : '#fb923c'}}>
+                    {Math.round(report.frecuencia_pago_promedio)}%
+                  </div>
+                  <div style={{...styles.statLabel, display: 'flex', alignItems: 'center', gap: '4px', justifyContent: 'center'}}>
+                    Puntualidad Global
+                    <button 
+                      style={{...styles.infoBtn, marginTop: 0}}
+                      onClick={() => showTooltip('Puntualidad Global', 'Promedio de puntualidad de todos sus créditos históricos y actuales.')}
+                    >
+                      <AlertCircle size={10} color="rgba(255,255,255,0.4)" />
+                    </button>
+                  </div>
+                </div>
+
+                <div style={styles.statBox}>
+                  <div style={{...styles.statValue, color: report.promedio_retraso_historico > 3 ? '#ef4444' : '#22c55e'}}>
+                     {Math.round(report.promedio_retraso_historico)}d
+                  </div>
+                  <div style={{...styles.statLabel, display: 'flex', alignItems: 'center', gap: '4px', justifyContent: 'center'}}>
+                    Estrés Global
+                    <button 
+                      style={{...styles.infoBtn, marginTop: 0}}
+                      onClick={() => showTooltip('Estrés Global', 'Promedio de días de retraso + cuotas pendientes históricas.')}
+                    >
+                      <AlertCircle size={10} color="rgba(255,255,255,0.4)" />
+                    </button>
+                  </div>
+                </div>
+             </div>
           </div>
         </div>
 
@@ -594,7 +642,7 @@ function CreditCard({ data, isHistory = false, empresaIndex = 0 }) {
   const statusBadge = getStatusBadge(data.estado_final)
   const StatusIcon = statusBadge.icon
   const semaforo = getSemaforoClasificacion(data.puntaje_atraso_cierre)
-  const empresaNombre = getEmpresaEnmascarada(data.empresa_anonym, empresaIndex)
+  const empresaNombre = getEmpresaEnmascarada(data.empresa_anonym)
 
   return (
     <div style={{
@@ -646,34 +694,38 @@ function CreditCard({ data, isHistory = false, empresaIndex = 0 }) {
       <div style={styles.indicatorsGrid}>
         <Indicator 
           label="Días Retraso"
-          value={`${data.dias_retraso_final}d`}
+          value={data.dias_retraso_final}
+          unit="días"
           isBad={data.dias_retraso_final > 0}
           onInfo={() => showTooltip('Días de Retraso', 'Días extra que tomó pagar después de la fecha acordada. 0 = Pagó a tiempo o antes.')}
         />
         <Indicator 
           label="Puntualidad"
-          value={`${data.frecuencia_pagos}%`}
+          value={data.frecuencia_pagos}
+          unit="%"
           isBad={data.frecuencia_pagos < 70}
-          onInfo={() => showTooltip('Puntualidad Diaria', 'Porcentaje de días que estuvo al día o pagó. 100% = Siempre puntual.')}
+          onInfo={() => showTooltip('Puntualidad', 'Porcentaje de días/períodos pagados a tiempo. Impacta 40% en el score de esta tarjeta.')}
         />
         <Indicator 
-          label="Atraso Prom."
-          value={`${data.promedio_atraso}c`}
-          isBad={data.promedio_atraso > 1}
-          onInfo={() => showTooltip('Atraso Promedio', 'Cuotas promedio que debió durante la vida del crédito. 0 = Nunca debió cuotas.')}
+          label="Máx. Cuotas Atras."
+          value={data.max_cuotas_atrasadas || 0}
+          unit="cuotas"
+          isBad={(data.max_cuotas_atrasadas || 0) > 2}
+          onInfo={() => showTooltip('Máximo Cuotas Atrasadas', 'El peor momento de mora que tuvo este crédito (pico de cuotas vencidas). Informativo.')}
         />
         <Indicator 
           label="Estrés Cierre"
           value={data.puntaje_atraso_cierre}
-          isBad={data.puntaje_atraso_cierre > 5}
-          onInfo={() => showTooltip('Estrés al Cierre', 'Suma de cuotas pendientes + días vencidos al momento del cierre. Mide la "tensión" final.')}
+          unit="días/cuotas"
+          isBad={data.puntaje_atraso_cierre > 6}
+          onInfo={() => showTooltip('Estrés al Cierre', 'Suma de cuotas pendientes + días vencidos. Impacta 60% en el score. >6 es Regular, >15 es Malo.')}
         />
       </div>
     </div>
   )
 }
 
-function Indicator({ label, value, isBad, onInfo }) {
+function Indicator({ label, value, unit, isBad, onInfo }) {
   return (
     <div style={styles.indicator}>
       <div style={styles.indicatorLabel}>
@@ -687,9 +739,20 @@ function Indicator({ label, value, isBad, onInfo }) {
       </div>
       <div style={{
         ...styles.indicatorValue,
-        color: isBad ? '#ef4444' : '#22c55e'
+        color: isBad ? '#ef4444' : '#22c55e',
+        display: 'flex',
+        alignItems: 'baseline',
+        gap: '2px'
       }}>
-        {value}
+        <span>{value}</span>
+        <span style={{
+          fontSize: '10px',
+          fontWeight: '400',
+          textTransform: 'lowercase',
+          color: 'rgba(255,255,255,0.4)'
+        }}>
+          {unit}
+        </span>
       </div>
     </div>
   )

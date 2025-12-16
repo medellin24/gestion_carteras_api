@@ -141,9 +141,21 @@ class VentanaNuevaTarjeta(tk.Toplevel):
         self.combo_interes.pack(anchor='w', pady=(5,10))
         self.combo_interes.set('20')  # Establecer 20% por defecto
         
-        ttk.Label(frame_tarjeta, text="Cuotas").pack(anchor='w', pady=(10,0))
-        self.entry_cuotas = ttk.Entry(frame_tarjeta, width=8)
-        self.entry_cuotas.pack(anchor='w', pady=(5,10))
+        ttk.Label(frame_tarjeta, text="Modalidad / Cuotas").pack(anchor='w', pady=(10,0))
+        frame_mod_cuotas = ttk.Frame(frame_tarjeta)
+        frame_mod_cuotas.pack(fill='x', pady=(5,10))
+        # Combobox modalidad (por defecto: diario)
+        self.combo_modalidad = ttk.Combobox(
+            frame_mod_cuotas,
+            values=['diario', 'semanal', 'quincenal', 'mensual'],
+            state='readonly',
+            width=10
+        )
+        self.combo_modalidad.pack(side='left')
+        self.combo_modalidad.set('diario')
+        # Entry cuotas (más corto para dejar espacio al combobox)
+        self.entry_cuotas = ttk.Entry(frame_mod_cuotas, width=6)
+        self.entry_cuotas.pack(side='left', padx=(8, 0))
         self.entry_cuotas.insert(0, '30')  # Establecer 30 cuotas por defecto
         self.entry_cuotas.bind('<FocusIn>', self.seleccionar_cuotas)  # Agregar evento de foco
         
@@ -314,6 +326,14 @@ class VentanaNuevaTarjeta(tk.Toplevel):
             except ValueError:
                 errores.append("El número de cuotas debe ser un número válido")
 
+            modalidad_pago = 'diario'
+            try:
+                modalidad_pago = str(self.combo_modalidad.get() or 'diario').strip().lower()
+                if modalidad_pago not in ('diario', 'semanal', 'quincenal', 'mensual'):
+                    modalidad_pago = 'diario'
+            except Exception:
+                modalidad_pago = 'diario'
+
             # Si hay errores, mostrarlos y detener la creación
             if errores:
                 messagebox.showerror("Error de Validación", "\n".join(errores))
@@ -395,6 +415,7 @@ class VentanaNuevaTarjeta(tk.Toplevel):
                 'monto': float(monto),
                 'cuotas': int(cuotas),
                 'interes': int(interes),
+                'modalidad_pago': modalidad_pago,
                 'numero_ruta': float(numero_ruta) if numero_ruta is not None else None,
                 'observaciones': observaciones or None,
                 'posicion_anterior': float(posicion_anterior) if posicion_anterior is not None else None,

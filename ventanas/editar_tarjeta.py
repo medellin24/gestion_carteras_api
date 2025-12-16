@@ -136,10 +136,21 @@ class VentanaEditarTarjeta:
         self.entry_interes = ttk.Entry(frame_prestamo, width=18, font=('Arial', 10))
         self.entry_interes.grid(row=2, column=1, sticky='ew', padx=(10, 0), pady=4)
         
-        # Cuotas
-        ttk.Label(frame_prestamo, text="Número de Cuotas:").grid(row=3, column=0, sticky='w', pady=4)
-        self.entry_cuotas = ttk.Entry(frame_prestamo, width=18, font=('Arial', 10))
-        self.entry_cuotas.grid(row=3, column=1, sticky='ew', padx=(10, 0), pady=4)
+        # Modalidad / Cuotas (combo pequeño + entry más corto)
+        ttk.Label(frame_prestamo, text="Modalidad / Cuotas:").grid(row=3, column=0, sticky='w', pady=4)
+        frame_mod_cuotas = ttk.Frame(frame_prestamo)
+        frame_mod_cuotas.grid(row=3, column=1, sticky='ew', padx=(10, 0), pady=4)
+        self.combo_modalidad = ttk.Combobox(
+            frame_mod_cuotas,
+            values=['diario', 'semanal', 'quincenal', 'mensual'],
+            state='readonly',
+            width=10,
+            font=('Arial', 10)
+        )
+        self.combo_modalidad.pack(side='left')
+        self.combo_modalidad.set('diario')
+        self.entry_cuotas = ttk.Entry(frame_mod_cuotas, width=8, font=('Arial', 10))
+        self.entry_cuotas.pack(side='left', padx=(8, 0))
         
         # Fecha de creación con calendario
         ttk.Label(frame_prestamo, text="Fecha de Creación:").grid(row=4, column=0, sticky='w', pady=4)
@@ -363,6 +374,18 @@ class VentanaEditarTarjeta:
                 self.entry_numero_ruta.insert(0, str(self.tarjeta_data['numero_ruta']))
         self.entry_monto.insert(0, str(self.tarjeta_data['monto']))
         self.entry_interes.insert(0, str(self.tarjeta_data['interes']))
+        # Modalidad de pago (si no viene, default diario)
+        try:
+            modalidad = str(self.tarjeta_data.get('modalidad_pago') or 'diario').strip().lower()
+            if modalidad not in ('diario', 'semanal', 'quincenal', 'mensual'):
+                modalidad = 'diario'
+        except Exception:
+            modalidad = 'diario'
+        try:
+            self.combo_modalidad.set(modalidad)
+        except Exception:
+            pass
+
         self.entry_cuotas.insert(0, str(self.tarjeta_data['cuotas']))
         
         # Fecha de creación
@@ -490,12 +513,21 @@ class VentanaEditarTarjeta:
                     return
                 numero_ruta = int(numero_ruta_raw)
             
+            modalidad_pago = 'diario'
+            try:
+                modalidad_pago = str(self.combo_modalidad.get() or 'diario').strip().lower()
+                if modalidad_pago not in ('diario', 'semanal', 'quincenal', 'mensual'):
+                    modalidad_pago = 'diario'
+            except Exception:
+                modalidad_pago = 'diario'
+
             # Actualizar tarjeta
             resp = api_client.update_tarjeta(self.tarjeta_codigo, {
                 'monto': float(monto),
                 'cuotas': int(cuotas),
                 'fecha_creacion': fecha_creacion,
                 'interes': int(interes),
+                'modalidad_pago': modalidad_pago,
                 'observaciones': observaciones or None,
                 'numero_ruta': numero_ruta
             })

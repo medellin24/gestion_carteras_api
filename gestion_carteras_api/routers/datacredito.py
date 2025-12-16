@@ -6,6 +6,7 @@ from datetime import date, datetime
 from ..schemas import DataCreditoReport, IndicadoresTarjeta
 from ..security import get_current_principal, require_admin
 from ..services.risk_engine import RiskEngine
+from ..database.connection_pool import DatabasePool
 from ..database.clientes_db import obtener_cliente_por_identificacion, actualizar_score_historial
 from ..database.tarjetas_db import obtener_tarjetas_cliente
 from ..database.abonos_db import obtener_abonos_por_tarjeta
@@ -34,7 +35,27 @@ def get_datacredito_report(identificacion: str, principal: dict = Depends(get_cu
     """
     try:
         # Obtener cuenta_id del usuario logueado para identificar tarjetas propias
-        cuenta_id = principal.get("cuenta_id")
+        # Normalizar cuenta_id del token (puede venir como int o str según versiones)
+        cuenta_id_raw = principal.get("cuenta_id")
+        try:
+            cuenta_id = int(cuenta_id_raw) if cuenta_id_raw is not None else None
+        except Exception:
+            cuenta_id = None
+
+        # Fallback robusto: algunos tokens viejos de cobrador pueden venir sin cuenta_id.
+        # Si tenemos empleado_identificacion, inferimos cuenta_id desde empleados.
+        if cuenta_id is None:
+            emp_id = principal.get("empleado_identificacion")
+            if emp_id:
+                try:
+                    with DatabasePool.get_cursor() as cur:
+                        cur.execute("SELECT cuenta_id FROM empleados WHERE identificacion=%s", (str(emp_id),))
+                        row = cur.fetchone()
+                        if row and row[0] is not None:
+                            cuenta_id = int(row[0])
+                except Exception:
+                    pass
+
         empleados_cuenta_actual = _get_empleados_cuenta(cuenta_id)
         
         # 1. Obtener Cliente y su historial compactado
@@ -44,23 +65,72 @@ def get_datacredito_report(identificacion: str, principal: dict = Depends(get_cu
         
         historial_compactado_raw = cliente.get('historial_crediticio') or []
         
-        # Convertir raw dicts a objetos IndicadoresTarjeta
+        # 2. Obtener TODAS las Tarjetas del cliente (global, sin filtrar por cuenta)
+        # Esto es intencional: DataCrédito ve todo el historial inter-cuenta
+        tarjetas_vivas = obtener_tarjetas_cliente(identificacion, cuenta_id=None)
+        
+        # Mapas temporales para anonimizar empresas externas (compartido entre historial y vivas)
+        externas_map = {}
+        next_externa_char = 'A'
+
+        # Helper para obtener etiqueta anonimizada
+        def get_empresa_label(t_cuenta_id, empleado_identificacion: Optional[str] = None):
+            nonlocal next_externa_char
+
+            # Si el empleado pertenece a la cuenta actual, es "Esta Empresa"
+            # (Esto cubre casos de cuenta_id nulo o inconsistente en datos viejos)
+            if empleado_identificacion and empleado_identificacion in empleados_cuenta_actual:
+                return "Esta Empresa"
+
+            if not t_cuenta_id:
+                return "Entidad Desconocida"
+
+            # Normalizar cuenta_id de la tarjeta/historial (puede venir como int o str en JSON)
+            try:
+                t_cuenta_norm = int(t_cuenta_id)
+            except Exception:
+                t_cuenta_norm = None
+
+            if t_cuenta_norm is None:
+                return "Entidad Desconocida"
+
+            if cuenta_id is not None and t_cuenta_norm == cuenta_id:
+                return "Esta Empresa"
+            
+            if t_cuenta_norm not in externas_map:
+                externas_map[t_cuenta_norm] = f"Empresa Externa {next_externa_char}"
+                next_externa_char = chr(ord(next_externa_char) + 1)
+            
+            return externas_map[t_cuenta_norm]
+
+        # Re-procesar historial para asignar etiquetas consistentes si tienen cuenta_id
         historial_objs = []
         for h in historial_compactado_raw:
             try:
-                # El historial compactado ya tiene empresa_anonym guardado
-                # Si no lo tiene, marcar como Entidad Externa por defecto
-                if 'empresa_anonym' not in h:
-                    h['empresa_anonym'] = "Entidad Externa" 
+                # Si el historial tiene cuenta_id guardado, usamos la lógica unificada
+                h_cuenta_id = h.get('cuenta_id')
+                if h_cuenta_id:
+                    h['empresa_anonym'] = get_empresa_label(h_cuenta_id, None)
+                elif 'empresa_anonym' not in h:
+                    h['empresa_anonym'] = "Entidad Externa" # Fallback para datos viejos
+                
+                # Asegurar que no sea None
+                if not h.get('empresa_anonym'):
+                    h['empresa_anonym'] = "Entidad Externa"
+
                 historial_objs.append(IndicadoresTarjeta(**h))
             except Exception as e:
                 logger.warning(f"Error al parsear historial item: {e}")
                 continue
 
-        # 2. Obtener TODAS las Tarjetas del cliente (global, sin filtrar por cuenta)
-        # Esto es intencional: DataCrédito ve todo el historial inter-cuenta
-        tarjetas_vivas = obtener_tarjetas_cliente(identificacion, cuenta_id=None)
-        
+        # Ordenar historial por fecha (más reciente primero). Esto hace que "últimos 3" sea real,
+        # incluso si el JSON fue construido por appends a lo largo del tiempo.
+        def _hist_sort_key(it: IndicadoresTarjeta):
+            # None al final
+            return (it.fecha_inicio is not None, it.fecha_inicio or date.min)
+
+        historial_objs.sort(key=_hist_sort_key, reverse=True)
+
         activas_analizadas = []
         
         scores_actuales = []
@@ -75,14 +145,16 @@ def get_datacredito_report(identificacion: str, principal: dict = Depends(get_cu
                 scores_historicos_restantes.append(h.score_individual)
 
         # 3. Analizar Tarjetas Vivas con RiskEngine
+        # (El mapa externas_map ya se inicializó arriba)
+
         for t in tarjetas_vivas:
             codigo = t.get('codigo')
             estado = str(t.get('estado', '')).lower()
-            empleado_id = t.get('empleado_identificacion')
+            # Ahora tenemos cuenta_id en t gracias al cambio en tarjetas_db
+            tarjeta_cuenta_id = t.get('cuenta_id')
             
-            # Determinar si la tarjeta es de "Esta Empresa" o "Entidad Externa"
-            es_empresa_actual = empleado_id in empleados_cuenta_actual
-            empresa_label = "Esta Empresa" if es_empresa_actual else "Entidad Externa"
+            # Determinar etiqueta usando la misma lógica
+            empresa_label = get_empresa_label(tarjeta_cuenta_id, t.get("empleado_identificacion"))
             
             abonos = obtener_abonos_por_tarjeta(codigo)
             indicadores = RiskEngine.calcular_indicadores_tarjeta_activa(t, abonos)
@@ -103,7 +175,7 @@ def get_datacredito_report(identificacion: str, principal: dict = Depends(get_cu
                 monto=float(t.get('monto', 0)),
                 dias_retraso_final=indicadores['dias_retraso_final'],
                 frecuencia_pagos=indicadores['frecuencia_pagos'],
-                promedio_atraso=indicadores['promedio_atraso'],
+                max_cuotas_atrasadas=indicadores['max_cuotas_atrasadas'],
                 puntaje_atraso_cierre=indicadores['puntaje_atraso_cierre'],
                 score_individual=indicadores['score_individual'],
                 estado_final=estado,
@@ -119,17 +191,43 @@ def get_datacredito_report(identificacion: str, principal: dict = Depends(get_cu
                 scores_historicos_recientes.insert(0, indicadores['score_individual'])
 
         # 4. Calcular Score Global
-        score_final = RiskEngine.calcular_score_global_cliente(
-            actuales=scores_actuales,
-            historicos_recientes=scores_historicos_recientes,
-            historicos_restantes=scores_historicos_restantes
-        )
+        # Regla: Si hay alguna tarjeta ACTIVA (viva) con score < 30, el global se cae.
+        # Si es histórica, se promedia normalmente (evita castigo por errores de datos viejos).
+        
+        min_score_activo_critico = 100.0
+        hay_critico_activo = False
+        
+        # Buscar en activas
+        for a in activas_analizadas:
+            if a.score_individual < 30:
+                # Verificar si realmente está activa/pendiente (no cancelada reciente)
+                st = str(a.estado_final).lower()
+                if st in ('activa', 'activas', 'pendiente', 'pendientes'):
+                    hay_critico_activo = True
+                    if a.score_individual < min_score_activo_critico:
+                        min_score_activo_critico = a.score_individual
+
+        if hay_critico_activo:
+            score_final = int(min_score_activo_critico)
+        else:
+            # Cálculo estándar ponderado
+            score_final = RiskEngine.calcular_score_global_cliente(
+                actuales=scores_actuales,
+                historicos_recientes=scores_historicos_recientes,
+                historicos_restantes=scores_historicos_restantes
+            )
+
+        # 5. Calcular Resúmenes
 
         # 5. Calcular Resúmenes
         total_cerrados = len(historial_objs) + len([t for t in tarjetas_vivas if str(t.get('estado', '')).lower() == 'cancelada'])
         total_activos = len(scores_actuales) # Ya contiene activas y pendientes (deuda viva)
         
-        suma_retraso = sum(h.dias_retraso_final for h in historial_objs) + sum(a.dias_retraso_final for a in activas_analizadas)
+        # Para el promedio de retraso (Estrés Global), solo consideramos valores positivos (retraso real)
+        # Si un crédito va adelantado (dias_retraso < 0), contribuye con 0 al estrés.
+        suma_retraso = sum(max(0, h.dias_retraso_final) for h in historial_objs) + \
+                       sum(max(0, a.dias_retraso_final) for a in activas_analizadas)
+                       
         promedio_retraso = suma_retraso / (len(historial_objs) + len(activas_analizadas)) if (historial_objs or activas_analizadas) else 0
         
         suma_freq = sum(h.frecuencia_pagos for h in historial_objs) + sum(a.frecuencia_pagos for a in activas_analizadas)
@@ -159,16 +257,21 @@ def get_datacredito_report(identificacion: str, principal: dict = Depends(get_cu
         logger.error(f"Error generando reporte DataCredito: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Error generando reporte: {e}")
 
-@router.post("/tarjetas/{codigo}/archivar")
-def archivar_tarjeta(codigo: str, principal: dict = Depends(require_admin)):
+@router.post("/mantenimiento/archivar-antiguas")
+def archivar_tarjetas_antiguas(meses: int = 12, principal: dict = Depends(require_admin)):
     """
-    Compacta una tarjeta cancelada:
-    1. Calcula sus indicadores finales.
-    2. La agrega al historial JSON del cliente.
-    3. (Opcional) Elimina los abonos físicos para ahorrar espacio.
+    Mueve tarjetas canceladas hace más de 'meses' al historial JSON del cliente
+    y las elimina de la tabla tarjetas para liberar espacio.
+    Transaccional por cliente.
     """
-    # TODO: Implementar lógica de archivado real
-    # Requiere acceso a DB de tarjetas para cambiar estado a 'archivada' 
-    # y update del cliente.
-    return {"message": "Endpoint de archivado pendiente de implementación final"}
+    # Reusar el mismo servicio que se usa en el script de cron (sin duplicar lógica)
+    from ..services.archiver_service import archivar_tarjetas_canceladas_antiguas
+
+    res = archivar_tarjetas_canceladas_antiguas(meses=meses, dry_run=False, include_detalle=False)
+    return {
+        "message": f"Proceso completado. {res.tarjetas_procesadas} tarjetas archivadas.",
+        "tarjetas_procesadas": res.tarjetas_procesadas,
+        "clientes_afectados": res.clientes_afectados,
+        "errores": res.errores,
+    }
 

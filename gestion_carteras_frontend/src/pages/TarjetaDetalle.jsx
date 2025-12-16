@@ -62,11 +62,22 @@ export default function TarjetaDetallePage(){
   const abonado = resumen?.total_abonado || 0
   const saldo = resumen?.saldo_pendiente || 0
   const dias_venc = resumen?.dias_pasados_cancelacion || 0
+  const modalidad = (resumen?.modalidad_pago || data?.modalidad_pago || 'diario')
   const abono_del_dia = resumen?.abono_del_dia || 0
+  const abono_periodo = (Number.isFinite(resumen?.abono_del_periodo) ? resumen?.abono_del_periodo : null)
+  const abonoLabel = resumen?.abono_label || (String(modalidad).toLowerCase()==='diario' ? 'Abono del día' : 'Abono del período')
+  const abonoMostrar = abono_periodo != null ? abono_periodo : abono_del_dia
   const cuotas_adelantadas = Number(resumen?.cuotas_adelantadas || 0)
   const cuotas_atrasadas = Number(resumen?.cuotas_atrasadas || 0)
   const fecha_venc = resumen?.fecha_vencimiento || '—'
   const cuota_sugerida = resumen?.cuota_monto || (cuotas ? monto / cuotas : 0)
+  const unidadCuota = (() => {
+    const m = String(modalidad || 'diario').toLowerCase()
+    if (m === 'semanal') return 'semanales'
+    if (m === 'quincenal') return 'quincenales'
+    if (m === 'mensual') return 'mensuales'
+    return 'diarias'
+  })()
   const cuotas_enteras_restantes = Number.isFinite(resumen?.cuotas_restantes_completas)
     ? resumen?.cuotas_restantes_completas
     : (cuota_sugerida > 0 ? Math.max(0, Math.floor((saldo || 0) / cuota_sugerida)) : 0)
@@ -105,14 +116,15 @@ export default function TarjetaDetallePage(){
           <strong>Préstamo</strong>
           <div>Fecha creación: <span className="val-date">{fecha_creacion_fmt}</span></div>
           <div>Préstamo (con interés): <span className="val-num">{currency(monto)}</span></div>
-          <div>Cuotas: <span className="val-num">{cuotas} cuotas de {currency(cuota_sugerida || 0)}</span></div>
+          <div>Modalidad de pago: <span className="val-num">{String(modalidad || 'diario')}</span></div>
+          <div>Cuotas: <span className="val-num">{cuotas} {unidadCuota} de {currency(cuota_sugerida || 0)}</span></div>
           <div>Abonado: <span className="val-num">{currency(abonado)}</span></div>
           <div>Saldo: <span className="val-num">{currency(saldo)}</span></div>
           <div>Cuotas restantes: <span className="val-num">{cuotasRestantesTexto}</span></div>
         </div>
         <div className="card" style={{maxWidth:680}}>
           <strong>Pago (estado)</strong>
-          <div>Abono del día: <span className="val-pos">{currency(abono_del_dia)}</span></div>
+          <div>{abonoLabel}: <span className="val-pos">{currency(abonoMostrar)}</span></div>
           <div>Cuotas atrasadas/adelantadas: <span className={cuotas_atrasadas>0?"val-neg":"val-num"}>{formatDecimal(cuotas_atrasadas)}</span> / <span className={cuotas_adelantadas>0?"val-pos":"val-num"}>{formatDecimal(cuotas_adelantadas)}</span></div>
           <div>Balance de cuotas: <span className={cuotasBalanceClase}>{cuotasBalanceTexto}</span></div>
           <div>Días pasados de vencimiento: <span className={dias_venc>0?"val-neg":"val-num"}>{dias_venc}</span></div>

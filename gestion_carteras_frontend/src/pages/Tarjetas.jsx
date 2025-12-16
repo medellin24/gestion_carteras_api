@@ -619,7 +619,16 @@ function SwipeableTarjeta({ tarjeta, barraColor, nombre, telefono, direccion, sa
     }
     if (swipeIntent.current === 'h') {
       e.preventDefault()
-      setOffsetX(dx)
+      // Guiar el swipe según el panel actual para evitar "glitches":
+      // - Si estoy en LEFT, el gesto útil para volver es hacia la derecha (dx>0)
+      // - Si estoy en RIGHT, el gesto útil para volver es hacia la izquierda (dx<0)
+      if (activePanel === 'left' && dx < 0) {
+        setOffsetX(dx * 0.25) // resistencia
+      } else if (activePanel === 'right' && dx > 0) {
+        setOffsetX(dx * 0.25) // resistencia
+      } else {
+        setOffsetX(dx)
+      }
     } else {
       setOffsetX(0)
     }
@@ -840,14 +849,31 @@ function PanelPago({ onClose, onPagar, onReset, maxCuotas = 99, cuotaMonto = 0, 
   const prevQ = cuotas === 1 ? maxCuotas : (cuotas - 1)
   const nextQ = cuotas === maxCuotas ? 1 : (cuotas + 1)
   return (
-    <div style={{position:'absolute', inset:0, background:'#0e1526', display:'grid', gridTemplateColumns:'72px 1fr', alignItems:'start', gap:6, padding:'8px 8px 10px 8px', minHeight:300, maxHeight:'60vh', overflow:'hidden'}} onTouchStart={(e)=>e.stopPropagation()}>
-      {/* Number picker vertical estrecho */}
-      <div style={{display:'flex', alignItems:'flex-start', justifyContent:'center', touchAction:'none', marginTop:12}}>
-        <div onWheel={onWheel} onTouchStart={onSpinTouchStart} onTouchMove={onSpinTouchMove}
-             style={{height:'100%', display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'flex-start', gap:2}}>
-          <div style={{opacity:.55, fontSize:12, height:24, display:'grid', placeItems:'center'}}>{prevQ}</div>
-          <div style={{fontSize:20, fontWeight:700, height:28, display:'grid', placeItems:'center'}}>{cuotas}</div>
-          <div style={{opacity:.55, fontSize:12, height:24, display:'grid', placeItems:'center'}}>{nextQ}</div>
+    <div style={{position:'absolute', inset:0, background:'#0e1526', display:'grid', gridTemplateColumns:'96px 1fr', alignItems:'start', gap:8, padding:'8px 8px 10px 8px', minHeight:300, maxHeight:'60vh', overflow:'hidden'}}>
+      {/* Selector de cuotas (área táctil más amplia) */}
+      <div style={{display:'flex', alignItems:'flex-start', justifyContent:'center', marginTop:12}}>
+        <div
+          onWheel={onWheel}
+          onTouchStart={onSpinTouchStart}
+          onTouchMove={onSpinTouchMove}
+          style={{
+            touchAction:'none',
+            width:86,
+            padding:'12px 0',
+            borderRadius:14,
+            border:'1px solid rgba(59,130,246,0.35)',
+            background:'rgba(255,255,255,0.04)',
+            display:'flex',
+            flexDirection:'column',
+            alignItems:'center',
+            justifyContent:'flex-start',
+            gap:2,
+          }}
+        >
+          <div style={{opacity:.55, fontSize:12, height:26, display:'grid', placeItems:'center'}}>{prevQ}</div>
+          <div style={{fontSize:22, fontWeight:800, height:30, display:'grid', placeItems:'center'}}>{cuotas}</div>
+          <div style={{opacity:.55, fontSize:12, height:26, display:'grid', placeItems:'center'}}>{nextQ}</div>
+          <div style={{marginTop:10, fontSize:10, opacity:.55}}>Desliza</div>
         </div>
       </div>
       {/* Radios pequeños arriba, input inmediatamente debajo, botones al fondo */}
@@ -909,7 +935,7 @@ function PanelContacto({ telefono, onClose }) {
   const whatsapp = tel ? `https://wa.me/${tel.replace(/[^0-9]/g,'')}` : '#'
   const llamar = tel ? `tel:${tel}` : '#'
   return (
-    <div style={{position:'absolute', inset:0, background:'#0e1526', display:'flex', flexDirection:'column', justifyContent:'center', alignItems:'center', gap:12, padding:16}} onTouchStart={(e)=>e.stopPropagation()}>
+    <div style={{position:'absolute', inset:0, background:'#0e1526', display:'flex', flexDirection:'column', justifyContent:'center', alignItems:'center', gap:12, padding:16}}>
       <div className="neon-title">Contacto</div>
       <div className="neon-sub">Teléfono: {telefono||'—'}</div>
       <div style={{display:'flex', gap:10, flexWrap:'wrap', justifyContent:'center'}}>

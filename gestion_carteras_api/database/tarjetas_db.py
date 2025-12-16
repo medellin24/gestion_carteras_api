@@ -9,6 +9,45 @@ logger = logging.getLogger(__name__)
 # Cache para almacenar resultados frecuentes
 _cache = {}
 _cache_timeout = 300  # 5 minutos
+_modalidad_col_ok: Optional[bool] = None
+
+def _modalidad_column_exists() -> bool:
+    global _modalidad_col_ok
+    if _modalidad_col_ok is not None:
+        return bool(_modalidad_col_ok)
+    try:
+        with DatabasePool.get_cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT 1
+                FROM information_schema.columns
+                WHERE table_schema = 'public'
+                  AND table_name = 'tarjetas'
+                  AND column_name = 'modalidad_pago'
+                LIMIT 1
+                """
+            )
+            _modalidad_col_ok = bool(cursor.fetchone())
+    except Exception:
+        _modalidad_col_ok = False
+    return bool(_modalidad_col_ok)
+
+def ensure_modalidad_pago_column():
+    """
+    Asegura que exista la columna modalidad_pago en la tabla tarjetas.
+    - No revienta el arranque si no hay permisos (solo loggea warning).
+    """
+    try:
+        with DatabasePool.get_cursor() as cursor:
+            cursor.execute(
+                "ALTER TABLE tarjetas "
+                "ADD COLUMN IF NOT EXISTS modalidad_pago VARCHAR(20) NOT NULL DEFAULT 'diario'"
+            )
+        # Si lo logramos (o ya existía), marcar flag
+        global _modalidad_col_ok
+        _modalidad_col_ok = True
+    except Exception as e:
+        logger.warning(f"No se pudo asegurar columna modalidad_pago en tarjetas: {e}")
 
 def invalidar_cache_tarjetas(empleado_identificacion: Optional[str] = None):
     """Invalida el caché de tarjetas. Si se especifica empleado, solo invalida ese empleado."""
@@ -28,7 +67,8 @@ def obtener_todas_las_tarjetas(skip: int = 0, limit: int = 100) -> List[Dict]:
     """Obtiene todas las tarjetas con paginación (para endpoint API)"""
     try:
         with DatabasePool.get_cursor() as cursor:
-            cursor.execute('''
+            modalidad_expr = "COALESCE(t.modalidad_pago, 'diario')" if _modalidad_column_exists() else "'diario'"
+            cursor.execute(f'''
                 SELECT 
                     t.codigo,
                     t.monto,
@@ -43,6 +83,7 @@ def obtener_todas_las_tarjetas(skip: int = 0, limit: int = 100) -> List[Dict]:
                     t.empleado_identificacion,
                     t.observaciones,
                     t.fecha_cancelacion,
+                    {modalidad_expr} as modalidad_pago,
                     e.nombre as empleado_nombre
                 FROM tarjetas t
                 JOIN clientes c ON t.cliente_identificacion = c.identificacion
@@ -72,7 +113,8 @@ def obtener_todas_las_tarjetas(skip: int = 0, limit: int = 100) -> List[Dict]:
                     'empleado_identificacion': row[10],
                     'observaciones': row[11],
                     'fecha_cancelacion': row[12],
-                    'empleado_nombre': row[13]
+                    'modalidad_pago': row[13] or 'diario',
+                    'empleado_nombre': row[14]
                 }
                 tarjetas.append(tarjeta)
             return tarjetas
@@ -85,7 +127,8 @@ def obtener_tarjetas(empleado_identificacion: Optional[str] = None,
                     estado: str = 'activas', 
                     offset: int = 0, 
                     limit: int = 200,  # Límite ajustado
-                    use_cache: bool = True) -> List[Tuple]:
+                    use_cache: bool = True,
+                    fecha_cancelacion_desde: Optional[date] = None) -> List[Tuple]:
                     
     """
     Obtiene las tarjetas según filtros especificados.
@@ -97,14 +140,15 @@ def obtener_tarjetas(empleado_identificacion: Optional[str] = None,
         limit: Número máximo de registros a retornar
         use_cache: Si se debe usar el caché
     """
-    cache_key = f"tarjetas_{empleado_identificacion}_{estado}_{offset}_{limit}"
+    cache_key = f"tarjetas_{empleado_identificacion}_{estado}_{offset}_{limit}_{fecha_cancelacion_desde}"
     
     if use_cache and cache_key in _cache:
         return _cache[cache_key]
         
     try:
         with DatabasePool.get_cursor() as cursor:
-            query = '''
+            modalidad_expr = "COALESCE(t.modalidad_pago, 'diario')" if _modalidad_column_exists() else "'diario'"
+            query = f'''
                 SELECT 
                     t.codigo,
                     t.monto,
@@ -118,16 +162,27 @@ def obtener_tarjetas(empleado_identificacion: Optional[str] = None,
                     t.cliente_identificacion,
                     t.empleado_identificacion,
                     t.observaciones,
-                    t.fecha_cancelacion
+                    t.fecha_cancelacion,
+                    {modalidad_expr} as modalidad_pago
                 FROM tarjetas t
                 JOIN clientes c ON t.cliente_identificacion = c.identificacion
                 WHERE t.estado = %s
                 AND (CASE WHEN %s IS NULL THEN TRUE 
                          ELSE t.empleado_identificacion = %s END)
+            '''
+            params: List = [estado, empleado_identificacion, empleado_identificacion]
+
+            # Si se listan canceladas y se pide un "desde", filtrar por fecha_cancelacion (DATE)
+            if estado in ('cancelada', 'canceladas') and fecha_cancelacion_desde is not None:
+                query += ' AND t.fecha_cancelacion IS NOT NULL AND t.fecha_cancelacion >= %s'
+                params.append(fecha_cancelacion_desde)
+
+            query += '''
                 ORDER BY t.numero_ruta, t.codigo
                 OFFSET %s LIMIT %s
             '''
-            cursor.execute(query, (estado, empleado_identificacion, empleado_identificacion, offset, limit))
+            params.extend([offset, limit])
+            cursor.execute(query, tuple(params))
             result = cursor.fetchall()
             
             if use_cache:
@@ -142,8 +197,24 @@ def obtener_tarjeta_por_codigo(codigo: str) -> Optional[Dict]:
     """Obtiene una tarjeta específica por su código"""
     try:
         with DatabasePool.get_cursor() as cursor:
-            query = '''
-                SELECT t.*, c.nombre, c.apellido, c.telefono
+            modalidad_expr = "COALESCE(t.modalidad_pago, 'diario')" if _modalidad_column_exists() else "'diario'"
+            query = f'''
+                SELECT
+                    t.codigo,
+                    t.numero_ruta,
+                    t.cliente_identificacion,
+                    t.empleado_identificacion,
+                    t.estado,
+                    t.fecha_creacion,
+                    t.fecha_cancelacion,
+                    t.monto,
+                    t.interes,
+                    t.cuotas,
+                    t.observaciones,
+                    {modalidad_expr} as modalidad_pago,
+                    c.nombre,
+                    c.apellido,
+                    c.telefono
                 FROM tarjetas t
                 JOIN clientes c ON t.cliente_identificacion = c.identificacion
                 WHERE t.codigo = %s
@@ -164,9 +235,10 @@ def obtener_tarjeta_por_codigo(codigo: str) -> Optional[Dict]:
                     'interes': result[8],
                     'cuotas': result[9],
                     'observaciones': result[10],
-                    'cliente_nombre': result[11],
-                    'cliente_apellido': result[12],
-                    'cliente_telefono': result[13]
+                    'modalidad_pago': result[11] or 'diario',
+                    'cliente_nombre': result[12],
+                    'cliente_apellido': result[13],
+                    'cliente_telefono': result[14]
                 }
             return None
             
@@ -309,6 +381,7 @@ def crear_tarjeta(
     monto: Decimal,
     cuotas: int,
     interes: int,
+    modalidad_pago: str = 'diario',
     numero_ruta: Optional[Decimal] = None,
     observaciones: Optional[str] = None,
     posicion_anterior: Optional[Decimal] = None,
@@ -356,28 +429,52 @@ def crear_tarjeta(
                 start_n = 1
 
             # Intentar insertar de forma atómica evitando colisiones de PK
+            col_ok = _modalidad_column_exists()
             for n in range(start_n, 1000):
                 codigo_try = f"{prefix}{n:03d}"
-                query = '''
-                    INSERT INTO tarjetas (
-                        codigo, cliente_identificacion, empleado_identificacion,
-                        numero_ruta, monto, cuotas, interes,
-                        estado, observaciones, fecha_creacion
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, 'activas', %s, %s)
-                    ON CONFLICT (codigo) DO NOTHING
-                    RETURNING codigo
-                '''
-                cursor.execute(query, (
-                    codigo_try,
-                    cliente_identificacion,
-                    empleado_identificacion,
-                    numero_ruta,
-                    monto,
-                    cuotas,
-                    interes,
-                    observaciones,
-                    target_dt
-                ))
+                if col_ok:
+                    query = '''
+                        INSERT INTO tarjetas (
+                            codigo, cliente_identificacion, empleado_identificacion,
+                            numero_ruta, monto, cuotas, interes,
+                            estado, observaciones, fecha_creacion, modalidad_pago
+                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, 'activas', %s, %s, %s)
+                        ON CONFLICT (codigo) DO NOTHING
+                        RETURNING codigo
+                    '''
+                    cursor.execute(query, (
+                        codigo_try,
+                        cliente_identificacion,
+                        empleado_identificacion,
+                        numero_ruta,
+                        monto,
+                        cuotas,
+                        interes,
+                        observaciones,
+                        target_dt,
+                        (modalidad_pago or 'diario')
+                    ))
+                else:
+                    query = '''
+                        INSERT INTO tarjetas (
+                            codigo, cliente_identificacion, empleado_identificacion,
+                            numero_ruta, monto, cuotas, interes,
+                            estado, observaciones, fecha_creacion
+                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, 'activas', %s, %s)
+                        ON CONFLICT (codigo) DO NOTHING
+                        RETURNING codigo
+                    '''
+                    cursor.execute(query, (
+                        codigo_try,
+                        cliente_identificacion,
+                        empleado_identificacion,
+                        numero_ruta,
+                        monto,
+                        cuotas,
+                        interes,
+                        observaciones,
+                        target_dt
+                    ))
                 got = cursor.fetchone()
                 if got and got[0]:
                     codigo_tarjeta = got[0]
@@ -404,7 +501,8 @@ def actualizar_tarjeta(
     fecha_creacion: Optional[datetime] = None,
     numero_ruta: Optional[Decimal] = None,
     interes: Optional[int] = None,
-    observaciones: Optional[str] = None
+    observaciones: Optional[str] = None,
+    modalidad_pago: Optional[str] = None
 ) -> bool:
     """Actualiza los campos editables de una tarjeta"""
     try:
@@ -430,6 +528,9 @@ def actualizar_tarjeta(
             if observaciones is not None:
                 updates.append("observaciones = %s")
                 params.append(observaciones)
+            if modalidad_pago is not None and _modalidad_column_exists():
+                updates.append("modalidad_pago = %s")
+                params.append(modalidad_pago)
                 
             if not updates:
                 return False
@@ -679,6 +780,7 @@ def obtener_tarjetas_cliente(cliente_identificacion: str, cuenta_id: Optional[in
                 cursor.execute(query, (cliente_identificacion, cuenta_id))
             else:
                 # Sin filtro de cuenta (global para DataCrédito)
+                # Necesitamos cuenta_id para anonimizar correctamente por empresa
                 query = '''
                     SELECT 
                         t.codigo,
@@ -690,8 +792,11 @@ def obtener_tarjetas_cliente(cliente_identificacion: str, cuenta_id: Optional[in
                         t.fecha_creacion,
                         t.fecha_cancelacion,
                         t.observaciones,
-                        t.empleado_identificacion
+                        t.empleado_identificacion,
+                        COALESCE(t.modalidad_pago, 'diario') as modalidad_pago,
+                        e.cuenta_id
                     FROM tarjetas t
+                    JOIN empleados e ON t.empleado_identificacion = e.identificacion
                     WHERE t.cliente_identificacion = %s
                     ORDER BY t.fecha_creacion DESC
                 '''
@@ -701,7 +806,86 @@ def obtener_tarjetas_cliente(cliente_identificacion: str, cuenta_id: Optional[in
             
             tarjetas = []
             for row in rows:
-                tarjeta = {
+                # Manejar variabilidad en columnas retornadas según la rama del if
+                if cuenta_id is not None:
+                    # Rama filtrada (sin JOIN extra, estructura vieja)
+                    tarjeta = {
+                        'codigo': row[0],
+                        'monto': row[1],
+                        'interes': row[2],
+                        'cuotas': row[3],
+                        'numero_ruta': row[4],
+                        'estado': row[5],
+                        'fecha_creacion': row[6],
+                        'fecha_cancelacion': row[7],
+                        'observaciones': row[8],
+                        'empleado_identificacion': row[9]
+                    }
+                else:
+                    # Rama global (con modalidad y cuenta_id)
+                    tarjeta = {
+                        'codigo': row[0],
+                        'monto': row[1],
+                        'interes': row[2],
+                        'cuotas': row[3],
+                        'numero_ruta': row[4],
+                        'estado': row[5],
+                        'fecha_creacion': row[6],
+                        'fecha_cancelacion': row[7],
+                        'observaciones': row[8],
+                        'empleado_identificacion': row[9],
+                        'modalidad_pago': row[10],
+                        'cuenta_id': row[11]
+                    }
+                tarjetas.append(tarjeta)
+            return tarjetas
+            
+    except Exception as e:
+        logger.error(f"Error al obtener tarjetas del cliente: {e}")
+        return []
+
+def obtener_tarjetas_canceladas_antiguas(meses_antiguedad: int = 12) -> List[Dict]:
+    """
+    Obtiene tarjetas canceladas hace más de 'meses_antiguedad'.
+    Devuelve lista de dicts con toda la info necesaria para RiskEngine.
+    """
+    try:
+        from datetime import timedelta
+        with DatabasePool.get_cursor() as cursor:
+            # Calcular fecha de corte
+            fecha_corte = date.today() - timedelta(days=meses_antiguedad*30)
+            
+            modalidad_expr = "COALESCE(t.modalidad_pago, 'diario')" if _modalidad_column_exists() else "'diario'"
+            
+            # Necesitamos cliente_identificacion para agrupar y actualizar el historial
+            # Necesitamos cuenta_id para el historial
+            query = f'''
+                SELECT 
+                    t.codigo,
+                    t.monto,
+                    t.interes,
+                    t.cuotas,
+                    t.numero_ruta,
+                    t.estado,
+                    t.fecha_creacion,
+                    t.fecha_cancelacion,
+                    t.cliente_identificacion,
+                    t.empleado_identificacion,
+                    {modalidad_expr} as modalidad_pago,
+                    e.cuenta_id
+                FROM tarjetas t
+                JOIN empleados e ON t.empleado_identificacion = e.identificacion
+                WHERE t.estado IN ('cancelada', 'canceladas')
+                  AND t.fecha_cancelacion IS NOT NULL
+                  AND t.fecha_cancelacion <= %s
+                ORDER BY t.cliente_identificacion
+            '''
+            cursor.execute(query, (fecha_corte,))
+            rows = cursor.fetchall()
+            
+            tarjetas = []
+            for row in rows:
+                t = {
                     'codigo': row[0],
                     'monto': row[1],
                     'interes': row[2],
@@ -710,12 +894,13 @@ def obtener_tarjetas_cliente(cliente_identificacion: str, cuenta_id: Optional[in
                     'estado': row[5],
                     'fecha_creacion': row[6],
                     'fecha_cancelacion': row[7],
-                    'observaciones': row[8],
-                    'empleado_identificacion': row[9]
+                    'cliente_identificacion': row[8],
+                    'empleado_identificacion': row[9],
+                    'modalidad_pago': row[10],
+                    'cuenta_id': row[11]
                 }
-                tarjetas.append(tarjeta)
+                tarjetas.append(t)
             return tarjetas
-            
     except Exception as e:
-        logger.error(f"Error al obtener tarjetas del cliente: {e}")
+        logger.error(f"Error al obtener tarjetas antiguas: {e}")
         return []

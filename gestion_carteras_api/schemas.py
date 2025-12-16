@@ -26,8 +26,8 @@ class IndicadoresTarjeta(BaseModel):
     # Los 4 Indicadores Clave
     dias_retraso_final: int
     frecuencia_pagos: float  # 0-100
-    promedio_atraso: float   # Cuotas promedio
-    puntaje_atraso_cierre: float # Foto final de estrés
+    max_cuotas_atrasadas: float   # Nuevo: Pico máximo de cuotas de atraso (informativo)
+    puntaje_atraso_cierre: float # Foto final de estrés (suma cuotas atrasadas + días retraso)
     
     score_individual: float # 0-100
     estado_final: str # "Cancelada", "Castigada", etc.
@@ -97,6 +97,7 @@ class TarjetaBase(BaseModel):
     monto: float
     cuotas: int
     interes: int
+    modalidad_pago: str = 'diario'
     observaciones: Optional[str] = None
 
 class TarjetaCreate(TarjetaBase):
@@ -109,6 +110,7 @@ class TarjetaUpdate(BaseModel):
     monto: Optional[float] = None
     cuotas: Optional[int] = None
     interes: Optional[int] = None
+    modalidad_pago: Optional[str] = None
     numero_ruta: Optional[float] = None
     observaciones: Optional[str] = None
     estado: Optional[str] = None
@@ -240,6 +242,7 @@ class SyncTarjetaNew(BaseModel):
     monto: float
     cuotas: int
     interes: int
+    modalidad_pago: Optional[str] = 'diario'
     numero_ruta: Optional[float] = None
     observaciones: Optional[str] = None
     posicion_anterior: Optional[float] = None

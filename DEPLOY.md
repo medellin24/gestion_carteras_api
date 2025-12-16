@@ -66,3 +66,29 @@
 - App Runner queda siempre activo y cercano a RDS → baja latencia
 - Pages es gratis y cachea estáticos globalmente
 - Cuidado con CORS: añade ambos orígenes del frontend
+
+## 5) Cron externo: Archivado automático (tarjetas canceladas > 12 meses)
+
+Se incluye un script para **archivar y eliminar** tarjetas canceladas antiguas (y sus abonos), guardando solo el resumen en `clientes.historial_crediticio`.
+
+### Ejecutar manualmente (prueba)
+
+```bash
+cd /ruta/al/proyecto_gestion_carteras
+source .venv/bin/activate
+python -m gestion_carteras_api.scripts.archive_old_tarjetas --meses 12 --dry-run
+```
+
+### Activar en cron (ejemplo: diario a las 2:30am)
+
+Edita tu crontab:
+
+```bash
+crontab -e
+```
+
+Agrega una línea (ajusta rutas y venv):
+
+```bash
+30 2 * * * cd /ruta/al/proyecto_gestion_carteras && /ruta/al/proyecto_gestion_carteras/.venv/bin/python -m gestion_carteras_api.scripts.archive_old_tarjetas --meses 12 >> /var/log/gestion_carteras_archive.log 2>&1
+```

@@ -163,6 +163,17 @@ class VentanaLogin(tk.Toplevel):
             # Propagar token al cliente global usado por el resto de la app
             global_api_client.config.auth_token = self.api.config.auth_token
             global_api_client.session.headers['Authorization'] = self.api.session.headers.get('Authorization', '')
+            # ✅ MUY IMPORTANTE: al cambiar de cuenta sin cerrar la app,
+            # limpiar cachés del cliente global para no “reusar” empleados/tipos de la cuenta anterior.
+            try:
+                global_api_client.clear_cache()
+                # También limpiar cookies por seguridad (requests Session)
+                try:
+                    global_api_client.session.cookies.clear()
+                except Exception:
+                    pass
+            except Exception:
+                pass
             # Guardar refresh y rol si aplica
             try:
                 global_api_client._refresh_token = tokens.get('refresh_token')
