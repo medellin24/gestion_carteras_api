@@ -494,16 +494,6 @@ function RecaudosOverlay({ tarjetas, abonosPorTarjeta, onClose }){
             onChange={(e)=>setQuery(e.target.value)}
             onKeyDown={(e)=>{ if (e.key === 'Escape') { e.preventDefault(); setQuery('') } }}
           />
-          {query.trim() !== '' && (
-            <button
-              type="button"
-              className="clear-search-btn"
-              aria-label="Limpiar búsqueda"
-              onClick={()=>setQuery('')}
-            >
-              X
-            </button>
-          )}
         </div>
       </div>
 
@@ -846,6 +836,7 @@ function PanelPago({ onClose, onPagar, onReset, maxCuotas = 99, cuotaMonto = 0, 
       spinStartY.current = y
     }
   }
+  // UX: arriba debe sugerir "sube (ascendente)" y abajo "baja (descendente)"
   const prevQ = cuotas === 1 ? maxCuotas : (cuotas - 1)
   const nextQ = cuotas === maxCuotas ? 1 : (cuotas + 1)
   return (
@@ -870,9 +861,9 @@ function PanelPago({ onClose, onPagar, onReset, maxCuotas = 99, cuotaMonto = 0, 
             gap:2,
           }}
         >
-          <div style={{opacity:.55, fontSize:12, height:26, display:'grid', placeItems:'center'}}>{prevQ}</div>
-          <div style={{fontSize:22, fontWeight:800, height:30, display:'grid', placeItems:'center'}}>{cuotas}</div>
           <div style={{opacity:.55, fontSize:12, height:26, display:'grid', placeItems:'center'}}>{nextQ}</div>
+          <div style={{fontSize:22, fontWeight:800, height:30, display:'grid', placeItems:'center'}}>{cuotas}</div>
+          <div style={{opacity:.55, fontSize:12, height:26, display:'grid', placeItems:'center'}}>{prevQ}</div>
           <div style={{marginTop:10, fontSize:10, opacity:.55}}>Desliza</div>
         </div>
       </div>

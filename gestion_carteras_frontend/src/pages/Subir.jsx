@@ -800,12 +800,14 @@ export default function SubirPage(){
       </main>
       {preflightModal && (
         <div style={{position:'fixed', inset:0, background:'rgba(0,0,0,.7)', zIndex:9999, display:'grid', placeItems:'center'}} role="dialog" aria-modal="true">
-          <div className="card" style={{width:'94%', maxWidth:720, maxHeight:'90vh', overflowY:'auto', background:'#0e1526', border:'1px solid #223045'}}>
-            <h2 style={{marginBottom:8}}>Liquidación previa a sincronizar</h2>
-            <p style={{marginBottom:12, color:'var(--muted)'}}>
-              Confirma que los valores corresponden al efectivo del día antes de enviarlo al servidor.
-            </p>
-            <div style={{display:'grid', gap:12}}>
+          <div className="card" style={{width:'94%', maxWidth:720, maxHeight:'90vh', overflow:'hidden', background:'#0e1526', border:'1px solid #223045', display:'flex', flexDirection:'column'}}>
+            {/* Contenido scrolleable */}
+            <div style={{padding:16, overflowY:'auto'}}>
+              <h2 style={{marginBottom:8}}>Liquidación previa a sincronizar</h2>
+              <p style={{marginBottom:12, color:'var(--muted)'}}>
+                Confirma que los valores corresponden al efectivo del día antes de enviarlo al servidor.
+              </p>
+              <div style={{display:'grid', gap:12}}>
               <div style={{background:'#111b32', padding:12, borderRadius:8}}>
                 <strong>Recaudo del día</strong>
                 <div style={{display:'flex', justifyContent:'space-between', marginTop:6}}>
@@ -873,7 +875,9 @@ export default function SubirPage(){
                 </div>
               )}
             </div>
-            <div style={{display:'flex', justifyContent:'flex-end', gap:10, marginTop:18}}>
+            </div>
+            {/* Footer fijo */}
+            <div style={{position:'relative', display:'flex', justifyContent:'flex-end', gap:10, padding:12, borderTop:'1px solid #223045', background:'#0e1526', boxShadow:'0 -10px 24px rgba(0,0,0,.45)'}}>
               <button onClick={cancelPreflight}>Cancelar</button>
               <button className="primary" onClick={confirmPreflight}>Aceptar y sincronizar</button>
             </div>
