@@ -181,6 +181,9 @@ export const apiClient = {
   getClienteEstadisticas: async (identificacion) => {
     return request(`/clientes/${encodeURIComponent(identificacion)}/estadisticas`, { method: 'GET' })
   },
+  getDataCreditoReport: async (identificacion) => {
+    return request(`/datacredito/clientes/${encodeURIComponent(identificacion)}/reporte`, { method: 'GET' })
+  },
   getTarjeta: async (codigo) => {
     return request(`/tarjetas/${encodeURIComponent(codigo)}`, { method: 'GET' })
   },
@@ -193,8 +196,8 @@ export const apiClient = {
   eliminarUltimoAbono: async (tarjetaCodigo) => {
     return request(`/tarjetas/${encodeURIComponent(tarjetaCodigo)}/abonos/ultimo`, { method: 'DELETE' })
   },
-  crearTarjeta: async ({ cliente_identificacion, empleado_identificacion, monto, cuotas, interes, numero_ruta, observaciones, posicion_anterior, posicion_siguiente }) => {
-    return request('/tarjetas/', { method: 'POST', body: { cliente_identificacion, empleado_identificacion, monto, cuotas, interes, numero_ruta, observaciones, posicion_anterior, posicion_siguiente } })
+  crearTarjeta: async ({ cliente_identificacion, empleado_identificacion, monto, cuotas, interes, modalidad_pago, numero_ruta, observaciones, posicion_anterior, posicion_siguiente }) => {
+    return request('/tarjetas/', { method: 'POST', body: { cliente_identificacion, empleado_identificacion, monto, cuotas, interes, modalidad_pago, numero_ruta, observaciones, posicion_anterior, posicion_siguiente } })
   },
   sync: async (payload) => {
     try {

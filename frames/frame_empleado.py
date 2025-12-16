@@ -5,6 +5,7 @@ from datetime import datetime, timedelta
 from api_client.client import APIError, api_client
 from decimal import Decimal
 import os
+import re
 
 from resource_loader import asset_path
 
@@ -723,6 +724,12 @@ class FrameEmpleado(tk.Frame):
                 for emp in self.empleados_cache:
                     self.lista_empleados.insert(tk.END, emp['nombre_completo'])
             self.limpiar_todo()
+
+            # Notificar a otros frames (p. ej. Liquidación) que la lista cambió
+            try:
+                self.winfo_toplevel().event_generate("<<EmpleadosActualizados>>", when="tail")
+            except Exception:
+                pass
         except Exception as e:
             messagebox.showerror("Error de Carga", f"No se pudo cargar la lista de empleados:\n{e}")
 
@@ -853,42 +860,30 @@ class FrameEmpleado(tk.Frame):
             messagebox.showwarning("Base Existente", "Ya existe una base para esta fecha. Use 'Actualizar' en su lugar.")
             return
 
-        monto_str = simpledialog.askstring("Agregar Base", "Ingrese el monto de la nueva base:", parent=self)
-        if monto_str:
-            try:
-                monto = Decimal(monto_str)
-                payload = {
-                    "empleado_id": self.empleado_seleccionado['identificacion'],
-                    "fecha": self.entry_fecha.get(),
-                    "monto": float(monto)
-                }
-                self.api_client.create_base(payload)
-                messagebox.showinfo("Éxito", "Base agregada correctamente.")
-                self.buscar_base() # Refrescar la info
-            except ValueError:
-                messagebox.showerror("Error de Formato", "El monto ingresado no es un número válido.")
-            except Exception as e:
-                messagebox.showerror("Error de API", f"No se pudo agregar la base:\n{e}")
+        VentanaBaseDia(
+            parent=self,
+            modo="crear",
+            api_client=self.api_client,
+            empleado=self.empleado_seleccionado,
+            fecha_iso=self.entry_fecha.get(),
+            base_actual=None,
+            on_success=lambda: self.buscar_base()
+        )
 
     def actualizar_base(self):
         if not self.base_actual:
             messagebox.showwarning("Sin Base", "Primero busque una base existente para poder actualizarla.")
             return
 
-        monto_actual = str(self.base_actual.get('monto', '0'))
-        nuevo_monto_str = simpledialog.askstring("Actualizar Base", "Ingrese el nuevo monto:", initialvalue=monto_actual, parent=self)
-        
-        if nuevo_monto_str:
-            try:
-                nuevo_monto = Decimal(nuevo_monto_str)
-                payload = {"monto": float(nuevo_monto)}
-                self.api_client.update_base(self.base_actual['id'], payload)
-                messagebox.showinfo("Éxito", "Base actualizada correctamente.")
-                self.buscar_base() # Refrescar la info
-            except ValueError:
-                messagebox.showerror("Error de Formato", "El monto ingresado no es un número válido.")
-            except Exception as e:
-                messagebox.showerror("Error de API", f"No se pudo actualizar la base:\n{e}")
+        VentanaBaseDia(
+            parent=self,
+            modo="actualizar",
+            api_client=self.api_client,
+            empleado=self.empleado_seleccionado,
+            fecha_iso=self.entry_fecha.get(),
+            base_actual=self.base_actual,
+            on_success=lambda: self.buscar_base()
+        )
 
     def eliminar_base(self):
         if not self.base_actual:
@@ -944,6 +939,230 @@ class FrameEmpleado(tk.Frame):
         self.label_monto.config(text="N/A", foreground='gray')
         self.actualizar_status_base("Seleccione un empleado", "black")
 
+class VentanaBaseDia(tk.Toplevel):
+    """
+    Modal para agregar/actualizar Base del Día con mejor UX:
+    - Muestra empleado y fecha (solo lectura)
+    - Campo monto con validación y vista previa formateada
+    """
+    def __init__(self, parent, modo: str, api_client, empleado: dict, fecha_iso: str, base_actual: dict = None, on_success=None):
+        super().__init__(parent)
+        self.parent = parent
+        self.modo = modo  # "crear" | "actualizar"
+        self.api_client = api_client
+        self.empleado = empleado or {}
+        self.fecha_iso = (fecha_iso or "").strip()
+        self.base_actual = base_actual or None
+        self.on_success = on_success
+
+        self.title("Agregar Base" if self.modo == "crear" else "Actualizar Base")
+        # Un poco más alta para que en pantallas con escalado/DPI no “desaparezcan” los botones
+        self.geometry("480x380")
+        self.minsize(480, 380)
+        self.resizable(False, False)
+        self.transient(parent)
+        self.grab_set()
+        try:
+            self._center_window()
+        except Exception:
+            pass
+
+        self._setup_styles()
+        self._setup_ui()
+
+    def _setup_styles(self):
+        style = ttk.Style(self)
+        try:
+            style.theme_use('clam')
+        except Exception:
+            pass
+        style.configure('Base.Card.TFrame', background="#F8FAFC")
+        style.configure('Base.Header.TLabel', font=('Segoe UI', 12, 'bold'), background="#F8FAFC", foreground="#111827")
+        style.configure('Base.Subtle.TLabel', font=('Segoe UI', 9), background="#F8FAFC", foreground="#6B7280")
+        style.configure('Base.Label.TLabel', font=('Segoe UI', 10), background="#F8FAFC", foreground="#111827")
+        style.configure('Base.Primary.TButton', font=('Segoe UI', 10, 'bold'), foreground='white', background='#0B63B5')
+        style.map('Base.Primary.TButton', background=[('active', '#0A4F8E'), ('pressed', '#0A4F8E')])
+
+    def _setup_ui(self):
+        cont = ttk.Frame(self, padding=16, style='Base.Card.TFrame')
+        cont.pack(fill='both', expand=True)
+
+        nombre = self.empleado.get('nombre_completo', '') or ''
+        emp_id = self.empleado.get('identificacion', '') or ''
+
+        ttk.Label(cont, text=("Agregar Base del Día" if self.modo == "crear" else "Actualizar Base del Día"),
+                  style='Base.Header.TLabel').pack(anchor='w')
+        ttk.Label(cont, text="Complete el monto. La fecha y el empleado se muestran para evitar confusiones.",
+                  style='Base.Subtle.TLabel').pack(anchor='w', pady=(2, 10))
+
+        # Botonera abajo (pack side='bottom' para garantizar visibilidad)
+        btns = ttk.Frame(cont, style='Base.Card.TFrame')
+        btns.pack(side='bottom', fill='x', pady=(16, 0))
+        ttk.Button(btns, text="Cancelar", command=self.destroy).pack(side='right')
+        ttk.Button(btns, text="Guardar", style='Base.Primary.TButton', command=self._on_guardar).pack(side='right', padx=(0, 8))
+
+        info = ttk.LabelFrame(cont, text="Contexto", padding=12)
+        info.pack(fill='x')
+        ttk.Label(info, text=f"Empleado: {nombre}", style='Base.Label.TLabel').grid(row=0, column=0, sticky='w')
+        ttk.Label(info, text=f"ID: {emp_id}", style='Base.Subtle.TLabel').grid(row=1, column=0, sticky='w', pady=(2, 0))
+        ttk.Label(info, text=f"Fecha: {self.fecha_iso}", style='Base.Label.TLabel').grid(row=0, column=1, sticky='w', padx=(12, 0))
+        ttk.Label(info, text="(formato: AAAA-MM-DD)", style='Base.Subtle.TLabel').grid(row=1, column=1, sticky='w', padx=(12, 0), pady=(2, 0))
+        info.grid_columnconfigure(0, weight=1)
+        info.grid_columnconfigure(1, weight=1)
+
+        form = ttk.LabelFrame(cont, text="Monto", padding=12)
+        form.pack(fill='x', pady=(12, 0))
+
+        ttk.Label(form, text="Monto de la base", style='Base.Label.TLabel').grid(row=0, column=0, sticky='w')
+        self.var_monto = tk.StringVar()
+        self.entry_monto = ttk.Entry(form, textvariable=self.var_monto, width=24)
+        self.entry_monto.grid(row=1, column=0, sticky='w', pady=(4, 0))
+
+        # Prellenar monto si es actualizar
+        if self.modo == "actualizar" and self.base_actual:
+            try:
+                self.var_monto.set(str(self.base_actual.get('monto', '0')))
+            except Exception:
+                self.var_monto.set('')
+
+        self.lbl_preview = ttk.Label(form, text="Vista previa: $ 0", style='Base.Subtle.TLabel')
+        self.lbl_preview.grid(row=1, column=1, sticky='w', padx=(12, 0), pady=(4, 0))
+        ttk.Label(form, text="Ejemplos: 120000  |  120.000  |  $120,000",
+                  style='Base.Subtle.TLabel').grid(row=2, column=0, columnspan=2, sticky='w', pady=(6, 0))
+        form.grid_columnconfigure(0, weight=0)
+        form.grid_columnconfigure(1, weight=1)
+
+        # Compatibilidad: algunas builds antiguas no tienen trace_add
+        try:
+            self.var_monto.trace_add('write', lambda *args: self._update_preview())
+        except Exception:
+            try:
+                self.var_monto.trace('w', lambda *args: self._update_preview())
+            except Exception:
+                pass
+        self._update_preview()
+
+        try:
+            self.entry_monto.focus_set()
+            self.entry_monto.select_range(0, tk.END)
+        except Exception:
+            pass
+
+    def _center_window(self):
+        self.update_idletasks()
+        w = self.winfo_width() or 420
+        h = self.winfo_height() or 320
+        sw = self.winfo_screenwidth()
+        sh = self.winfo_screenheight()
+        x = (sw // 2) - (w // 2)
+        y = (sh // 2) - (h // 2)
+        self.geometry(f"{w}x{h}+{x}+{y}")
+
+    def _parse_monto(self, raw: str) -> Decimal:
+        """
+        Parsea montos tolerando separadores comunes:
+        - "$120,000" => 120000
+        - "120.000"  => 120000 (si parece separador de miles)
+        - "120,000"  => 120000 (si parece separador de miles)
+        """
+        s = (raw or "").strip()
+        if not s:
+            raise ValueError("Monto vacío")
+        # quitar símbolos y espacios
+        s = s.replace('$', '').replace(' ', '')
+        # dejar solo dígitos y separadores
+        s = re.sub(r'[^0-9\.,\-]', '', s)
+        # manejar negativos
+        if s.count('-') > 1:
+            raise ValueError("Monto inválido")
+        if '-' in s and not s.startswith('-'):
+            raise ValueError("Monto inválido")
+
+        # Caso "1.234.567" (miles con puntos)
+        if re.fullmatch(r'-?\d{1,3}(\.\d{3})+(,\d+)?', s):
+            s = s.replace('.', '')
+            s = s.replace(',', '.')
+        # Caso "1,234,567" (miles con comas)
+        elif re.fullmatch(r'-?\d{1,3}(,\d{3})+(\.\d+)?', s):
+            s = s.replace(',', '')
+        else:
+            # Si trae ambas, decidir por el último separador como decimal
+            if ',' in s and '.' in s:
+                last_comma = s.rfind(',')
+                last_dot = s.rfind('.')
+                if last_comma > last_dot:
+                    # coma decimal, puntos miles
+                    s = s.replace('.', '')
+                    s = s.replace(',', '.')
+                else:
+                    # punto decimal, comas miles
+                    s = s.replace(',', '')
+            else:
+                # Si solo hay comas, asumir miles (común en $120,000)
+                if ',' in s and '.' not in s:
+                    s = s.replace(',', '')
+                # Si solo hay puntos y parecen miles, removerlos
+                if '.' in s and ',' not in s:
+                    if re.fullmatch(r'-?\d{1,3}(\.\d{3})+', s):
+                        s = s.replace('.', '')
+
+        return Decimal(s)
+
+    def _format_currency(self, val: Decimal) -> str:
+        try:
+            # Base suele ser entero; mostrar sin decimales
+            return f"$ {val:,.0f}"
+        except Exception:
+            try:
+                return f"$ {float(val):,.0f}"
+            except Exception:
+                return "$ --"
+
+    def _update_preview(self):
+        try:
+            monto = self._parse_monto(self.var_monto.get())
+            self.lbl_preview.config(text=f"Vista previa: {self._format_currency(monto)}")
+        except Exception:
+            self.lbl_preview.config(text="Vista previa: $ --")
+
+    def _on_guardar(self):
+        try:
+            monto = self._parse_monto(self.var_monto.get())
+        except Exception:
+            messagebox.showerror("Monto inválido", "Ingrese un monto válido (solo números, con separadores opcionales).", parent=self)
+            return
+
+        if monto <= 0:
+            messagebox.showwarning("Monto inválido", "El monto debe ser mayor que 0.", parent=self)
+            return
+
+        try:
+            if self.modo == "crear":
+                payload = {
+                    "empleado_id": self.empleado.get('identificacion'),
+                    "fecha": self.fecha_iso,
+                    "monto": float(monto)
+                }
+                self.api_client.create_base(payload)
+                messagebox.showinfo("Éxito", "Base agregada correctamente.", parent=self)
+            else:
+                if not self.base_actual or 'id' not in self.base_actual:
+                    messagebox.showerror("Error", "No se encontró la base actual para actualizar.", parent=self)
+                    return
+                payload = {"monto": float(monto)}
+                self.api_client.update_base(self.base_actual['id'], payload)
+                messagebox.showinfo("Éxito", "Base actualizada correctamente.", parent=self)
+
+            try:
+                if callable(self.on_success):
+                    self.on_success()
+            except Exception:
+                pass
+            self.destroy()
+        except APIError as e:
+            messagebox.showerror("Error de API", f"No se pudo guardar la base:\n{e.message}", parent=self)
+        except Exception as e:
+            messagebox.showerror("Error", f"No se pudo guardar la base:\n{e}", parent=self)
 
 class VentanaUsuarioCobrador(tk.Toplevel):
     def __init__(self, parent, api_client, empleado_data):
@@ -1028,13 +1247,25 @@ class VentanaUsuarioCobrador(tk.Toplevel):
         self.btn_actualizar = ttk.Button(cont, text="Actualizar credenciales", style='Primary.TButton', command=self.on_actualizar)
         self.btn_actualizar.pack(fill='x', pady=(10,0))
 
-        def actualizar_preview(*args):
+        def copiar_a_preview(*args):
+            """Mantener preview sincronizado cuando se editan los campos superiores."""
             self.preview_user_entry.delete(0, tk.END)
             self.preview_user_entry.insert(0, self.entry_user.get().strip())
             self.preview_pass_entry.delete(0, tk.END)
             self.preview_pass_entry.insert(0, self.entry_pass.get().strip())
-        self.entry_user.bind('<KeyRelease>', actualizar_preview)
-        self.entry_pass.bind('<KeyRelease>', actualizar_preview)
+
+        def copiar_desde_preview(*args):
+            """Permitir que la edición en la vista previa también actualice los campos base."""
+            self.entry_user.delete(0, tk.END)
+            self.entry_user.insert(0, self.preview_user_entry.get().strip())
+            self.entry_pass.delete(0, tk.END)
+            self.entry_pass.insert(0, self.preview_pass_entry.get().strip())
+
+        # Sincronización bidireccional
+        self.entry_user.bind('<KeyRelease>', copiar_a_preview)
+        self.entry_pass.bind('<KeyRelease>', copiar_a_preview)
+        self.preview_user_entry.bind('<KeyRelease>', copiar_desde_preview)
+        self.preview_pass_entry.bind('<KeyRelease>', copiar_desde_preview)
 
         # Permisos de hoy (lado a lado, estilo robusto)
         perms = ttk.LabelFrame(cont, text="Permisos de hoy (app móvil)", padding=12, style='Section.TLabelframe')
@@ -1087,10 +1318,14 @@ class VentanaUsuarioCobrador(tk.Toplevel):
             if username:
                 self.entry_user.delete(0, tk.END)
                 self.entry_user.insert(0, username)
+                self.preview_user_entry.delete(0, tk.END)
+                self.preview_user_entry.insert(0, username)
             if password:
                 # Cargar password real si está disponible
                 self.entry_pass.delete(0, tk.END)
                 self.entry_pass.insert(0, password)
+                self.preview_pass_entry.delete(0, tk.END)
+                self.preview_pass_entry.insert(0, password)
                 
             # Sincronizar preview
             for _ in range(2):
@@ -1122,8 +1357,9 @@ class VentanaUsuarioCobrador(tk.Toplevel):
             self._pintar_permiso(self.lbl_subir, False)
 
     def on_actualizar(self):
-        username = self.entry_user.get().strip()
-        password = self.entry_pass.get().strip()
+        # Tomar siempre los valores que estén en la "Vista previa del login" (lo que el usuario ve y edita ahí).
+        username = self.preview_user_entry.get().strip()
+        password = self.preview_pass_entry.get().strip()
         if not username or not password or len(password) < 4:
             messagebox.showwarning("Campos requeridos", "Ingrese usuario y contraseña (mín. 4).")
             return

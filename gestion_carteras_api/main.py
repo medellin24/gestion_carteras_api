@@ -40,18 +40,22 @@ from .schemas import (
     ContabilidadQuery, ContabilidadMetricas, CajaValor, CajaSalida, CajaSalidaCreate, CajaEntrada, CajaEntradaCreate, VerificacionEsquemaCaja
 )
 
-# Configuración del logging
-logging.basicConfig(level=logging.INFO)
-# Elevar niveles a DEBUG para ver trazas de diagnóstico durante desarrollo
-# Forzar recarga para esquema pydantic
-logging.getLogger().setLevel(logging.DEBUG)
+# Configuración del logging (producción-friendly).
+# En prod debe ser INFO/WARNING; en dev puedes usar DEBUG.
+_log_level = os.getenv("LOG_LEVEL", "INFO").upper().strip()
+if _log_level not in ("CRITICAL", "ERROR", "WARNING", "INFO", "DEBUG"):
+    _log_level = "INFO"
+
+logging.basicConfig(level=getattr(logging, _log_level, logging.INFO))
+logging.getLogger().setLevel(getattr(logging, _log_level, logging.INFO))
+
 for _name in (
     "gestion_carteras_api",
     "gestion_carteras_api.database",
     "gestion_carteras_api.database.caja_db",
 ):
     _lg = logging.getLogger(_name)
-    _lg.setLevel(logging.DEBUG)
+    _lg.setLevel(getattr(logging, _log_level, logging.INFO))
     _lg.propagate = True
 
 logger = logging.getLogger(__name__)
@@ -70,7 +74,7 @@ if _env_cors:
 else:
     # Fallback a orígenes locales de desarrollo
     _allowed_origins = [
-        "http://localhost:5173",
+        "http://192.168.100.158:5174",
         "http://127.0.0.1:5173",
         "http://localhost:5174",
         "http://127.0.0.1:5174",
@@ -90,10 +94,13 @@ from .routers import auth as auth_router
 from .routers import billing as billing_router
 from .routers import public as public_router
 from .routers import admin_users as admin_users_router
+from .routers import datacredito as datacredito_router
+
 app.include_router(auth_router.router, prefix="/auth", tags=["auth"])
 app.include_router(billing_router.router, prefix="/billing", tags=["billing"])
 app.include_router(public_router.router, prefix="/public", tags=["public"])
 app.include_router(admin_users_router.router, prefix="/admin", tags=["admin"])
+app.include_router(datacredito_router.router, prefix="/datacredito", tags=["datacredito"])
 
 # Seguridad
 from .security import get_current_principal, require_admin
@@ -133,8 +140,14 @@ def startup_event():
     try:
         # Permitir configurar tamaño del pool por entorno
         _minconn = int(os.getenv("POOL_MINCONN", "1"))
-        _maxconn = int(os.getenv("POOL_MAXCONN", "10"))
+        _maxconn = int(os.getenv("POOL_MAXCONN", "50"))
         DatabasePool.initialize(minconn=_minconn, maxconn=_maxconn, **DB_CONFIG)
+        # Asegurar columna modalidad_pago para soportar modalidades (diario/semanal/quincenal/mensual)
+        try:
+            from .database.tarjetas_db import ensure_modalidad_pago_column
+            ensure_modalidad_pago_column()
+        except Exception:
+            pass
         logger.info("Pool de conexiones a la base de datos inicializado con éxito.")
     except Exception as e:
         logger.critical(f"Error crítico al inicializar el pool de conexiones: {e}", exc_info=True)
@@ -1405,7 +1418,8 @@ def read_tarjetas_endpoint(estado: str = 'activas', skip: int = 0, limit: int = 
                 'cliente_identificacion': row[9],
                 'empleado_identificacion': row[10],
                 'observaciones': row[11],
-                'fecha_cancelacion': row[12]
+                'fecha_cancelacion': row[12],
+                'modalidad_pago': (row[13] if len(row) > 13 else 'diario') or 'diario'
             }
             tarjetas.append(tarjeta)
         return tarjetas
@@ -1436,7 +1450,14 @@ def read_tarjeta_endpoint(tarjeta_codigo: str, principal: dict = Depends(get_cur
         raise HTTPException(status_code=500, detail="Error interno al consultar la tarjeta.")
 
 @app.get("/empleados/{empleado_id}/tarjetas/", response_model=List[Tarjeta])
-def read_tarjetas_by_empleado_endpoint(empleado_id: str, estado: str = 'activas', skip: int = 0, limit: int = 100, principal: dict = Depends(get_current_principal)):
+def read_tarjetas_by_empleado_endpoint(
+    empleado_id: str,
+    estado: str = 'activas',
+    skip: int = 0,
+    limit: int = 100,
+    desde: Optional[date] = None,
+    principal: dict = Depends(get_current_principal),
+):
     _enforce_empleado_scope(principal, empleado_id)
     """
     Obtiene una lista de tarjetas de un empleado específico filtradas por estado.
@@ -1444,8 +1465,18 @@ def read_tarjetas_by_empleado_endpoint(empleado_id: str, estado: str = 'activas'
     try:
         tz_name = principal.get('timezone') or 'UTC'
         # Usar la función existente obtener_tarjetas con empleado_identificacion y estado
+        # use_cache=False: En producción (AWS App Runner) hay múltiples instancias,
+        # cada una con su propio caché en memoria. El _cache.clear() de una instancia
+        # no afecta a las otras, causando datos obsoletos.
         from .database.tarjetas_db import obtener_tarjetas
-        tarjetas_tuplas = obtener_tarjetas(empleado_identificacion=empleado_id, estado=estado, offset=skip, limit=limit)
+        tarjetas_tuplas = obtener_tarjetas(
+            empleado_identificacion=empleado_id,
+            estado=estado,
+            offset=skip,
+            limit=limit,
+            use_cache=False,
+            fecha_cancelacion_desde=desde,
+        )
         
         # Convertir tuplas a diccionarios para FastAPI con estructura anidada
         tarjetas = []
@@ -1497,7 +1528,8 @@ def read_tarjetas_by_empleado_endpoint(empleado_id: str, estado: str = 'activas'
                 'cliente_identificacion': row[9],
                 'empleado_identificacion': row[10],
                 'observaciones': row[11],
-                'fecha_cancelacion': row[12]
+                'fecha_cancelacion': row[12],
+                'modalidad_pago': (row[13] if len(row) > 13 else 'diario') or 'diario'
             }
             tarjetas.append(tarjeta)
         return tarjetas
@@ -1551,19 +1583,29 @@ def update_cliente_endpoint(identificacion: str, cliente: ClienteUpdate):
         raise HTTPException(status_code=500, detail="Error interno al actualizar cliente")
 
 @app.get("/clientes/{identificacion}/historial")
-def read_cliente_historial_endpoint(identificacion: str):
+def read_cliente_historial_endpoint(identificacion: str, principal: dict = Depends(get_current_principal)):
+    """
+    Obtiene el historial de tarjetas de un cliente.
+    Solo muestra tarjetas de empleados de la cuenta del usuario logueado (aislamiento multi-tenant).
+    """
     try:
         from .database.tarjetas_db import obtener_historial_cliente
-        return obtener_historial_cliente(identificacion)
+        cuenta_id = principal.get("cuenta_id")
+        return obtener_historial_cliente(identificacion, cuenta_id=cuenta_id)
     except Exception as e:
         logger.error(f"Error al obtener historial de cliente: {e}")
         raise HTTPException(status_code=500, detail="Error interno al consultar historial")
 
 @app.get("/clientes/{identificacion}/estadisticas")
-def read_cliente_estadisticas_endpoint(identificacion: str):
+def read_cliente_estadisticas_endpoint(identificacion: str, principal: dict = Depends(get_current_principal)):
+    """
+    Obtiene estadísticas de tarjetas de un cliente.
+    Solo cuenta tarjetas de empleados de la cuenta del usuario logueado (aislamiento multi-tenant).
+    """
     try:
         from .database.tarjetas_db import obtener_estadisticas_cliente
-        return obtener_estadisticas_cliente(identificacion)
+        cuenta_id = principal.get("cuenta_id")
+        return obtener_estadisticas_cliente(identificacion, cuenta_id=cuenta_id)
     except Exception as e:
         logger.error(f"Error al obtener estadísticas de cliente: {e}")
         raise HTTPException(status_code=500, detail="Error interno al consultar estadísticas")
@@ -1591,6 +1633,7 @@ def create_tarjeta_endpoint(tarjeta: TarjetaCreate, principal: dict = Depends(ge
             monto=Decimal(tarjeta.monto),
             cuotas=tarjeta.cuotas,
             interes=tarjeta.interes,
+            modalidad_pago=getattr(tarjeta, 'modalidad_pago', None) or 'diario',
             numero_ruta=Decimal(str(tarjeta.numero_ruta)) if tarjeta.numero_ruta is not None else None,
             observaciones=tarjeta.observaciones,
             posicion_anterior=Decimal(str(tarjeta.posicion_anterior)) if tarjeta.posicion_anterior is not None else None,
@@ -1644,7 +1687,8 @@ def update_tarjeta_endpoint(tarjeta_codigo: str, tarjeta: TarjetaUpdate, princip
             cuotas=tarjeta.cuotas,
             numero_ruta=Decimal(str(tarjeta.numero_ruta)) if tarjeta.numero_ruta is not None else None,
             interes=tarjeta.interes,
-            observaciones=tarjeta.observaciones
+            observaciones=tarjeta.observaciones,
+            modalidad_pago=getattr(tarjeta, 'modalidad_pago', None)
         )
         if not ok2 and tarjeta.estado is None:
             raise HTTPException(status_code=404, detail="Tarjeta no encontrada o no se pudo actualizar.")
@@ -1920,12 +1964,15 @@ def read_tarjeta_resumen_endpoint(tarjeta_codigo: str):
         monto = float(tarjeta["monto"]) if isinstance(tarjeta.get("monto"), (int, float)) else float(tarjeta.get("monto", 0))
         interes = int(tarjeta.get("interes", 0))
         cuotas = int(tarjeta.get("cuotas", 1)) or 1
+        modalidad = str(tarjeta.get("modalidad_pago") or "diario").strip().lower()
+        if modalidad not in ("diario", "semanal", "quincenal", "mensual"):
+            modalidad = "diario"
 
         monto_total = monto * (1 + interes / 100.0)
         valor_cuota = monto_total / cuotas if cuotas > 0 else monto_total
         saldo_pendiente = max(0.0, monto_total - float(total_abonado))
 
-        # Cálculos según tu regla
+        # Cálculos (al día / atraso) según modalidad de pago (diario/semanal/quincenal/mensual)
         from math import floor, ceil
         from datetime import datetime as dt
         fecha_creacion = tarjeta.get("fecha_creacion")
@@ -1935,11 +1982,32 @@ def read_tarjeta_resumen_endpoint(tarjeta_codigo: str):
         else:
             fecha_crea = hoy
         dias_transcurridos = (hoy - fecha_crea).days
+        if dias_transcurridos < 0:
+            dias_transcurridos = 0
+
+        if modalidad == "diario":
+            periodos_transcurridos = dias_transcurridos
+            fecha_venc = fecha_crea.replace()  # no-op (solo para inicializar)
+            from datetime import timedelta
+            fecha_venc = fecha_crea + timedelta(days=cuotas)
+        elif modalidad == "semanal":
+            periodos_transcurridos = dias_transcurridos // 7
+            from datetime import timedelta
+            fecha_venc = fecha_crea + timedelta(days=cuotas * 7)
+        elif modalidad == "quincenal":
+            periodos_transcurridos = dias_transcurridos // 15
+            from datetime import timedelta
+            fecha_venc = fecha_crea + timedelta(days=cuotas * 15)
+        else:  # mensual
+            # Regla solicitada: mensual = cada 30 días (no mes calendario)
+            periodos_transcurridos = dias_transcurridos // 30
+            from datetime import timedelta
+            fecha_venc = fecha_crea + timedelta(days=cuotas * 30)
         cuotas_pagadas = floor(float(total_abonado) / valor_cuota) if valor_cuota > 0 else 0
         # Puede ser negativo (atraso) o positivo (adelanto). 0 si va al día
-        cuotas_pendientes_a_la_fecha = cuotas_pagadas - dias_transcurridos
-        # Días pasados desde el vencimiento del plazo (si se superó el número total de cuotas/días)
-        dias_pasados_cancelacion = max(0, dias_transcurridos - cuotas)
+        cuotas_pendientes_a_la_fecha = cuotas_pagadas - int(periodos_transcurridos)
+        # Días pasados desde el vencimiento del plazo (según la modalidad)
+        dias_pasados_cancelacion = max(0, (hoy - fecha_venc).days)
         cuotas_restantes = ceil(saldo_pendiente / valor_cuota) if valor_cuota > 0 else 0
         # Regla: no mostrar más cuotas pendientes (en atraso) que las restantes por pagar
         if cuotas_pendientes_a_la_fecha < 0 and cuotas_restantes > 0:
@@ -1949,12 +2017,14 @@ def read_tarjeta_resumen_endpoint(tarjeta_codigo: str):
             "tarjeta_id": tarjeta_codigo,
             "codigo_tarjeta": tarjeta_codigo,
             "estado_tarjeta": tarjeta.get("estado", "activas"),
+            "modalidad_pago": modalidad,
             "total_abonado": float(total_abonado),
             "valor_cuota": float(valor_cuota),
             "saldo_pendiente": float(saldo_pendiente),
             "cuotas_restantes": int(cuotas_restantes),
             "cuotas_pendientes_a_la_fecha": int(cuotas_pendientes_a_la_fecha),
             "dias_pasados_cancelacion": int(dias_pasados_cancelacion),
+            "fecha_vencimiento": fecha_venc.isoformat() if fecha_venc else None,
         }
 
         return resumen
@@ -2165,6 +2235,7 @@ def sync_endpoint(payload: SyncRequest, principal: dict = Depends(get_current_pr
                 monto=Decimal(str(t.monto)),
                 cuotas=int(t.cuotas),
                 interes=int(t.interes),
+                modalidad_pago=(getattr(t, 'modalidad_pago', None) or 'diario'),
                 numero_ruta=Decimal(str(t.numero_ruta)) if t.numero_ruta is not None else None,
                 observaciones=t.observaciones,
                 posicion_anterior=Decimal(str(t.posicion_anterior)) if t.posicion_anterior is not None else None,

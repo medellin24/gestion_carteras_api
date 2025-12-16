@@ -47,7 +47,7 @@ async function get(store, key) {
 async function setTarjetas(list) { return put(STORES.tarjetas, 'all', list) }
 async function getTarjetas() { return (await get(STORES.tarjetas, 'all')) || [] }
 async function setStats(stats) { return put(STORES.stats, 'current', stats) }
-async function getStats() { return (await get(STORES.stats, 'current')) || { monto:0, abonos:0 } }
+async function getStats() { return (await get(STORES.stats, 'current')) || { monto: 0, abonos: 0 } }
 async function setAbonos(tarjetaCodigo, list) { return put(STORES.abonos, String(tarjetaCodigo), list || []) }
 async function getAbonos(tarjetaCodigo) { return (await get(STORES.abonos, String(tarjetaCodigo))) || [] }
 
@@ -90,14 +90,28 @@ async function readOutboxCount() {
   return Array.isArray(list) ? list.length : 0
 }
 
+async function close() {
+  if (!dbPromise) return
+  const db = await dbPromise.catch(() => null)
+  if (db) {
+    db.close()
+  }
+  dbPromise = null
+}
+
 async function resetWorkingMemory() {
-  // Elimina la base para liberar espacio y reiniciar stores
+  // CRITICO: Cerrar conexión antes de borrar para evitar bloqueo (deadlock)
+  await close()
   return new Promise((resolve, reject) => {
     try {
       const req = indexedDB.deleteDatabase(DB_NAME)
       req.onsuccess = () => { dbPromise = null; resolve() }
       req.onerror = () => reject(req.error)
-      req.onblocked = () => resolve()
+      req.onblocked = () => {
+        console.warn('Delete blocked in resetWorkingMemory')
+        // Intentar cerrar de nuevo por si acaso
+        close().then(() => resolve())
+      }
     } catch (e) {
       reject(e)
     }
@@ -105,5 +119,5 @@ async function resetWorkingMemory() {
 }
 
 export const offlineDB = {
-  setTarjetas, getTarjetas, setStats, getStats, setAbonos, getAbonos, queueOperation, readOutbox, removeOutbox, readOutboxCount, resetWorkingMemory,
+  setTarjetas, getTarjetas, setStats, getStats, setAbonos, getAbonos, queueOperation, readOutbox, removeOutbox, readOutboxCount, resetWorkingMemory, close,
 }

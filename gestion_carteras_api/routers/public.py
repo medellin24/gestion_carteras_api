@@ -1,4 +1,4 @@
-from datetime import date, timedelta
+from datetime import date, timedelta, datetime
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException
@@ -8,6 +8,18 @@ from ..database.connection_pool import DatabasePool
 from ..security import get_password_hash
 
 router = APIRouter()
+
+try:
+    from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+except ImportError:
+    from backports.zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+def _hoy_local(tz_name: Optional[str]) -> date:
+    tz_eff = (tz_name or 'America/Bogota').strip() if tz_name else 'America/Bogota'
+    try:
+        return datetime.now(ZoneInfo(tz_eff)).date()
+    except (ZoneInfoNotFoundError, Exception):
+        return datetime.now(ZoneInfo('UTC')).date()
 
 
 class SignupRequest(BaseModel):
@@ -29,7 +41,8 @@ class SignupResponse(BaseModel):
 def signup(body: SignupRequest):
     max_emp = body.plan_max_empleados if body.plan_max_empleados and body.plan_max_empleados > 0 else 1
     trial = body.plan_max_empleados is None
-    hoy = date.today()
+    # Importante: usar el día LOCAL del usuario/cuenta para no “perder 1 día” por UTC/servidor.
+    hoy = _hoy_local(body.timezone or 'America/Bogota')
     trial_until = hoy + timedelta(days=30) if trial else None
 
     with DatabasePool.get_cursor() as cur:
@@ -58,7 +71,7 @@ def signup(body: SignupRequest):
                 (hoy + timedelta(days=30)) if not trial else trial_until,  # fecha_fin para planes pagos (placeholder 30 días) o None en trial
                 max_emp,
                 trial_until,
-                (body.timezone or 'UTC'),
+                (body.timezone or 'America/Bogota'),
             ),
         )
         cuenta_id = cur.fetchone()[0]
@@ -71,7 +84,7 @@ def signup(body: SignupRequest):
             VALUES (%s, %s, 'admin', %s, TRUE, %s)
             RETURNING id
             """,
-            (body.email, pwd_hash, cuenta_id, (body.timezone or 'UTC')),
+            (body.email, pwd_hash, cuenta_id, (body.timezone or 'America/Bogota')),
         )
 
     return SignupResponse(cuenta_id=cuenta_id, trial=trial, max_empleados=max_emp)

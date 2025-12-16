@@ -48,6 +48,21 @@ class APIClient:
         """Invalida una entrada específica del caché"""
         if key in self._cache_store:
             del self._cache_store[key]
+
+    def clear_cache(self, key: Optional[str] = None) -> None:
+        """
+        Limpia el caché en memoria del cliente.
+        - Si key=None: limpia TODO el caché (recomendado al cambiar de cuenta/login).
+        - Si key se provee: invalida solo esa entrada.
+        """
+        try:
+            if key:
+                self._invalidate_cache(key)
+            else:
+                self._cache_store.clear()
+        except Exception:
+            # Nunca debe romper el flujo por un fallo de caché
+            pass
     
     def _make_request(self, method: str, endpoint: str, data: Optional[Dict] = None, params: Optional[Dict] = None) -> Union[Dict, List]:
         """Realiza una petición HTTP con manejo de errores y reintentos"""
@@ -413,15 +428,30 @@ class APIClient:
     
     # --- Métodos para Tarjetas ---
     
-    def list_tarjetas(self, empleado_id: Optional[str] = None, estado: str = 'activas', skip: int = 0, limit: int = 100) -> List[Dict]:
-        """Lista tarjetas, opcionalmente filtradas por empleado y estado"""
+    def list_tarjetas(
+        self,
+        empleado_id: Optional[str] = None,
+        estado: str = 'activas',
+        skip: int = 0,
+        limit: int = 100,
+        desde: Optional[Union[str, date]] = None,
+    ) -> List[Dict]:
+        """Lista tarjetas, opcionalmente filtradas por empleado, estado y fecha (desde)."""
         if empleado_id:
             # Si se especifica empleado, usar endpoint específico
+            if isinstance(desde, date):
+                desde = desde.isoformat()
             params = {'estado': estado, 'skip': skip, 'limit': limit}
+            if desde:
+                params['desde'] = desde
             return self._make_request('GET', f'/empleados/{empleado_id}/tarjetas/', params=params)
         else:
             # Si no se especifica empleado, usar endpoint general
+            if isinstance(desde, date):
+                desde = desde.isoformat()
             params = {'estado': estado, 'skip': skip, 'limit': limit}
+            if desde:
+                params['desde'] = desde
             return self._make_request('GET', '/tarjetas/', params=params)
     
     def list_targetas(self, empleado_id: Optional[str] = None, estado: str = 'activas', skip: int = 0, limit: int = 100) -> List[Dict]:

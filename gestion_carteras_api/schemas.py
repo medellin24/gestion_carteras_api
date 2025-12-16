@@ -15,6 +15,40 @@ class ClienteBase(BaseModel):
     referencia_telefono: Optional[str] = None
     observaciones: Optional[str] = None
 
+# --- Modelos para DataCrédito Interno ---
+
+class IndicadoresTarjeta(BaseModel):
+    # ID de la tarjeta original (o código)
+    id_referencia: str
+    fecha_inicio: Optional[date] = None
+    monto: float
+    
+    # Los 4 Indicadores Clave
+    dias_retraso_final: int
+    frecuencia_pagos: float  # 0-100
+    max_cuotas_atrasadas: float   # Nuevo: Pico máximo de cuotas de atraso (informativo)
+    puntaje_atraso_cierre: float # Foto final de estrés (suma cuotas atrasadas + días retraso)
+    
+    score_individual: float # 0-100
+    estado_final: str # "Cancelada", "Castigada", etc.
+    empresa_anonym: Optional[str] = "Entidad Externa" # Para privacidad
+
+class DataCreditoReport(BaseModel):
+    cliente_identificacion: str
+    cliente_nombre: Optional[str] = "Cliente"
+    cliente_apellido: Optional[str] = ""
+    score_global: int # 0-100
+    
+    # Resumen de indicadores globales
+    total_creditos_cerrados: int
+    total_creditos_activos: int # Nuevo campo
+    promedio_retraso_historico: float
+    frecuencia_pago_promedio: float
+    
+    # Listas detalladas
+    tarjetas_activas: List[IndicadoresTarjeta] = []
+    historial_compactado: List[IndicadoresTarjeta] = []
+
 class ClienteCreate(ClienteBase):
     pass
 
@@ -32,6 +66,9 @@ class ClienteUpdate(BaseModel):
 
 class Cliente(ClienteBase):
     fecha_creacion: Optional[date] = None
+    # Campos nuevos
+    score_global: Optional[int] = 100
+    historial_crediticio: Optional[List[IndicadoresTarjeta]] = []
 
     class Config:
         from_attributes = True
@@ -60,6 +97,7 @@ class TarjetaBase(BaseModel):
     monto: float
     cuotas: int
     interes: int
+    modalidad_pago: str = 'diario'
     observaciones: Optional[str] = None
 
 class TarjetaCreate(TarjetaBase):
@@ -72,6 +110,7 @@ class TarjetaUpdate(BaseModel):
     monto: Optional[float] = None
     cuotas: Optional[int] = None
     interes: Optional[int] = None
+    modalidad_pago: Optional[str] = None
     numero_ruta: Optional[float] = None
     observaciones: Optional[str] = None
     estado: Optional[str] = None
@@ -203,6 +242,7 @@ class SyncTarjetaNew(BaseModel):
     monto: float
     cuotas: int
     interes: int
+    modalidad_pago: Optional[str] = 'diario'
     numero_ruta: Optional[float] = None
     observaciones: Optional[str] = None
     posicion_anterior: Optional[float] = None

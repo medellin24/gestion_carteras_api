@@ -9,6 +9,12 @@ import AddTarjetaModal from '../components/AddTarjetaModal.jsx'
 
 function currency(n) { try { return new Intl.NumberFormat('es-CO', { style:'currency', currency:'COP', maximumFractionDigits:0 }).format(n||0) } catch { return `$${Number(n||0).toFixed(0)}` } }
 function formatMoney(n){ try { return new Intl.NumberFormat('es-CO', { style:'currency', currency:'COP', maximumFractionDigits:0 }).format(n||0) } catch { return `$${Number(n||0).toFixed(0)}` } }
+function getCurrentJornada(){
+  const token = (typeof localStorage !== 'undefined' && localStorage.getItem('jornada_token')) || ''
+  const startedRaw = (typeof localStorage !== 'undefined' && localStorage.getItem('jornada_started_at')) || '0'
+  const startedAt = Number(startedRaw)
+  return { token, startedAt: Number.isFinite(startedAt) ? startedAt : 0 }
+}
 
 export default function TarjetasPage() {
   const [query, setQuery] = useState('')
@@ -29,6 +35,20 @@ export default function TarjetasPage() {
 
   useEffect(() => {
     async function refreshData() {
+      const { token: jornadaToken, startedAt: jornadaInicio } = getCurrentJornada()
+      const isCurrentOp = (op) => {
+        if (!op) return false
+        if (op.session_id && jornadaToken) return op.session_id === jornadaToken
+        if (jornadaInicio) return Number(op.ts || 0) >= jornadaInicio
+        return true
+      }
+      const isCurrentAbono = (a) => {
+        if (!a) return false
+        if (a.session_id && jornadaToken) return a.session_id === jornadaToken
+        if (jornadaInicio) return Number(a.ts || 0) >= jornadaInicio
+        return true
+      }
+
       const [s, t, outOps] = await Promise.all([
         offlineDB.getStats(),
         offlineDB.getTarjetas(),
@@ -49,19 +69,18 @@ export default function TarjetasPage() {
       }
       setAbonosPorTarjeta(abonosMap)
       
-      // Construir mapa de tarjetas con abonos del día actual (incluye outbox y abonos guardados)
-      const today = formatDateYYYYMMDD()
+      // Construir mapa de tarjetas con abonos de la jornada actual (incluye outbox y abonos guardados)
       const map = {}
       let totalMontoHoy = 0
       let totalCountHoy = 0
       try {
-        // Marcar por outbox (acciones locales del día) y sumar montos
-        const opsHoy = outOps.filter(op => op && op.ts && formatDateYYYYMMDD(new Date(op.ts)) === today)
-        const abonosOutboxHoy = opsHoy.filter(op => op?.op === 'abono')
+        // Marcar por outbox (acciones locales de la jornada) y sumar montos
+        const opsSesion = outOps.filter(isCurrentOp)
+        const abonosOutboxSesion = opsSesion.filter(op => op?.op === 'abono')
         const abonoOutboxIds = new Set(
-          abonosOutboxHoy.map(op => String(op?.id || `${op?.tarjeta_codigo || ''}-${op?.ts || 0}`))
+          abonosOutboxSesion.map(op => String(op?.id || `${op?.tarjeta_codigo || ''}-${op?.ts || 0}`))
         )
-        opsHoy.sort((a,b)=>a.ts-b.ts).forEach(op => {
+        opsSesion.sort((a,b)=>a.ts-b.ts).forEach(op => {
           if (op.op === 'abono') {
             map[op.tarjeta_codigo] = true
             totalMontoHoy += Number(op.monto || 0)
@@ -79,15 +98,13 @@ export default function TarjetasPage() {
           try {
             const ab = await offlineDB.getAbonos(tar.codigo)
             const { totHoy, countHoy } = (ab||[]).reduce((acc,a)=>{
-              const d = a?.fecha ? parseISODateToLocal(String(a.fecha)) : (a?.ts ? new Date(a.ts): null)
-              if (d && formatDateYYYYMMDD(d) === today) {
-                const entryId = a && (a.id || a.outbox_id)
-                if (entryId && abonoOutboxIds.has(String(entryId))) {
-                  return acc
-                }
-                acc.totHoy += Number(a?.monto||0)
-                acc.countHoy += 1
+              if (!isCurrentAbono(a)) return acc
+              const entryId = a && (a.id || a.outbox_id)
+              if (entryId && abonoOutboxIds.has(String(entryId))) {
+                return acc
               }
+              acc.totHoy += Number(a?.monto||0)
+              acc.countHoy += 1
               return acc
             }, { totHoy: 0, countHoy: 0 })
             return { codigo: tar.codigo, totHoy, countHoy }
@@ -477,16 +494,6 @@ function RecaudosOverlay({ tarjetas, abonosPorTarjeta, onClose }){
             onChange={(e)=>setQuery(e.target.value)}
             onKeyDown={(e)=>{ if (e.key === 'Escape') { e.preventDefault(); setQuery('') } }}
           />
-          {query.trim() !== '' && (
-            <button
-              type="button"
-              className="clear-search-btn"
-              aria-label="Limpiar búsqueda"
-              onClick={()=>setQuery('')}
-            >
-              X
-            </button>
-          )}
         </div>
       </div>
 
@@ -602,7 +609,16 @@ function SwipeableTarjeta({ tarjeta, barraColor, nombre, telefono, direccion, sa
     }
     if (swipeIntent.current === 'h') {
       e.preventDefault()
-      setOffsetX(dx)
+      // Guiar el swipe según el panel actual para evitar "glitches":
+      // - Si estoy en LEFT, el gesto útil para volver es hacia la derecha (dx>0)
+      // - Si estoy en RIGHT, el gesto útil para volver es hacia la izquierda (dx<0)
+      if (activePanel === 'left' && dx < 0) {
+        setOffsetX(dx * 0.25) // resistencia
+      } else if (activePanel === 'right' && dx > 0) {
+        setOffsetX(dx * 0.25) // resistencia
+      } else {
+        setOffsetX(dx)
+      }
     } else {
       setOffsetX(0)
     }
@@ -657,6 +673,7 @@ function SwipeableTarjeta({ tarjeta, barraColor, nombre, telefono, direccion, sa
     const numeric = Number(monto)
     if (!Number.isFinite(numeric) || numeric <= 0) { alert('Monto inválido'); return }
     if (Number.isFinite(Number(saldo)) && numeric > Number(saldo)) { alert('No puedes abonar más que el saldo pendiente'); return }
+    const { token: jornadaToken } = getCurrentJornada()
     
     const queued = await offlineDB.queueOperation({ 
       type: 'abono:add', 
@@ -664,11 +681,13 @@ function SwipeableTarjeta({ tarjeta, barraColor, nombre, telefono, direccion, sa
       tarjeta_codigo: tarjeta.codigo, 
       monto: numeric, 
       metodo_pago: metodo, 
-      ts: Date.now() 
+      ts: Date.now(),
+      session_id: jornadaToken || undefined,
     })
     try {
       const existentes = await offlineDB.getAbonos(tarjeta.codigo)
-      const nuevo = { id: queued.id, fecha: getLocalDateString(), monto: numeric, metodo: metodo }
+      const now = Date.now()
+      const nuevo = { id: queued.id, fecha: getLocalDateString(), monto: numeric, metodo: metodo, ts: now, session_id: jornadaToken || undefined }
       await offlineDB.setAbonos(tarjeta.codigo, [...(existentes||[]), nuevo])
       window.dispatchEvent(new Event('outbox-updated'))
     } catch {}
@@ -772,7 +791,8 @@ function PanelPago({ onClose, onPagar, onReset, maxCuotas = 99, cuotaMonto = 0, 
     e.preventDefault(); e.stopPropagation()
     const delta = Math.sign(e.deltaY)
     setCuotas(c => {
-      let next = c - delta
+      // UX móvil: hacia abajo debe AUMENTAR (1→2→3...), hacia arriba debe DISMINUIR
+      let next = c + delta
       if (next < 1) next = maxCuotas
       if (next > maxCuotas) next = 1
       if (next !== c) {
@@ -805,7 +825,8 @@ function PanelPago({ onClose, onPagar, onReset, maxCuotas = 99, cuotaMonto = 0, 
     const dy = y - spinStartY.current
     if (Math.abs(dy) > 18) {
       setCuotas(c => {
-        let next = dy > 0 ? (c - 1) : (c + 1)
+        // UX móvil: deslizar hacia abajo (dy>0) aumenta, hacia arriba disminuye
+        let next = dy > 0 ? (c + 1) : (c - 1)
         if (next < 1) next = maxCuotas
         if (next > maxCuotas) next = 1
         if (next !== c) {
@@ -817,17 +838,36 @@ function PanelPago({ onClose, onPagar, onReset, maxCuotas = 99, cuotaMonto = 0, 
       spinStartY.current = y
     }
   }
+  // UX "perilla real": arriba muestra el siguiente (n+1) y abajo el anterior (n-1).
+  // El gesto ya está invertido para móvil: deslizar hacia abajo incrementa.
   const prevQ = cuotas === 1 ? maxCuotas : (cuotas - 1)
   const nextQ = cuotas === maxCuotas ? 1 : (cuotas + 1)
   return (
-    <div style={{position:'absolute', inset:0, background:'#0e1526', display:'grid', gridTemplateColumns:'72px 1fr', alignItems:'start', gap:6, padding:'8px 8px 10px 8px', minHeight:300, maxHeight:'60vh', overflow:'hidden'}} onTouchStart={(e)=>e.stopPropagation()}>
-      {/* Number picker vertical estrecho */}
-      <div style={{display:'flex', alignItems:'flex-start', justifyContent:'center', touchAction:'none', marginTop:12}}>
-        <div onWheel={onWheel} onTouchStart={onSpinTouchStart} onTouchMove={onSpinTouchMove}
-             style={{height:'100%', display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'flex-start', gap:2}}>
-          <div style={{opacity:.55, fontSize:12, height:24, display:'grid', placeItems:'center'}}>{prevQ}</div>
-          <div style={{fontSize:20, fontWeight:700, height:28, display:'grid', placeItems:'center'}}>{cuotas}</div>
-          <div style={{opacity:.55, fontSize:12, height:24, display:'grid', placeItems:'center'}}>{nextQ}</div>
+    <div style={{position:'absolute', inset:0, background:'#0e1526', display:'grid', gridTemplateColumns:'96px 1fr', alignItems:'start', gap:8, padding:'8px 8px 10px 8px', minHeight:300, maxHeight:'60vh', overflow:'hidden'}}>
+      {/* Selector de cuotas (área táctil más amplia) */}
+      <div style={{display:'flex', alignItems:'flex-start', justifyContent:'center', marginTop:12}}>
+        <div
+          onWheel={onWheel}
+          onTouchStart={onSpinTouchStart}
+          onTouchMove={onSpinTouchMove}
+          style={{
+            touchAction:'none',
+            width:86,
+            padding:'12px 0',
+            borderRadius:14,
+            border:'1px solid rgba(59,130,246,0.35)',
+            background:'rgba(255,255,255,0.04)',
+            display:'flex',
+            flexDirection:'column',
+            alignItems:'center',
+            justifyContent:'flex-start',
+            gap:2,
+          }}
+        >
+          <div style={{opacity:.55, fontSize:12, height:26, display:'grid', placeItems:'center'}}>{nextQ}</div>
+          <div style={{fontSize:22, fontWeight:800, height:30, display:'grid', placeItems:'center'}}>{cuotas}</div>
+          <div style={{opacity:.55, fontSize:12, height:26, display:'grid', placeItems:'center'}}>{prevQ}</div>
+          <div style={{marginTop:10, fontSize:10, opacity:.55}}>Desliza</div>
         </div>
       </div>
       {/* Radios pequeños arriba, input inmediatamente debajo, botones al fondo */}
@@ -889,7 +929,7 @@ function PanelContacto({ telefono, onClose }) {
   const whatsapp = tel ? `https://wa.me/${tel.replace(/[^0-9]/g,'')}` : '#'
   const llamar = tel ? `tel:${tel}` : '#'
   return (
-    <div style={{position:'absolute', inset:0, background:'#0e1526', display:'flex', flexDirection:'column', justifyContent:'center', alignItems:'center', gap:12, padding:16}} onTouchStart={(e)=>e.stopPropagation()}>
+    <div style={{position:'absolute', inset:0, background:'#0e1526', display:'flex', flexDirection:'column', justifyContent:'center', alignItems:'center', gap:12, padding:16}}>
       <div className="neon-title">Contacto</div>
       <div className="neon-sub">Teléfono: {telefono||'—'}</div>
       <div style={{display:'flex', gap:10, flexWrap:'wrap', justifyContent:'center'}}>

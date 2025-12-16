@@ -15,13 +15,29 @@ def _load_env_flexible() -> None:
     except Exception:
         return
 
-    import resource_loader
-    # 0) Recurso empaquetado (prioridad máxima si está frozen, o local en dev)
-    env_paths = [str(resource_loader.project_path('.env'))]
+    env_paths: list[str] = []
+    try:
+        import resource_loader
+    except Exception:
+        resource_loader = None
+
+    if resource_loader is not None:
+        # 0) Recurso empaquetado (prioridad máxima si está frozen, o local en dev)
+        bundle_candidates = [
+            resource_loader.project_path('.env'),
+            resource_loader.project_path('_internal', '.env'),
+        ]
+        for candidate in bundle_candidates:
+            try:
+                candidate_str = str(candidate)
+            except Exception:
+                continue
+            if os.path.isfile(candidate_str) and candidate_str not in env_paths:
+                env_paths.append(candidate_str)
 
     # 1) Directorio del ejecutable/script
     exe_dir = os.path.dirname(getattr(sys, 'executable', sys.argv[0])) if getattr(sys, 'frozen', False) else os.path.dirname(os.path.abspath(sys.argv[0]))
-    env_paths = [os.path.join(exe_dir, '.env')]
+    env_paths.append(os.path.join(exe_dir, '.env'))
 
     # 2) Ubicación de configuración del usuario
     if os.name == 'nt':
@@ -64,7 +80,9 @@ class APIConfig:
         # Headers por defecto
         self.default_headers = {
             'Content-Type': 'application/json',
-            'Accept': 'application/json'
+            'Accept': 'application/json',
+            'Cache-Control': 'no-cache, no-store, must-revalidate',
+            'Pragma': 'no-cache'
         }
         
         if self.auth_token:

@@ -22,10 +22,10 @@ export default function AddTarjetaModal({ onClose, onCreated, posicionAnterior =
   const [monto, setMonto] = useState('')
   const [interes, setInteres] = useState('20')
   const [cuotas, setCuotas] = useState('30')
+  const [modalidadPago, setModalidadPago] = useState('diario')
   const [numeroRuta, setNumeroRuta] = useState('')
   const [observaciones, setObservaciones] = useState('')
   const [ponerPrimera, setPonerPrimera] = useState(false)
-  const [showHist, setShowHist] = useState(false)
 
   useEffect(() => {
     const fn = () => {
@@ -87,7 +87,6 @@ export default function AddTarjetaModal({ onClose, onCreated, posicionAnterior =
         setDireccion(cli.direccion || '')
         await suggestRuta()
         setHistorial([])
-        setShowHist(false)
         setStep('form_existing')
       } else {
         await suggestRuta()
@@ -128,6 +127,7 @@ export default function AddTarjetaModal({ onClose, onCreated, posicionAnterior =
         monto: Number(res?.monto ?? payload.monto) || 0,
         interes: Number(res?.interes ?? payload.interes) || 0,
         cuotas: Number(res?.cuotas ?? payload.cuotas) || 0,
+          modalidad_pago: res?.modalidad_pago || payload.modalidad_pago || 'diario',
         cliente_identificacion: res?.cliente_identificacion || payload.cliente_identificacion,
         cliente: {
           identificacion: res?.cliente?.identificacion || payload.cliente_identificacion,
@@ -170,6 +170,7 @@ export default function AddTarjetaModal({ onClose, onCreated, posicionAnterior =
         monto: payload.monto,
         cuotas: payload.cuotas,
         interes: payload.interes,
+        modalidad_pago: payload.modalidad_pago || 'diario',
         numero_ruta: payload.numero_ruta,
         observaciones: payload.observaciones || null,
         posicion_anterior: null,
@@ -190,6 +191,7 @@ export default function AddTarjetaModal({ onClose, onCreated, posicionAnterior =
           monto: payload.monto,
           interes: payload.interes,
           cuotas: payload.cuotas,
+          modalidad_pago: payload.modalidad_pago || 'diario',
           numero_ruta: payload.numero_ruta,
           estado: 'activas',
           fecha_creacion: getLocalDateString(),
@@ -245,6 +247,7 @@ export default function AddTarjetaModal({ onClose, onCreated, posicionAnterior =
       monto: parseInt(String(monto).replace(/[^0-9]/g, ''), 10),
       cuotas: parseInt(String(cuotas), 10),
       interes: parseInt(String(interes), 10),
+      modalidad_pago: modalidadPago || 'diario',
       numero_ruta: parseInt(String(numeroRuta), 10),
       observaciones,
       posicion_anterior: ponerPrimera ? null : (posicionAnterior != null ? Number(posicionAnterior) : null),
@@ -314,6 +317,7 @@ export default function AddTarjetaModal({ onClose, onCreated, posicionAnterior =
         monto: parseInt(String(monto).replace(/[^0-9]/g, ''), 10),
         cuotas: parseInt(String(cuotas), 10),
         interes: parseInt(String(interes), 10),
+        modalidad_pago: modalidadPago || 'diario',
         numero_ruta: parseInt(String(numeroRuta), 10),
         observaciones,
         posicion_anterior: ponerPrimera ? null : (posicionAnterior != null ? Number(posicionAnterior) : null),
@@ -410,7 +414,19 @@ export default function AddTarjetaModal({ onClose, onCreated, posicionAnterior =
             <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap:8}}>
               <label>Monto<input inputMode="numeric" value={formatMoneyDisplay(monto)} onChange={(e)=>setMonto(e.target.value)} onFocus={(e) => e.target.select()} placeholder="Ej: 500000"/></label>
               <label>Interés (%)<input type="number" min={0} max={50} step={10} value={interes} onChange={(e)=>setInteres(e.target.value)} onFocus={(e) => e.target.select()} placeholder="20"/></label>
-              <label>Cuotas<input type="number" min={1} step={1} value={cuotas} onChange={(e)=>setCuotas(e.target.value)} onFocus={(e) => e.target.select()} placeholder="30"/></label>
+              <div style={{display:'flex', gap:8, alignItems:'end'}}>
+                <label style={{flex:'0 0 140px'}}>Modalidad
+                  <select value={modalidadPago} onChange={(e)=>setModalidadPago(e.target.value)} style={{width:'100%'}}>
+                    <option value="diario">diario</option>
+                    <option value="semanal">semanal</option>
+                    <option value="quincenal">quincenal</option>
+                    <option value="mensual">mensual</option>
+                  </select>
+                </label>
+                <label style={{flex:'1 1 auto'}}>Cuotas
+                  <input type="number" min={1} step={1} value={cuotas} onChange={(e)=>setCuotas(e.target.value)} onFocus={(e) => e.target.select()} placeholder="30" style={{maxWidth:110}}/>
+                </label>
+              </div>
               <label>Ruta<input value={numeroRuta} onChange={(e)=>setNumeroRuta(e.target.value)} onFocus={(e) => e.target.select()} placeholder="100"/></label>
             </div>
             <label>Observaciones<input value={observaciones} onChange={(e)=>setObservaciones(e.target.value)} onFocus={(e) => e.target.select()} placeholder="Opcional"/></label>
@@ -420,22 +436,24 @@ export default function AddTarjetaModal({ onClose, onCreated, posicionAnterior =
               <button className="primary" disabled={loading} onClick={handleSubmitExisting}>Crear tarjeta</button>
             </div>
             <div style={{display:'flex', justifyContent:'center', width:'100%'}}>
-              <button className="neon-btn" style={{width:'96%', display:'flex', justifyContent:'center', alignItems:'center', textAlign:'center'}} onClick={async ()=>{
-                try { if (!showHist && historial.length === 0) {
-                  const h = await apiClient.getClienteHistorial(cliente?.identificacion)
-                  setHistorial(Array.isArray(h) ? h : [])
-                } } catch {}
-                setShowHist(v=>!v)
-              }}>Ver historial</button>
+              <button
+                className="neon-btn"
+                style={{width:'96%', display:'flex', justifyContent:'center', alignItems:'center', textAlign:'center'}}
+                onClick={()=>{
+                  const ident = cliente?.identificacion || identificacion
+                  if (!ident) return
+                  const base = window.location.origin
+                  const token = localStorage.getItem('access_token')
+                  const url = token
+                    ? `${base}/datacredito/${encodeURIComponent(ident)}?token=${encodeURIComponent(token)}`
+                    : `${base}/datacredito/${encodeURIComponent(ident)}`
+                  // Forzar navegación en la misma pestaña para evitar bloqueos de pop-up
+                  window.location.href = url
+                }}
+              >
+                Historial crediticio
+              </button>
             </div>
-            {showHist && (
-              <div className="card" style={{maxHeight:180, overflowY:'auto', overflowX:'hidden'}}>
-                <div className="neon-title">Historial</div>
-                {(historial||[]).map((h,i)=>(
-                  <div key={i} className="neon-sub">{h.codigo || '-'} — {h.estado} — ${Number(h.monto||0).toLocaleString('es-CO')}</div>
-                ))}
-              </div>
-            )}
           </div>
         )}
         {step === 'form_new' && (
@@ -449,7 +467,19 @@ export default function AddTarjetaModal({ onClose, onCreated, posicionAnterior =
             <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap:8}}>
               <label>Monto<input inputMode="numeric" value={formatMoneyDisplay(monto)} onChange={(e)=>setMonto(e.target.value)} onFocus={(e) => e.target.select()} placeholder="Ej: 500000"/></label>
               <label>Interés (%)<input type="number" min={0} max={50} step={10} value={interes} onChange={(e)=>setInteres(e.target.value)} onFocus={(e) => e.target.select()} placeholder="20"/></label>
-              <label>Cuotas<input type="number" min={1} step={1} value={cuotas} onChange={(e)=>setCuotas(e.target.value)} onFocus={(e) => e.target.select()} placeholder="30"/></label>
+              <div style={{display:'flex', gap:8, alignItems:'end'}}>
+                <label style={{flex:'0 0 140px'}}>Modalidad
+                  <select value={modalidadPago} onChange={(e)=>setModalidadPago(e.target.value)} style={{width:'100%'}}>
+                    <option value="diario">diario</option>
+                    <option value="semanal">semanal</option>
+                    <option value="quincenal">quincenal</option>
+                    <option value="mensual">mensual</option>
+                  </select>
+                </label>
+                <label style={{flex:'1 1 auto'}}>Cuotas
+                  <input type="number" min={1} step={1} value={cuotas} onChange={(e)=>setCuotas(e.target.value)} onFocus={(e) => e.target.select()} placeholder="30" style={{maxWidth:110}}/>
+                </label>
+              </div>
               <label>Ruta<input value={numeroRuta} onChange={(e)=>setNumeroRuta(e.target.value)} onFocus={(e) => e.target.select()} placeholder="100"/></label>
             </div>
             <label>Observaciones<input value={observaciones} onChange={(e)=>setObservaciones(e.target.value)} onFocus={(e) => e.target.select()} placeholder="Opcional"/></label>
@@ -457,6 +487,24 @@ export default function AddTarjetaModal({ onClose, onCreated, posicionAnterior =
             <div style={{display:'flex', gap:8, justifyContent:'center', width:'100%'}}>
               <button onClick={onClose}>Cancelar</button>
               <button className="primary" disabled={loading} onClick={handleSubmitNew}>Crear tarjeta</button>
+            </div>
+            <div style={{display:'flex', justifyContent:'center', width:'100%'}}>
+              <button
+                className="neon-btn"
+                style={{width:'96%', display:'flex', justifyContent:'center', alignItems:'center', textAlign:'center'}}
+                onClick={()=>{
+                  const ident = identificacion
+                  if (!ident) return
+                  const base = window.location.origin
+                  const token = localStorage.getItem('access_token')
+                  const url = token
+                    ? `${base}/datacredito/${encodeURIComponent(ident)}?token=${encodeURIComponent(token)}`
+                    : `${base}/datacredito/${encodeURIComponent(ident)}`
+                  window.location.href = url
+                }}
+              >
+                Historial crediticio
+              </button>
             </div>
           </div>
         )}

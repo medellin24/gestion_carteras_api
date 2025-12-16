@@ -9,6 +9,8 @@ class VentanaClienteExistente(tk.Toplevel):
         super().__init__(parent)
         self.parent = parent
         self.cliente = cliente
+        # Cliente API para reusar token/autenticación
+        self.api_client = api_client
         
         # Configurar ventana
         self.title("Cliente Existente")
@@ -40,7 +42,17 @@ class VentanaClienteExistente(tk.Toplevel):
         main_frame = ttk.Frame(self, padding="20")
         main_frame.pack(fill='both', expand=True)
         
-        # Sección Cliente
+        # IMPORTANTE: Los botones se agregan PRIMERO con side='bottom' 
+        # para que siempre estén visibles, sin importar el contenido superior
+        frame_botones = ttk.Frame(main_frame)
+        frame_botones.pack(side='bottom', fill='x', pady=(20, 0))
+        
+        ttk.Button(frame_botones, text="CREAR", width=15, padding=5,
+                   command=self.crear_nueva_tarjeta).pack(side='left', padx=5)
+        ttk.Button(frame_botones, text="CANCELAR", width=15, padding=5,
+                   command=self.destroy).pack(side='right', padx=5)
+        
+        # Sección Cliente (ahora se agrega después de los botones)
         cliente_frame = ttk.LabelFrame(main_frame, text="Cliente", padding="10")
         cliente_frame.pack(fill='x', pady=(0, 10))
         
@@ -71,17 +83,8 @@ class VentanaClienteExistente(tk.Toplevel):
                    command=self.consultar_data_credito).grid(
             row=4, column=0, sticky='w', pady=(10,0))
         
-        # Historial de tarjetas
+        # Historial de tarjetas (se expande en el espacio restante)
         self.setup_historial(main_frame)
-        
-        # Botones
-        frame_botones = ttk.Frame(main_frame)
-        frame_botones.pack(fill='x', pady=(20, 0))
-        
-        ttk.Button(frame_botones, text="CREAR", width=15, padding=5,
-                   command=self.crear_nueva_tarjeta).pack(side='left', padx=5)
-        ttk.Button(frame_botones, text="CANCELAR", width=15, padding=5,
-                   command=self.destroy).pack(side='right', padx=5)
 
     def setup_historial(self, parent_frame):
         """Configura la sección de historial"""
@@ -150,8 +153,21 @@ class VentanaClienteExistente(tk.Toplevel):
 
     def consultar_data_credito(self):
         """Consulta el historial crediticio del cliente"""
-        messagebox.showinfo("Data Crédito", 
-                           f"Consultando historial crediticio de {self.cliente['nombre']} {self.cliente['apellido']}")
+        try:
+            ident = self.cliente.get('identificacion')
+            if not ident:
+                messagebox.showerror("Error", "No se encontró la identificación del cliente.")
+                return
+            # Reusar el token de la sesión actual (si existe)
+            token = getattr(self.api_client.config, 'auth_token', None)
+            base_url = "http://localhost:5174"
+            url = f"{base_url}/datacredito/{ident}"
+            if token:
+                url += f"?token={token}"
+            import webbrowser
+            webbrowser.open(url)
+        except Exception as e:
+            messagebox.showerror("Error", f"No se pudo abrir DataCrédito: {e}")
 
     def crear_nueva_tarjeta(self):
         """Abre la ventana de nueva tarjeta con los datos del cliente"""

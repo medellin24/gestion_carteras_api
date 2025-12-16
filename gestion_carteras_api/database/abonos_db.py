@@ -218,4 +218,35 @@ def obtener_abonos_por_fecha(
             return cursor.fetchall()
     except Exception as e:
         logger.error(f"Error al obtener abonos por fecha: {e}")
-        return [] 
+        return []
+
+def obtener_abonos_por_tarjeta(tarjeta_codigo: str) -> List[Dict]:
+    """
+    Obtiene los abonos de una tarjeta como lista de diccionarios.
+    Versión compatible con RiskEngine.
+    """
+    try:
+        with DatabasePool.get_cursor() as cursor:
+            query = '''
+                SELECT id, fecha, monto, indice_orden, metodo_pago
+                FROM abonos
+                WHERE tarjeta_codigo = %s
+                ORDER BY fecha ASC, indice_orden ASC
+            '''
+            cursor.execute(query, (tarjeta_codigo,))
+            rows = cursor.fetchall()
+            
+            abonos = []
+            for row in rows:
+                abonos.append({
+                    'id': row[0],
+                    'fecha': row[1],
+                    'monto': row[2],
+                    'indice_orden': row[3],
+                    'metodo_pago': row[4]
+                })
+            return abonos
+            
+    except Exception as e:
+        logger.error(f"Error al obtener abonos (dict): {e}")
+        return []
