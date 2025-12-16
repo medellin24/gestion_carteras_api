@@ -3,6 +3,8 @@ import psycopg2
 import time
 from contextlib import contextmanager
 import logging
+import os
+from psycopg2.pool import PoolError
 
 # Configurar logging
 logging.basicConfig(level=logging.INFO)
@@ -18,7 +20,8 @@ class DatabasePool:
             # Opciones de socket/keepalive (si el server las soporta)
             db_config.setdefault('connect_timeout', 10)
             # sslmode ya viene desde DB_CONFIG si aplica
-            cls._pool = pool.SimpleConnectionPool(
+            # Thread-safe: FastAPI/uvicorn puede usar múltiples hilos (threadpool)
+            cls._pool = pool.ThreadedConnectionPool(
                 minconn=minconn,
                 maxconn=maxconn,
                 **db_config
@@ -34,10 +37,17 @@ class DatabasePool:
         conn = None
         cursor = None
         try:
-            # Intentar hasta 2 reintentos si la conexión viene caída
+            if cls._pool is None:
+                raise RuntimeError("DatabasePool no está inicializado. Llama DatabasePool.initialize() en startup.")
+
+            # Reintentos configurables: útil cuando el pool está momentáneamente lleno.
+            # Por defecto: 8 intentos con 250ms (≈2s de espera total) antes de fallar.
+            max_attempts = int(os.getenv("POOL_ACQUIRE_RETRIES", "8"))
+            base_sleep = float(os.getenv("POOL_ACQUIRE_SLEEP_SECONDS", "0.25"))
+
             attempts = 0
             last_exc = None
-            while attempts < 2:
+            while attempts < max_attempts:
                 try:
                     conn = cls._pool.getconn()
                     # Verificar conexión viva
@@ -58,6 +68,11 @@ class DatabasePool:
                         conn = new_conn
                     cursor = conn.cursor()
                     break
+                except PoolError as e:
+                    # Pool lleno: esperar un poco y reintentar (evita errores intermitentes en picos).
+                    last_exc = e
+                    attempts += 1
+                    time.sleep(base_sleep)
                 except Exception as e:
                     last_exc = e
                     attempts += 1

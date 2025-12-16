@@ -40,18 +40,22 @@ from .schemas import (
     ContabilidadQuery, ContabilidadMetricas, CajaValor, CajaSalida, CajaSalidaCreate, CajaEntrada, CajaEntradaCreate, VerificacionEsquemaCaja
 )
 
-# Configuración del logging
-logging.basicConfig(level=logging.INFO)
-# Elevar niveles a DEBUG para ver trazas de diagnóstico durante desarrollo
-# Forzar recarga para esquema pydantic
-logging.getLogger().setLevel(logging.DEBUG)
+# Configuración del logging (producción-friendly).
+# En prod debe ser INFO/WARNING; en dev puedes usar DEBUG.
+_log_level = os.getenv("LOG_LEVEL", "INFO").upper().strip()
+if _log_level not in ("CRITICAL", "ERROR", "WARNING", "INFO", "DEBUG"):
+    _log_level = "INFO"
+
+logging.basicConfig(level=getattr(logging, _log_level, logging.INFO))
+logging.getLogger().setLevel(getattr(logging, _log_level, logging.INFO))
+
 for _name in (
     "gestion_carteras_api",
     "gestion_carteras_api.database",
     "gestion_carteras_api.database.caja_db",
 ):
     _lg = logging.getLogger(_name)
-    _lg.setLevel(logging.DEBUG)
+    _lg.setLevel(getattr(logging, _log_level, logging.INFO))
     _lg.propagate = True
 
 logger = logging.getLogger(__name__)
@@ -136,7 +140,7 @@ def startup_event():
     try:
         # Permitir configurar tamaño del pool por entorno
         _minconn = int(os.getenv("POOL_MINCONN", "1"))
-        _maxconn = int(os.getenv("POOL_MAXCONN", "10"))
+        _maxconn = int(os.getenv("POOL_MAXCONN", "50"))
         DatabasePool.initialize(minconn=_minconn, maxconn=_maxconn, **DB_CONFIG)
         # Asegurar columna modalidad_pago para soportar modalidades (diario/semanal/quincenal/mensual)
         try:

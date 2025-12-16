@@ -121,7 +121,7 @@ def refresh_tokens(body: RefreshRequest):
     # Validar estado de la suscripción en cada refresh
     if cuenta_id:
         from ..routers.admin_users import enforce_account_state
-        if not enforce_account_state(cuenta_id):
+        if not enforce_account_state(cuenta_id, payload.get("timezone")):
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Suscripción vencida. Renueve para continuar.")
         
         # Validación adicional para usuarios cobrador

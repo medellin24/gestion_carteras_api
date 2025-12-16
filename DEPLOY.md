@@ -23,6 +23,11 @@
      - `DATABASE_URL=postgresql://USER:PASSWORD@RDS_ENDPOINT:5432/DBNAME`
      - `SECRET_KEY=tu-secret`
      - `CORS_ORIGINS=https://<tu-pages>.pages.dev,https://<tu-dominio>`
+     - `LOG_LEVEL=INFO` (en producción; usa DEBUG solo para diagnóstico puntual)
+     - `POOL_MINCONN=2`
+     - `POOL_MAXCONN=40` (recomendado para ~10 usuarios en picos, ajusta según RDS)
+     - `POOL_ACQUIRE_RETRIES=8` (opcional; reintenta cuando el pool esté lleno)
+     - `POOL_ACQUIRE_SLEEP_SECONDS=0.25` (opcional; espera entre reintentos)
    - VPC Connector: conecta a la VPC de tu RDS para acceso privado
 
 3. Probar salud:

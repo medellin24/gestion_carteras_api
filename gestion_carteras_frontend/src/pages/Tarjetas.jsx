@@ -791,7 +791,8 @@ function PanelPago({ onClose, onPagar, onReset, maxCuotas = 99, cuotaMonto = 0, 
     e.preventDefault(); e.stopPropagation()
     const delta = Math.sign(e.deltaY)
     setCuotas(c => {
-      let next = c - delta
+      // UX móvil: hacia abajo debe AUMENTAR (1→2→3...), hacia arriba debe DISMINUIR
+      let next = c + delta
       if (next < 1) next = maxCuotas
       if (next > maxCuotas) next = 1
       if (next !== c) {
@@ -824,7 +825,8 @@ function PanelPago({ onClose, onPagar, onReset, maxCuotas = 99, cuotaMonto = 0, 
     const dy = y - spinStartY.current
     if (Math.abs(dy) > 18) {
       setCuotas(c => {
-        let next = dy > 0 ? (c - 1) : (c + 1)
+        // UX móvil: deslizar hacia abajo (dy>0) aumenta, hacia arriba disminuye
+        let next = dy > 0 ? (c + 1) : (c - 1)
         if (next < 1) next = maxCuotas
         if (next > maxCuotas) next = 1
         if (next !== c) {
@@ -836,7 +838,8 @@ function PanelPago({ onClose, onPagar, onReset, maxCuotas = 99, cuotaMonto = 0, 
       spinStartY.current = y
     }
   }
-  // UX: arriba debe sugerir "sube (ascendente)" y abajo "baja (descendente)"
+  // UX "perilla real": arriba muestra el siguiente (n+1) y abajo el anterior (n-1).
+  // El gesto ya está invertido para móvil: deslizar hacia abajo incrementa.
   const prevQ = cuotas === 1 ? maxCuotas : (cuotas - 1)
   const nextQ = cuotas === maxCuotas ? 1 : (cuotas + 1)
   return (

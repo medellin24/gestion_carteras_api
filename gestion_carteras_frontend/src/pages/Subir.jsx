@@ -23,7 +23,7 @@ function formatHour(ts) {
   }
 }
 
-export default function SubirPage(){
+export default function SubirPage() {
   const [pending, setPending] = useState(0)
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState('')
@@ -35,18 +35,18 @@ export default function SubirPage(){
   const navigate = useNavigate()
   const debugProfile = true
 
-  function profiler(){
+  function profiler() {
     const t0 = (typeof performance !== 'undefined' ? performance.now() : Date.now())
     const marks = []
     return {
-      mark(label){ marks.push({ label, t: (typeof performance !== 'undefined' ? performance.now() : Date.now()) }) },
-      table(){
+      mark(label) { marks.push({ label, t: (typeof performance !== 'undefined' ? performance.now() : Date.now()) }) },
+      table() {
         try {
           let prev = t0
           const rows = marks.map(m => { const d = Math.round(m.t - prev); prev = m.t; return { paso: m.label, ms: d } })
           rows.push({ paso: 'TOTAL', ms: Math.round((typeof performance !== 'undefined' ? performance.now() : Date.now()) - t0) })
           console.table(rows)
-        } catch {}
+        } catch { }
       }
     }
   }
@@ -185,11 +185,11 @@ export default function SubirPage(){
     return { empleadoId, empleadoNombre, totals, counts, signature, shadowData: snapshot.shadowData || [], details }
   }
 
-  async function refresh(){
+  async function refresh() {
     try {
       const outbox = await offlineDB.readOutbox()
       const currentEmpleadoId = localStorage.getItem('empleado_identificacion')
-      
+
       if (!currentEmpleadoId) {
         setPending(0)
         setOutboxData({ tarjetas: 0, abonos: 0, gastos: 0, bases: 0 })
@@ -197,7 +197,7 @@ export default function SubirPage(){
         setLocalBases([])
         return
       }
-      
+
       // Obtener las tarjetas del empleado actual para filtrar abonos
       const tarjetasEmpleado = await offlineDB.getTarjetas()
       const codigosTarjetasEmpleado = new Set(
@@ -205,7 +205,7 @@ export default function SubirPage(){
           .filter(t => t && String(t.empleado_identificacion) === String(currentEmpleadoId))
           .map(t => String(t.codigo))
       )
-      
+
       // Filtrar solo los datos del empleado actualmente seleccionado
       const empleadoData = outbox.filter(item => {
         if (!item) return false
@@ -219,10 +219,10 @@ export default function SubirPage(){
         const itemEmpleadoId = item.empleado_identificacion || item.empleado_id
         return itemEmpleadoId != null && String(itemEmpleadoId) === String(currentEmpleadoId)
       })
-      
+
       const count = empleadoData.length
       setPending(count)
-      
+
       // Contar por tipo (solo del empleado actual)
       const data = {
         tarjetas: empleadoData.filter(item => item.type === 'tarjeta:new' && item.temp_id?.startsWith('tmp-')).length,
@@ -231,7 +231,7 @@ export default function SubirPage(){
         bases: empleadoData.filter(item => item.type === 'base:set').length,
       }
       setOutboxData(data)
-      
+
       // Cargar gastos y bases locales para edición (solo del empleado actual)
       const gastos = empleadoData.filter(item => item.type === 'gasto:new')
       const bases = empleadoData.filter(item => item.type === 'base:set')
@@ -242,7 +242,7 @@ export default function SubirPage(){
     }
   }
 
-  useEffect(()=>{ refresh() }, [])
+  useEffect(() => { refresh() }, [])
 
   function playSound(type = 'success') {
     try {
@@ -250,10 +250,10 @@ export default function SubirPage(){
       const audioContext = new (window.AudioContext || window.webkitAudioContext)()
       const oscillator = audioContext.createOscillator()
       const gainNode = audioContext.createGain()
-      
+
       oscillator.connect(gainNode)
       gainNode.connect(audioContext.destination)
-      
+
       if (type === 'success') {
         // Sonido de éxito: dos tonos ascendentes
         oscillator.frequency.setValueAtTime(523.25, audioContext.currentTime) // C5
@@ -280,23 +280,23 @@ export default function SubirPage(){
   function showMessage(msg, type = 'info') {
     setMessage(msg)
     setMessageType(type)
-    
+
     // Reproducir sonido según el tipo
     if (type === 'success') {
       playSound('success')
     } else if (type === 'error') {
       playSound('error')
     }
-    
+
     // Duraciones: error 10s, success 10s, info 5s
     const duration = type === 'error' ? 10000 : (type === 'success' ? 10000 : 5000)
     setTimeout(() => setMessage(''), duration)
   }
 
-  async function handleUpload(){
+  async function handleUpload() {
     if (busy) return
     const currentEmpleadoId = localStorage.getItem('empleado_identificacion')
-    
+
     if (!currentEmpleadoId) {
       showMessage('No hay empleado seleccionado. Selecciona un empleado primero.', 'error')
       return
@@ -330,17 +330,17 @@ export default function SubirPage(){
     if (!preflight) return
     const currentEmpleadoId = preflight.empleadoId
     const p = debugProfile ? profiler() : null
-    
+
     setBusy(true)
     showMessage('Sincronizando datos...', 'info')
-    
+
     const timeoutId = setTimeout(() => {
       if (busy) {
         setBusy(false)
         showMessage('❌ TIMEOUT: La sincronización tardó demasiado. Verifica tu conexión e inténtalo de nuevo.', 'error')
       }
     }, 180000)
-    
+
     try {
       p && p.mark('start')
       const snapshot = await collectEmpleadoOutboxData(currentEmpleadoId, p)
@@ -360,8 +360,8 @@ export default function SubirPage(){
           showMessage('No hay datos válidos para sincronizar del empleado actual.', 'error')
         }
         return
-        }
-        
+      }
+
       // Verificar permisos justo antes de sincronizar
       try {
         const perms = await apiClient.getEmpleadoPermissions(currentEmpleadoId)
@@ -389,9 +389,9 @@ export default function SubirPage(){
         gastos: [],
         bases: [],
       }
-      
+
       let syncCount = 0
-      
+
       for (const item of empleadoData) {
         if (item.type === 'tarjeta:new') {
           if (!item.temp_id || typeof item.temp_id !== 'string' || !item.temp_id.startsWith('tmp-')) {
@@ -452,7 +452,7 @@ export default function SubirPage(){
 
       const rawEmpleadoId = localStorage.getItem('empleado_identificacion')
       const empleadoId = rawEmpleadoId ? String(rawEmpleadoId).substring(0, 20) : null
-      
+
       if (!empleadoId && (payload.gastos.length > 0 || payload.bases.length > 0)) {
         showMessage('No se encontró empleado_identificacion en la sesión. Debes seleccionar un empleado primero.', 'error')
         return
@@ -471,7 +471,7 @@ export default function SubirPage(){
 
       const res = await apiClient.sync(payload)
       p && p.mark('apiSync')
-      
+
       console.log('=== RESPUESTA DE SINCRONIZACIÓN ===')
       console.log('Respuesta completa:', res)
       console.log('Gastos creados:', res?.data?.created_gastos)
@@ -546,6 +546,8 @@ export default function SubirPage(){
       setOutboxData({ tarjetas: 0, abonos: 0, gastos: 0, bases: 0 })
       setLocalGastos([])
       setLocalBases([])
+
+      // CRITICO: Liberar la UI antes de operaciones de limpieza pesadas que podrían bloquearse
       setBusy(false)
 
       const createdTarjetas = Number(res?.data?.created_tarjetas?.length || 0)
@@ -566,21 +568,34 @@ export default function SubirPage(){
       showMessage(`${successMsg} Total: ${totalSync}.${formulaText}`, 'success')
       localStorage.setItem('flash_message', 'Sincronización completada con éxito. Listo para nueva jornada.')
       p && p.table()
-      
-      try { await refresh() } catch {}
+
+      // Limpieza final de DB (Puede tardar, pero la UI ya respondió)
+      try {
+        await Promise.all(outbox.map(item => offlineDB.removeOutbox(item.id)))
+        await offlineDB.resetWorkingMemory()
+        localStorage.removeItem('tarjetas_data')
+        localStorage.removeItem('tarjetas_stats')
+        localStorage.removeItem('tarjetas_last_download')
+        localStorage.removeItem('jornada_token')
+        localStorage.removeItem('jornada_started_at')
+      } catch (cleanupErr) {
+        console.warn('Error en limpieza post-sync (no crítico):', cleanupErr)
+      }
+
       setTimeout(() => { navigate('/home') }, 10000)
-      
+
     } catch (e) {
+      setBusy(false) // Asegurar desbloqueo en error
       console.error('Error en sincronización (inesperado):', e)
       showMessage('❌ ERROR INESPERADO — Etapa: cliente. ' + (e?.message || 'Revisa la consola y tu conexión'), 'error')
+      refresh() // Solo refrescar si hubo error y NO se borró la DB
     } finally {
       clearTimeout(timeoutId)
-      setBusy(false)
-      refresh()
+      // No llamamos a refresh() incondicionalmente aquí para evitar revivir la DB recién borrada
     }
   }
 
-  async function handleClear(){
+  async function handleClear() {
     if (pending > 0) {
       showMessage('Hay operaciones pendientes. Sincroniza primero antes de limpiar.', 'error')
       return
@@ -627,7 +642,7 @@ export default function SubirPage(){
         empleado_identificacion: gasto.empleado_identificacion,
         ts: Date.now()
       })
-      
+
       showMessage('Gasto actualizado exitosamente.', 'success')
       refresh()
     } catch (e) {
@@ -656,7 +671,7 @@ export default function SubirPage(){
         empleado_id: base.empleado_id || base.empleado_identificacion,
         ts: Date.now()
       })
-      
+
       showMessage('Base actualizada exitosamente.', 'success')
       refresh()
     } catch (e) {
@@ -674,56 +689,56 @@ export default function SubirPage(){
       <main>
         {/* Indicador de empleado actual */}
         {currentEmpleadoId && (
-          <div className="card" style={{maxWidth:680, background:'#1e3a8a', color:'white'}}>
+          <div className="card" style={{ maxWidth: 680, background: '#1e3a8a', color: 'white' }}>
             <strong>Empleado actual: {localStorage.getItem('empleado_nombre') || currentEmpleadoId}</strong>
-            <span style={{color:'#93c5fd', fontSize:14}}>ID: {currentEmpleadoId}</span>
-            <span style={{color:'#93c5fd', fontSize:14}}>Solo se sincronizarán los datos de este empleado</span>
+            <span style={{ color: '#93c5fd', fontSize: 14 }}>ID: {currentEmpleadoId}</span>
+            <span style={{ color: '#93c5fd', fontSize: 14 }}>Solo se sincronizarán los datos de este empleado</span>
           </div>
         )}
-        
+
         {!currentEmpleadoId && (
-          <div className="card" style={{maxWidth:680, background:'#7f1d1d', color:'white'}}>
+          <div className="card" style={{ maxWidth: 680, background: '#7f1d1d', color: 'white' }}>
             <strong>⚠️ No hay empleado seleccionado</strong>
-            <span style={{color:'#fca5a5', fontSize:14}}>Debes seleccionar un empleado primero para sincronizar datos</span>
+            <span style={{ color: '#fca5a5', fontSize: 14 }}>Debes seleccionar un empleado primero para sincronizar datos</span>
           </div>
         )}
 
         {/* Estado de sincronización */}
-        <div className="card" style={{maxWidth:680}}>
+        <div className="card" style={{ maxWidth: 680 }}>
           <strong>Estado de sincronización</strong>
-          <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap:8, marginTop:8}}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginTop: 8 }}>
             <div>Tarjetas nuevas: <b>{outboxData.tarjetas}</b></div>
             <div>Abonos: <b>{outboxData.abonos}</b></div>
             <div>Gastos: <b>{outboxData.gastos}</b></div>
             <div>Bases: <b>{outboxData.bases}</b></div>
           </div>
-          <div style={{marginTop:8, padding:8, background: hasDataToSync ? '#14532d' : '#7f1d1d', borderRadius:4, color:'white'}}>
+          <div style={{ marginTop: 8, padding: 8, background: hasDataToSync ? '#14532d' : '#7f1d1d', borderRadius: 4, color: 'white' }}>
             {hasDataToSync ? 'Hay datos para sincronizar' : 'No hay datos para sincronizar'}
           </div>
         </div>
 
         {/* Gastos locales */}
         {localGastos.length > 0 && (
-          <div className="card" style={{maxWidth:680, overflow:'hidden'}}>
+          <div className="card" style={{ maxWidth: 680, overflow: 'hidden' }}>
             <strong>Gastos pendientes</strong>
             {localGastos.map((gasto, idx) => (
-              <div key={gasto.id || idx} style={{padding:8, border:'1px solid #223045', borderRadius:4, marginTop:8}}>
-                <input 
-                  value={gasto.observacion || ''} 
-                  onChange={(e)=>setLocalGastos(prev=>prev.map((g,i)=>i===idx?{...g,observacion:e.target.value}:g))} 
-                  placeholder="Detalle del gasto" 
-                  style={{width:'100%', marginBottom:8}}
+              <div key={gasto.id || idx} style={{ padding: 8, border: '1px solid #223045', borderRadius: 4, marginTop: 8 }}>
+                <input
+                  value={gasto.observacion || ''}
+                  onChange={(e) => setLocalGastos(prev => prev.map((g, i) => i === idx ? { ...g, observacion: e.target.value } : g))}
+                  placeholder="Detalle del gasto"
+                  style={{ width: '100%', marginBottom: 8 }}
                 />
-                <div style={{display:'flex', gap:4, alignItems:'center'}}>
-                  <input 
-                    value={gasto.valor} 
-                    onChange={(e)=>setLocalGastos(prev=>prev.map((g,i)=>i===idx?{...g,valor:Number(e.target.value)}:g))} 
-                    placeholder="Valor" 
-                    style={{width:120, marginRight:4}}
+                <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+                  <input
+                    value={gasto.valor}
+                    onChange={(e) => setLocalGastos(prev => prev.map((g, i) => i === idx ? { ...g, valor: Number(e.target.value) } : g))}
+                    placeholder="Valor"
+                    style={{ width: 120, marginRight: 4 }}
                     type="number"
                   />
-                  <button onClick={()=>updateGasto(gasto)} style={{color:'green'}} title="Actualizar"><Check size={16}/></button>
-                  <button onClick={()=>deleteGasto(gasto.id)} style={{color:'red'}} title="Eliminar"><Trash2 size={16}/></button>
+                  <button onClick={() => updateGasto(gasto)} style={{ color: 'green' }} title="Actualizar"><Check size={16} /></button>
+                  <button onClick={() => deleteGasto(gasto.id)} style={{ color: 'red' }} title="Eliminar"><Trash2 size={16} /></button>
                 </div>
               </div>
             ))}
@@ -732,35 +747,35 @@ export default function SubirPage(){
 
         {/* Bases locales */}
         {localBases.length > 0 && (
-          <div className="card" style={{maxWidth:680, overflow:'hidden'}}>
+          <div className="card" style={{ maxWidth: 680, overflow: 'hidden' }}>
             <strong>Bases pendientes</strong>
             {localBases.map((base, idx) => (
-              <div key={base.id || idx} style={{display:'flex', flexWrap:'wrap', gap:8, padding:8, border:'1px solid #223045', borderRadius:4, marginTop:8, alignItems:'center'}}>
-                <input 
-                  value={base.fecha} 
-                  onChange={(e)=>setLocalBases(prev=>prev.map((b,i)=>i===idx?{...b,fecha:e.target.value}:b))} 
-                  type="date" 
-                  style={{flex:'1 1 140px', minWidth:140}}
+              <div key={base.id || idx} style={{ display: 'flex', flexWrap: 'wrap', gap: 8, padding: 8, border: '1px solid #223045', borderRadius: 4, marginTop: 8, alignItems: 'center' }}>
+                <input
+                  value={base.fecha}
+                  onChange={(e) => setLocalBases(prev => prev.map((b, i) => i === idx ? { ...b, fecha: e.target.value } : b))}
+                  type="date"
+                  style={{ flex: '1 1 140px', minWidth: 140 }}
                 />
-                <input 
-                  value={base.monto} 
-                  onChange={(e)=>setLocalBases(prev=>prev.map((b,i)=>i===idx?{...b,monto:Number(e.target.value)}:b))} 
-                  placeholder="Monto" 
-                  style={{flex:'1 1 120px', minWidth:120}}
+                <input
+                  value={base.monto}
+                  onChange={(e) => setLocalBases(prev => prev.map((b, i) => i === idx ? { ...b, monto: Number(e.target.value) } : b))}
+                  placeholder="Monto"
+                  style={{ flex: '1 1 120px', minWidth: 120 }}
                   type="number"
                 />
-                <button onClick={()=>updateBase(base)} style={{color:'green', flex:'0 0 auto'}} title="Actualizar"><Check size={16}/></button>
-                <button onClick={()=>deleteBase(base.id)} style={{color:'red', flex:'0 0 auto'}} title="Eliminar"><Trash2 size={16}/></button>
+                <button onClick={() => updateBase(base)} style={{ color: 'green', flex: '0 0 auto' }} title="Actualizar"><Check size={16} /></button>
+                <button onClick={() => deleteBase(base.id)} style={{ color: 'red', flex: '0 0 auto' }} title="Eliminar"><Trash2 size={16} /></button>
               </div>
             ))}
           </div>
         )}
 
         {/* Botones de acción */}
-        <div className="card" style={{maxWidth:680, display:'grid', gap:8}}>
+        <div className="card" style={{ maxWidth: 680, display: 'grid', gap: 8 }}>
           {message && (
             <div style={{
-              padding:8, 
+              padding: 8,
               background: messageType === 'success' ? '#14532d' : messageType === 'error' ? '#7f1d1d' : '#1e3a8a',
               color: 'white',
               borderRadius: 4,
@@ -770,8 +785,8 @@ export default function SubirPage(){
               justifyContent: 'space-between',
               gap: 8
             }}>
-              <span style={{flex: 1}}>{message}</span>
-              <button 
+              <span style={{ flex: 1 }}>{message}</span>
+              <button
                 onClick={() => setMessage('')}
                 style={{
                   background: 'transparent',
@@ -788,7 +803,7 @@ export default function SubirPage(){
               </button>
             </div>
           )}
-          <div style={{display:'flex', gap:10, alignItems:'center'}}>
+          <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
             <button className="primary" onClick={handleUpload} disabled={busy || !hasDataToSync}>
               {busy ? 'Sincronizando...' : 'Sincronizar datos'}
             </button>
@@ -799,85 +814,85 @@ export default function SubirPage(){
         </div>
       </main>
       {preflightModal && (
-        <div style={{position:'fixed', inset:0, background:'rgba(0,0,0,.7)', zIndex:9999, display:'grid', placeItems:'center'}} role="dialog" aria-modal="true">
-          <div className="card" style={{width:'94%', maxWidth:720, maxHeight:'90vh', overflow:'hidden', background:'#0e1526', border:'1px solid #223045', display:'flex', flexDirection:'column'}}>
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,.7)', zIndex: 9999, display: 'grid', placeItems: 'center' }} role="dialog" aria-modal="true">
+          <div className="card" style={{ width: '94%', maxWidth: 720, maxHeight: '90vh', overflow: 'hidden', background: '#0e1526', border: '1px solid #223045', display: 'flex', flexDirection: 'column' }}>
             {/* Contenido scrolleable */}
-            <div style={{padding:16, overflowY:'auto'}}>
-              <h2 style={{marginBottom:8}}>Liquidación previa a sincronizar</h2>
-              <p style={{marginBottom:12, color:'var(--muted)'}}>
+            <div style={{ padding: 16, overflowY: 'auto' }}>
+              <h2 style={{ marginBottom: 8 }}>Liquidación previa a sincronizar</h2>
+              <p style={{ marginBottom: 12, color: 'var(--muted)' }}>
                 Confirma que los valores corresponden al efectivo del día antes de enviarlo al servidor.
               </p>
-              <div style={{display:'grid', gap:12}}>
-              <div style={{background:'#111b32', padding:12, borderRadius:8}}>
-                <strong>Recaudo del día</strong>
-                <div style={{display:'flex', justifyContent:'space-between', marginTop:6}}>
-                  <span>Efectivo</span>
-                  <b>{currency(preflightModal.totals.recaudoEfectivo)}</b>
+              <div style={{ display: 'grid', gap: 12 }}>
+                <div style={{ background: '#111b32', padding: 12, borderRadius: 8 }}>
+                  <strong>Recaudo del día</strong>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 6 }}>
+                    <span>Efectivo</span>
+                    <b>{currency(preflightModal.totals.recaudoEfectivo)}</b>
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 4 }}>
+                    <span>Consignación</span>
+                    <b>{currency(preflightModal.totals.recaudoConsignacion)}</b>
+                  </div>
+                  {preflightModal.totals.recaudoOtros > 0 && (
+                    <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 4 }}>
+                      <span>Otros métodos</span>
+                      <b>{currency(preflightModal.totals.recaudoOtros)}</b>
+                    </div>
+                  )}
+                  <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 8, borderTop: '1px solid #1f2a44', paddingTop: 6 }}>
+                    <span>Total recaudo</span>
+                    <b>{currency(preflightModal.totals.recaudoTotal)}</b>
+                  </div>
                 </div>
-                <div style={{display:'flex', justifyContent:'space-between', marginTop:4}}>
-                  <span>Consignación</span>
-                  <b>{currency(preflightModal.totals.recaudoConsignacion)}</b>
+                <div style={{ display: 'grid', gap: 8, background: '#111b32', padding: 12, borderRadius: 8 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                    <span>Base registrada</span>
+                    <b>{currency(preflightModal.totals.baseTotal)}</b>
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                    <span>Préstamos nuevos</span>
+                    <b>{currency(preflightModal.totals.prestamosTotal)}</b>
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                    <span>Gastos</span>
+                    <b>{currency(preflightModal.totals.gastosTotal)}</b>
+                  </div>
                 </div>
-                {preflightModal.totals.recaudoOtros > 0 && (
-                  <div style={{display:'flex', justifyContent:'space-between', marginTop:4}}>
-                    <span>Otros métodos</span>
-                    <b>{currency(preflightModal.totals.recaudoOtros)}</b>
+                <div style={{ background: '#14532d', padding: 12, borderRadius: 8, color: 'white' }}>
+                  <strong>Efectivo a entregar</strong>
+                  <div style={{ fontSize: 24 }}>{currency(preflightModal.totals.efectivoEntregar)}</div>
+                  <small style={{ display: 'block', marginTop: 4, color: '#bbf7d0' }}>
+                    Recaudo (efectivo + consignación) + Base - Préstamos - Gastos
+                  </small>
+                </div>
+                <div style={{ display: 'grid', gap: 4, fontSize: 13, color: 'var(--muted)' }}>
+                  <span>Tarjetas nuevas: <b>{preflightModal.counts.tarjetas}</b></span>
+                  <span>Abonos: <b>{preflightModal.counts.abonos}</b></span>
+                  <span>Gastos: <b>{preflightModal.counts.gastos}</b></span>
+                  <span>Bases: <b>{preflightModal.counts.bases}</b></span>
+                </div>
+                {preflightModal.details?.abonos?.length > 0 && (
+                  <div style={{ background: '#0b1224', padding: 12, borderRadius: 8, border: '1px solid #1f2a44' }}>
+                    <strong>Detalle de abonos ({preflightModal.details.abonos.length})</strong>
+                    <div style={{ marginTop: 8, display: 'grid', gap: 6 }}>
+                      {preflightModal.details.abonos.map(item => (
+                        <div key={item.id} style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: 8, fontSize: 13, borderBottom: '1px dashed #1f2a44', paddingBottom: 4, alignItems: 'center' }}>
+                          <div>
+                            <div><b>{currency(item.monto)}</b> — {item.metodo === 'consignacion' ? 'Consignación' : 'Efectivo'}</div>
+                            <small style={{ color: 'var(--muted)' }}>Tarjeta: {item.tarjeta || '—'}</small>
+                          </div>
+                          <div style={{ textAlign: 'right', color: 'var(--muted)', fontSize: 12 }}>
+                            {formatHour(item.ts)}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
                   </div>
                 )}
-                <div style={{display:'flex', justifyContent:'space-between', marginTop:8, borderTop:'1px solid #1f2a44', paddingTop:6}}>
-                  <span>Total recaudo</span>
-                  <b>{currency(preflightModal.totals.recaudoTotal)}</b>
-                </div>
               </div>
-              <div style={{display:'grid', gap:8, background:'#111b32', padding:12, borderRadius:8}}>
-                <div style={{display:'flex', justifyContent:'space-between'}}>
-                  <span>Base registrada</span>
-                  <b>{currency(preflightModal.totals.baseTotal)}</b>
-                </div>
-                <div style={{display:'flex', justifyContent:'space-between'}}>
-                  <span>Préstamos nuevos</span>
-                  <b>{currency(preflightModal.totals.prestamosTotal)}</b>
-                </div>
-                <div style={{display:'flex', justifyContent:'space-between'}}>
-                  <span>Gastos</span>
-                  <b>{currency(preflightModal.totals.gastosTotal)}</b>
-                </div>
-              </div>
-              <div style={{background:'#14532d', padding:12, borderRadius:8, color:'white'}}>
-                <strong>Efectivo a entregar</strong>
-                <div style={{fontSize:24}}>{currency(preflightModal.totals.efectivoEntregar)}</div>
-                <small style={{display:'block', marginTop:4, color:'#bbf7d0'}}>
-                  Recaudo (efectivo + consignación) + Base - Préstamos - Gastos
-                </small>
-              </div>
-              <div style={{display:'grid', gap:4, fontSize:13, color:'var(--muted)'}}>
-                <span>Tarjetas nuevas: <b>{preflightModal.counts.tarjetas}</b></span>
-                <span>Abonos: <b>{preflightModal.counts.abonos}</b></span>
-                <span>Gastos: <b>{preflightModal.counts.gastos}</b></span>
-                <span>Bases: <b>{preflightModal.counts.bases}</b></span>
-              </div>
-              {preflightModal.details?.abonos?.length > 0 && (
-                <div style={{background:'#0b1224', padding:12, borderRadius:8, border:'1px solid #1f2a44'}}>
-                  <strong>Detalle de abonos ({preflightModal.details.abonos.length})</strong>
-                  <div style={{marginTop:8, display:'grid', gap:6}}>
-                    {preflightModal.details.abonos.map(item => (
-                      <div key={item.id} style={{display:'grid', gridTemplateColumns:'1fr auto', gap:8, fontSize:13, borderBottom:'1px dashed #1f2a44', paddingBottom:4, alignItems:'center'}}>
-                        <div>
-                          <div><b>{currency(item.monto)}</b> — {item.metodo === 'consignacion' ? 'Consignación' : 'Efectivo'}</div>
-                          <small style={{color:'var(--muted)'}}>Tarjeta: {item.tarjeta || '—'}</small>
-                        </div>
-                        <div style={{textAlign:'right', color:'var(--muted)', fontSize:12}}>
-                          {formatHour(item.ts)}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </div>
             </div>
             {/* Footer fijo */}
-            <div style={{position:'relative', display:'flex', justifyContent:'flex-end', gap:10, padding:12, borderTop:'1px solid #223045', background:'#0e1526', boxShadow:'0 -10px 24px rgba(0,0,0,.45)'}}>
+            <div style={{ position: 'relative', display: 'flex', justifyContent: 'flex-end', gap: 10, padding: 12, borderTop: '1px solid #223045', background: '#0e1526', boxShadow: '0 -10px 24px rgba(0,0,0,.45)' }}>
               <button onClick={cancelPreflight}>Cancelar</button>
               <button className="primary" onClick={confirmPreflight}>Aceptar y sincronizar</button>
             </div>
