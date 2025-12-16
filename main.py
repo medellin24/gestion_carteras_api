@@ -8,6 +8,7 @@ import logging
 
 from frames.ventana_principal import VentanaPrincipal
 from frames.ventana_login import VentanaLogin
+from resource_loader import asset_path
 
 # Configurar logging para la aplicación de escritorio
 LOG_FORMAT = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
@@ -30,6 +31,12 @@ def main():
         # Crear y ejecutar la aplicación
         logger.info("Iniciando la aplicación de escritorio...")
         root = tk.Tk()
+        try:
+            icon_path = asset_path('assets', 'icons', 'home.ico')
+            if os.path.exists(icon_path):
+                root.iconbitmap(icon_path)
+        except Exception:
+            pass
         root.withdraw()  # ocultar ventana hasta logueo
         dlg = VentanaLogin(master=root)
         dlg.wait_window()

@@ -1008,13 +1008,17 @@ class FrameEntrega(ttk.Frame):
                 messagebox.showerror("Error", "No se pudo identificar al cliente seleccionado.")
                 return
 
-            # URL Base del Frontend (Configurable)
-            # Idealmente leer de config o var de entorno
-            base_url = "http://localhost:5174" 
+            # URL base de producción (PWA) para abrir DataCrédito directamente.
+            # Debe apuntar a la ruta /datacredito/:cedula y enviar el token por query.
+            base_url = "https://gestion-carteras-api.pages.dev"
             token = getattr(self.api_client.config, 'auth_token', None)
             url = f"{base_url}/datacredito/{identificacion}"
             if token:
-                url += f"?token={token}"
+                try:
+                    from urllib.parse import urlencode
+                    url += "?" + urlencode({"token": token})
+                except Exception:
+                    url += f"?token={token}"
             # Intentar abrir en la misma pestaña (menos bloqueos) si es posible
             try:
                 webbrowser.open(url, new=0, autoraise=True)

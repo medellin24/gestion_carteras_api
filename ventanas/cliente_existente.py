@@ -160,10 +160,15 @@ class VentanaClienteExistente(tk.Toplevel):
                 return
             # Reusar el token de la sesión actual (si existe)
             token = getattr(self.api_client.config, 'auth_token', None)
-            base_url = "http://localhost:5174"
+            # URL base de producción (PWA) para abrir DataCrédito directamente.
+            base_url = "https://gestion-carteras-api.pages.dev"
             url = f"{base_url}/datacredito/{ident}"
             if token:
-                url += f"?token={token}"
+                try:
+                    from urllib.parse import urlencode
+                    url += "?" + urlencode({"token": token})
+                except Exception:
+                    url += f"?token={token}"
             import webbrowser
             webbrowser.open(url)
         except Exception as e:

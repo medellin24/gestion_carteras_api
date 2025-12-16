@@ -416,11 +416,11 @@ class FrameLiquidacion(ttk.Frame):
             # Obtener fecha del DateEntry
             self.fecha_actual = self.date_picker.get_date()
             # debug removido
-            
+
             # ✅ SOLO limpiar datos; NO consultar base ni gastos aquí.
             self.limpiar_datos_liquidacion()
             logger.info(f"[perf][liq] on_fecha_cambio solo_limpiar={_pc()-t0:.3f}s (sin fetch)")
-            
+
             logger.info(f"Fecha cambiada a: {self.fecha_actual}")
         except Exception as e:
             logger.error(f"Error al cambiar fecha: {e}")
@@ -922,11 +922,7 @@ class FrameLiquidacion(ttk.Frame):
             logger.error(f"Error al manejar error de liquidación: {e}")
 
     def mostrar_detalle_estadistica(self, tipo_estadistica):
-        """
-        Detalle de estadísticas (tarjetas canceladas/nuevas/abonos del día).
-        Nota: se desactiva temporalmente porque el bloque original se corrompió por indentación
-        en múltiples ediciones y está causando fallos al arrancar el escritorio.
-        """
+        """Detalle de estadísticas (temporalmente desactivado para evitar fallos por indentación)."""
         messagebox.showinfo(
             "Función en Desarrollo",
             "La vista detallada se está actualizando. Por ahora, use 'Generar Liquidación' y los totales del panel."
@@ -1018,7 +1014,9 @@ class FrameLiquidacion(ttk.Frame):
                     _insert_batch(end_idx)
             else:
                 try:
-                    logger.info(f"[perf][liq][detalle] prerender filas={total} en {(_pc()-t0_pr):.3f}s (batch={batch_size})")
+                    logger.info(
+                        f"[perf][liq][detalle] prerender filas={total} en {(_pc()-t0_pr):.3f}s (batch={batch_size})"
+                    )
                 except Exception:
                     pass
 

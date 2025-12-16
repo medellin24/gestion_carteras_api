@@ -1,4 +1,4 @@
-# -*- mode: python ; coding: utf-8 -*-
+ # -*- mode: python ; coding: utf-8 -*-
 
 from pathlib import Path
 
@@ -27,9 +27,12 @@ pyz = PYZ(a.pure)
 exe = EXE(
     pyz,
     a.scripts,
+    a.binaries,
+    a.zipfiles,
+    a.datas,
     [],
-    exclude_binaries=True,
-    name='GestionCarteras',
+    name='NeonBlue',
+    icon=str(project_dir / 'assets' / 'icons' / 'home.ico'),
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -40,13 +43,4 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-)
-coll = COLLECT(
-    exe,
-    a.binaries,
-    a.datas,
-    strip=False,
-    upx=True,
-    upx_exclude=[],
-    name='GestionCarteras',
 )

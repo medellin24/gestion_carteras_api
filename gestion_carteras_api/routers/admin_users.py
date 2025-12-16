@@ -24,7 +24,7 @@ def get_hoy_local(timezone_str: Optional[str]) -> date:
     except (ZoneInfoNotFoundError, Exception):
         return datetime.now(ZoneInfo('UTC')).date()
 
-def enforce_account_state(cuenta_id: str) -> bool:
+def enforce_account_state(cuenta_id: str, timezone_str: Optional[str] = None) -> bool:
     """
     Valida el estado de la cuenta.
     Retorna True si la cuenta está activa, False si está vencida.
@@ -33,7 +33,7 @@ def enforce_account_state(cuenta_id: str) -> bool:
     with DatabasePool.get_cursor() as cur:
         # Obtener información de la cuenta
         cur.execute("""
-            SELECT max_empleados, fecha_fin, trial_until 
+            SELECT max_empleados, fecha_fin, trial_until, timezone_default
             FROM cuentas_admin WHERE id=%s
         """, (cuenta_id,))
         row = cur.fetchone()
@@ -41,8 +41,9 @@ def enforce_account_state(cuenta_id: str) -> bool:
         if not row:
             return False
             
-        max_emp, fecha_fin, trial_until = row
-        hoy = date.today()
+        max_emp, fecha_fin, trial_until, tz_default = row
+        tz_eff = timezone_str or tz_default or 'America/Bogota'
+        hoy = get_hoy_local(tz_eff)
         
         # Normalizar fechas a date si vienen como datetime
         if fecha_fin and hasattr(fecha_fin, 'date'):
@@ -90,7 +91,7 @@ def get_limits(principal: dict = Depends(get_current_principal)):
         raise HTTPException(status_code=403, detail="Cuenta no asociada al usuario")
     
     # Validar estado de la cuenta (desactiva cobradores si está vencida)
-    enforce_account_state(cuenta_id)
+    enforce_account_state(cuenta_id, principal.get("timezone"))
     
     with DatabasePool.get_cursor() as cur:
         cur.execute("SELECT COALESCE(max_empleados,1), trial_until, fecha_fin, fecha_inicio FROM cuentas_admin WHERE id=%s", (cuenta_id,))
@@ -120,7 +121,7 @@ def get_limits(principal: dict = Depends(get_current_principal)):
         except Exception:
             return None
 
-    hoy = _date.today()
+    hoy = get_hoy_local(principal.get("timezone"))
     trial_until_d = _to_date(trial_until)
     fecha_fin_d = _to_date(fecha_fin)
     fecha_inicio_d = _to_date(fecha_inicio)
@@ -151,7 +152,7 @@ def create_cobrador(body: CreateCobradorRequest, principal: dict = Depends(requi
     cuenta_id = principal.get("cuenta_id")
     
     # Validar estado de la cuenta
-    if not enforce_account_state(cuenta_id):
+    if not enforce_account_state(cuenta_id, principal.get("timezone")):
         raise HTTPException(status_code=403, detail="Suscripción vencida. Renueve para continuar.")
     
     with DatabasePool.get_cursor() as cur:
@@ -564,7 +565,7 @@ def activate_cobrador(empleado_id: str, principal: dict = Depends(require_admin)
     cuenta_id = principal.get("cuenta_id")
     
     # Validar estado de la cuenta
-    if not enforce_account_state(cuenta_id):
+    if not enforce_account_state(cuenta_id, principal.get("timezone")):
         raise HTTPException(status_code=403, detail="Suscripción vencida. Renueve para continuar.")
     
     with DatabasePool.get_cursor() as cur:
@@ -602,6 +603,18 @@ def renew_subscription(body: RenewRequest, principal: dict = Depends(require_adm
     cuenta_id = principal.get("cuenta_id")
     
     with DatabasePool.get_cursor() as cur:
+        # Calcular fechas usando la timezone_default de la cuenta (si existe) para evitar perder 1 día por UTC/servidor
+        tz_eff = principal.get("timezone")
+        try:
+            cur.execute("SELECT timezone_default FROM cuentas_admin WHERE id=%s", (cuenta_id,))
+            row_tz = cur.fetchone()
+            if row_tz and row_tz[0]:
+                tz_eff = row_tz[0]
+        except Exception:
+            pass
+        hoy_local = get_hoy_local(tz_eff)
+        fecha_fin_local = hoy_local + timedelta(days=int(body.dias or 0))
+
         # Asegurar columna max_daily_routes
         cur.execute("""
             ALTER TABLE cuentas_admin
@@ -613,10 +626,13 @@ def renew_subscription(body: RenewRequest, principal: dict = Depends(require_adm
             UPDATE cuentas_admin 
                SET max_empleados=%s,
                    max_daily_routes=COALESCE(%s, %s),
-                   fecha_fin=CURRENT_DATE + INTERVAL '%s days'
+                   estado_suscripcion='activa',
+                   trial_until=NULL,
+                   fecha_inicio=%s,
+                   fecha_fin=%s
              WHERE id=%s
             """,
-            (body.max_empleados, body.max_daily_routes, body.max_empleados, body.dias, cuenta_id),
+            (body.max_empleados, body.max_daily_routes, body.max_empleados, hoy_local, fecha_fin_local, cuenta_id),
         )
     
     return {
@@ -634,7 +650,7 @@ def activate_available_cobradores(principal: dict = Depends(require_admin)):
     cuenta_id = principal.get("cuenta_id")
     
     # Validar estado de la cuenta
-    if not enforce_account_state(cuenta_id):
+    if not enforce_account_state(cuenta_id, principal.get("timezone")):
         raise HTTPException(status_code=403, detail="Suscripción vencida. Renueve para continuar.")
     
     with DatabasePool.get_cursor() as cur:
