@@ -1,6 +1,10 @@
 import tkinter as tk
 from tkinter import ttk, messagebox
 from datetime import date, datetime, timedelta
+try:
+    from zoneinfo import ZoneInfo
+except Exception:
+    ZoneInfo = None  # type: ignore
 from time import perf_counter as _pc
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -75,6 +79,12 @@ class MultiSelectCombobox(ttk.Frame):
 class FrameContabilidad(ttk.Frame):
     def __init__(self, parent):
         super().__init__(parent)
+        # Timezone del token para alinear "hoy" con el backend
+        try:
+            tz = api_client.get_user_timezone()
+            self.token_tz = tz or 'UTC'
+        except Exception:
+            self.token_tz = 'UTC'
         self._empleados = []
         self._ready = False
         # Cache de métricas y control de recálculo
@@ -325,8 +335,16 @@ class FrameContabilidad(ttk.Frame):
         for w in (self.desde, self.hasta):
             w.bind('<Return>', lambda e: (self._ready and self._on_change_filters()))
 
+    def _hoy_local(self) -> date:
+        try:
+            if ZoneInfo is not None:
+                return datetime.now(ZoneInfo(self.token_tz)).date()
+        except Exception:
+            pass
+        return date.today()
+
     def _set_default_dates(self):
-        hoy = date.today()
+        hoy = self._hoy_local()
         try:
             self.desde.set_date(hoy - timedelta(days=7))
             self.hasta.set_date(hoy)
@@ -335,6 +353,11 @@ class FrameContabilidad(ttk.Frame):
             self.desde.insert(0, (hoy - timedelta(days=7)).isoformat())
             self.hasta.delete(0, tk.END)
             self.hasta.insert(0, hoy.isoformat())
+        # Caja: por defecto también debe ser "hoy" local
+        try:
+            self.caja_fecha.set_date(hoy)
+        except Exception:
+            pass
 
     def _load_empleados(self):
         try:

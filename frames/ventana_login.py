@@ -19,6 +19,12 @@ class VentanaLogin(tk.Toplevel):
         self.title("Iniciar sesión")
         self.resizable(False, False)
         self.configure(bg="#000000")
+        try:
+            icon_path = asset_path('assets', 'icons', 'home.ico')
+            if os.path.exists(icon_path):
+                self.iconbitmap(icon_path)
+        except Exception:
+            pass
 
         self.api = APIClient()
 

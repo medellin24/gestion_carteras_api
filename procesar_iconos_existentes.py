@@ -69,6 +69,12 @@ def procesar_todos_los_iconos():
         'id': (16, 16),
         'phone': (16, 16),
         'address': (16, 16),
+
+        # Íconos de pantalla inicio y tienda de apps
+
+        'home': (194, 194),
+        'app_store': (512, 512),
+        'google_play': (512, 512),
     }
     
     for archivo in archivos_png:

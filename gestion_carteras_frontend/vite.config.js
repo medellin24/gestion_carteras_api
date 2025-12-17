@@ -11,8 +11,8 @@ export default defineConfig({
       includeAssets: ['favicon.svg', 'icons/app-icon.svg', 'icons/maskable-icon.svg'],
       manifest: {
         id: '/',
-        name: 'Gestión de Carteras',
-        short_name: 'Carteras',
+        name: 'NeonBlue',
+        short_name: 'NeonBlue',
         description: 'PWA para gestión de carteras',
         lang: 'es',
         dir: 'ltr',
@@ -25,6 +25,8 @@ export default defineConfig({
         scope: '/',
         categories: ['finance', 'business', 'productivity'],
         icons: [
+          { src: '/icons/home.png', sizes: '192x192', type: 'image/png', purpose: 'any maskable' },
+          { src: '/icons/home.png', sizes: '512x512', type: 'image/png', purpose: 'any maskable' },
           { src: '/icons/manifest-icon-192.maskable.png', sizes: '192x192', type: 'image/png', purpose: 'any maskable' },
           { src: '/icons/manifest-icon-512.maskable.png', sizes: '512x512', type: 'image/png', purpose: 'any maskable' }
         ],

@@ -15,9 +15,9 @@ class VentanaPrincipal:
         self.user_email = user_email
         # Formatear título con email del usuario
         if user_email:
-            self.root.title(f"CARTERAS [{user_email}] informes : 3112027405")
+            self.root.title(f"NeonBlue [{user_email}] informes : 3112027405")
         else:
-            self.root.title("CARTERAS [usuario@ejemplo.com] informes : 3112027405")
+            self.root.title("NeonBlue [usuario@ejemplo.com] informes : 3112027405")
         sw = self.root.winfo_screenwidth()
         x_offset = max((sw - 1200) // 2, 0)
         self.root.geometry(f"1200x700+{x_offset}+20")  # Ajusta según necesites y sitúa arriba

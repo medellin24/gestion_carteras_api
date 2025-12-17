@@ -27,6 +27,34 @@ class ApiError extends Error {
   }
 }
 
+function forceLoginRedirect(reason) {
+  try {
+    // Evitar loops si ya estamos en login
+    if (typeof window !== 'undefined' && window.location && window.location.pathname === '/') return
+    try { localStorage.removeItem('access_token') } catch {}
+    try { localStorage.removeItem('refresh_token') } catch {}
+    try { localStorage.removeItem('user_role') } catch {}
+    try { localStorage.removeItem('empleado_identificacion') } catch {}
+    try { localStorage.removeItem('empleado_nombre') } catch {}
+    try {
+      localStorage.setItem('flash_message', reason || 'Tu sesión venció. Vuelve a iniciar sesión.')
+    } catch {}
+    if (typeof window !== 'undefined' && window.location) {
+      window.location.href = '/'
+    }
+  } catch {}
+}
+
+function shouldRedirectOn403(message) {
+  const s = String(message || '').toLowerCase()
+  // Solo suscripción vencida (no otros 403 de permisos/límites)
+  return (
+    (s.includes('suscrip') && (s.includes('venc') || s.includes('renue') || s.includes('renovar'))) ||
+    s.includes('suscripción vencida') ||
+    s.includes('suscripcion vencida')
+  )
+}
+
 async function request(path, { method = 'GET', body, headers, timeoutMs } = {}) {
   const DEFAULT_TIMEOUT_MS = Number(import.meta.env.VITE_HTTP_TIMEOUT_MS || 120000)
   // Nunca lanzar por falta de BASE_URL en prod; ya tenemos fallback
@@ -91,13 +119,16 @@ async function request(path, { method = 'GET', body, headers, timeoutMs } = {}) 
           // Reintentar con nuevo token
           res = await doFetch(true)
         } else {
-          // Refresh falló: limpiar sesión para forzar login
-          localStorage.removeItem('access_token')
-          localStorage.removeItem('refresh_token')
+          // Refresh falló: forzar login
+          forceLoginRedirect('Tu sesión venció. Vuelve a iniciar sesión.')
         }
+      } else {
+        // No hay refresh token: forzar login
+        forceLoginRedirect('Tu sesión venció. Vuelve a iniciar sesión.')
       }
     } catch {
       // Si algo falla en refresh, continuar para arrojar error
+      forceLoginRedirect('Tu sesión venció. Vuelve a iniciar sesión.')
     }
   }
 
@@ -136,6 +167,17 @@ async function request(path, { method = 'GET', body, headers, timeoutMs } = {}) 
     } catch {
       // Si falla el parseo, dejar msg por defecto
     }
+
+    // Redirección pedida:
+    // - 401 => sesión/token vencido
+    if (res.status === 401) {
+      forceLoginRedirect('Tu sesión venció. Vuelve a iniciar sesión.')
+    }
+    // - 403 por suscripción vencida => también a login
+    if (res.status === 403 && shouldRedirectOn403(msg)) {
+      forceLoginRedirect('Suscripción vencida. Vuelve a iniciar sesión.')
+    }
+
     throw new ApiError(msg, { status: res.status, detail, body, headers: Object.fromEntries(res.headers.entries()), url: `${BASE_URL}${path}`, type: `http-${res.status}` })
   }
   const contentType = res.headers.get('content-type') || ''

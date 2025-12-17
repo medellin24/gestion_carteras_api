@@ -1,5 +1,10 @@
 from datetime import datetime, timedelta
+import datetime as _dt_mod
 from typing import Optional, Literal, Dict, Any
+try:
+    from zoneinfo import ZoneInfo
+except Exception:
+    ZoneInfo = None  # type: ignore
 
 import os
 from dotenv import load_dotenv
@@ -38,20 +43,31 @@ def create_token(
     empleado_identificacion: Optional[str] = None,
     timezone_name: Optional[str] = None,
     expires_delta: Optional[timedelta] = None,
+    expires_at: Optional[datetime] = None,
 ) -> str:
     now = datetime.utcnow()
-    if expires_delta is None:
-        expires_delta = (
-            timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
-            if token_type == "access"
-            else timedelta(days=REFRESH_TOKEN_EXPIRE_DAYS)
-        )
+    if expires_at is None:
+        if expires_delta is None:
+            expires_delta = (
+                timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+                if token_type == "access"
+                else timedelta(days=REFRESH_TOKEN_EXPIRE_DAYS)
+            )
+        expires_at = now + expires_delta
+    # expires_at puede venir "naive" o con tz; normalizamos a UTC naive para exp epoch
+    try:
+        if expires_at.tzinfo is not None:
+            expires_at_utc = expires_at.astimezone(_dt_mod.timezone.utc).replace(tzinfo=None)
+        else:
+            expires_at_utc = expires_at
+    except Exception:
+        expires_at_utc = expires_at
     to_encode: Dict[str, Any] = {
         "sub": subject,
         "type": token_type,
         "role": role,
         "iat": int(now.timestamp()),
-        "exp": int((now + expires_delta).timestamp()),
+        "exp": int(expires_at_utc.timestamp()),
     }
     if cuenta_id is not None:
         to_encode["cuenta_id"] = cuenta_id
