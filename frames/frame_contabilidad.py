@@ -9,7 +9,7 @@ from time import perf_counter as _pc
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from tkcalendar import DateEntry
+from frames.date_selector import DateSelector
 
 from api_client.client import api_client, APIError
 from resource_loader import asset_path
@@ -181,23 +181,17 @@ class FrameContabilidad(ttk.Frame):
 
         ttk.Label(header, text="Periodo de tiempo:").grid(row=0, column=0, sticky='w')
         ttk.Label(header, text="Desde:").grid(row=0, column=1, sticky='e')
-        self.desde = DateEntry(
+        self.desde = DateSelector(
             header,
             date_pattern='yyyy-MM-dd',
             width=12,
-            background='darkblue',
-            foreground='white',
-            borderwidth=2
         )
         self.desde.grid(row=0, column=2, padx=(6,6), pady=2)
         ttk.Label(header, text="Hasta:").grid(row=0, column=3, sticky='e')
-        self.hasta = DateEntry(
+        self.hasta = DateSelector(
             header,
             date_pattern='yyyy-MM-dd',
             width=12,
-            background='darkblue',
-            foreground='white',
-            borderwidth=2
         )
         self.hasta.grid(row=0, column=4, padx=(6,12), pady=2)
         self._set_default_dates()
@@ -206,7 +200,7 @@ class FrameContabilidad(ttk.Frame):
         ttk.Label(header, text="Información:").grid(row=0, column=5, sticky='w', padx=(6,0))
         metrics = [
             'Valor cobrado', 'Préstamos', 'Intereses', 'Gastos', 'Entradas', 'Base', 'Ganancia',
-            'Salidas', 'Caja', 'Cartera en calle', 'Número de abonos', 'Todo'
+            'Salidas', 'Caja', 'Cartera en calle', 'Número de abonos', 'Efectivo Operativo', 'Total Clavos', 'Todo'
         ]
         self.metrics_combo = MultiSelectCombobox(header, metrics)
         self.metrics_combo.grid(row=0, column=6, padx=(6,0))
@@ -233,11 +227,72 @@ class FrameContabilidad(ttk.Frame):
         datos_box.grid(row=0, column=0, sticky='nsew', padx=(0,6))
         datos_box.columnconfigure(0, weight=1)
         datos_box.rowconfigure(0, weight=1)
-        self.txt_datos = tk.Text(datos_box, height=8, width=40)
-        self.txt_datos.configure(font=('Consolas', 10), spacing1=1, spacing3=2)
-        self.txt_datos.tag_configure('dato_label', font=('Consolas', 10, 'bold'))
-        self.txt_datos.tag_configure('dato_valor', font=('Consolas', 10))
-        self.txt_datos.grid(row=0, column=0, sticky='nsew', padx=4, pady=4)
+        
+        datos_frame = tk.Frame(datos_box, bg='white')
+        datos_frame.pack(fill='both', expand=True, padx=4, pady=4)
+        
+        # Grid para etiquetas alineadas
+        datos_frame.columnconfigure(1, weight=1)
+        
+        label_font = ('Segoe UI', 9)
+        val_font = ('Segoe UI', 9, 'bold')
+        val_fg = '#1F2937'
+        
+        tk.Label(datos_frame, text="Total cobrado:", font=label_font, bg='white').grid(row=0, column=0, sticky='w', pady=2)
+        self.lbl_cobrado = tk.Label(datos_frame, text="$ 0", font=val_font, fg=val_fg, bg='white')
+        self.lbl_cobrado.grid(row=0, column=1, sticky='e', pady=2)
+        
+        tk.Label(datos_frame, text="Total bases asignadas:", font=label_font, bg='white').grid(row=1, column=0, sticky='w', pady=2)
+        self.lbl_bases = tk.Label(datos_frame, text="$ 0", font=val_font, fg=val_fg, bg='white')
+        self.lbl_bases.grid(row=1, column=1, sticky='e', pady=2)
+        
+        tk.Label(datos_frame, text="Total préstamos:", font=label_font, bg='white').grid(row=2, column=0, sticky='w', pady=2)
+        self.lbl_prestamos = tk.Label(datos_frame, text="$ 0", font=val_font, fg=val_fg, bg='white')
+        self.lbl_prestamos.grid(row=2, column=1, sticky='e', pady=2)
+        
+        tk.Label(datos_frame, text="Total gastos:", font=label_font, bg='white').grid(row=3, column=0, sticky='w', pady=2)
+        self.lbl_gastos = tk.Label(datos_frame, text="$ 0", font=val_font, fg=val_fg, bg='white')
+        self.lbl_gastos.grid(row=3, column=1, sticky='e', pady=2)
+        
+        tk.Label(datos_frame, text="Total salidas:", font=label_font, bg='white').grid(row=4, column=0, sticky='w', pady=2)
+        self.lbl_salidas = tk.Label(datos_frame, text="$ 0", font=val_font, fg=val_fg, bg='white')
+        self.lbl_salidas.grid(row=4, column=1, sticky='e', pady=2)
+        
+        tk.Label(datos_frame, text="Total entradas:", font=label_font, bg='white').grid(row=5, column=0, sticky='w', pady=2)
+        self.lbl_entradas = tk.Label(datos_frame, text="$ 0", font=val_font, fg=val_fg, bg='white')
+        self.lbl_entradas.grid(row=5, column=1, sticky='e', pady=2)
+        
+        tk.Label(datos_frame, text="Total intereses:", font=label_font, bg='white').grid(row=6, column=0, sticky='w', pady=2)
+        self.lbl_intereses = tk.Label(datos_frame, text="$ 0", font=val_font, fg=val_fg, bg='white')
+        self.lbl_intereses.grid(row=6, column=1, sticky='e', pady=2)
+
+        tk.Label(datos_frame, text="Ganancia Neta:", font=label_font, bg='white').grid(row=7, column=0, sticky='w', pady=2)
+        self.lbl_ganancia = tk.Label(datos_frame, text="$ 0", font=('Segoe UI', 9, 'bold'), fg='#059669', bg='white')
+        self.lbl_ganancia.grid(row=7, column=1, sticky='e', pady=2)
+        
+        tk.Label(datos_frame, text="Cartera en la calle (Hasta):", font=label_font, bg='white').grid(row=8, column=0, sticky='w', pady=2)
+        self.lbl_cartera = tk.Label(datos_frame, text="$ 0", font=val_font, fg=val_fg, bg='white')
+        self.lbl_cartera.grid(row=8, column=1, sticky='e', pady=2)
+        
+        tk.Label(datos_frame, text="Cartera en la calle (Desde):", font=label_font, bg='white').grid(row=9, column=0, sticky='w', pady=2)
+        self.lbl_cartera_desde = tk.Label(datos_frame, text="$ 0", font=val_font, fg=val_fg, bg='white')
+        self.lbl_cartera_desde.grid(row=9, column=1, sticky='e', pady=2)
+
+        # Nuevo Item: Efectivo (Cobrado + Base - Prestamos - Gastos)
+        tk.Label(datos_frame, text="Efectivo Operativo:", font=label_font, bg='white').grid(row=10, column=0, sticky='w', pady=2)
+        self.lbl_efectivo = tk.Label(datos_frame, text="$ 0", font=('Segoe UI', 10, 'bold'), fg='#059669', bg='white')
+        self.lbl_efectivo.grid(row=10, column=1, sticky='e', pady=2)
+
+        # Nuevo Item: Total Clavos (>60 días vencidos)
+        tk.Label(datos_frame, text="Total Clavos (>60d):", font=label_font, bg='white').grid(row=11, column=0, sticky='w', pady=2)
+        self.lbl_clavos = tk.Label(datos_frame, text="$ 0", font=('Segoe UI', 9, 'bold'), fg='#DC2626', bg='white')
+        self.lbl_clavos.grid(row=11, column=1, sticky='e', pady=2)
+        
+        # Botón de limpieza (Escobita) - Más grande y posicionado fijo en el fondo
+        self.btn_limpiar = tk.Button(datos_frame, text="🧹", font=('Segoe UI', 16), 
+                                   command=self._limpiar_tableros, 
+                                   relief='flat', bg='white', activebackground='#F3F4F6', bd=0)
+        self.btn_limpiar.place(relx=0.0, rely=1.0, anchor='sw', x=2, y=-2)
         
         # Sección Resumen (espacio ampliado)
         resumen_box = ttk.LabelFrame(body, text="Resumen")
@@ -254,13 +309,10 @@ class FrameContabilidad(ttk.Frame):
         caja_box.columnconfigure(2, weight=1)
 
         ttk.Label(caja_box, text="Fecha:").grid(row=0, column=0, sticky='w', padx=6, pady=(6,2))
-        self.caja_fecha = DateEntry(
+        self.caja_fecha = DateSelector(
             caja_box,
             date_pattern='yyyy-MM-dd',
             width=12,
-            background='darkblue',
-            foreground='white',
-            borderwidth=2
         )
         self.caja_fecha.grid(row=0, column=1, columnspan=2, padx=6, pady=(6,2), sticky='ew')
         
@@ -313,6 +365,7 @@ class FrameContabilidad(ttk.Frame):
         actions_frame.grid(row=1, column=0, columnspan=2, pady=(2,0), sticky='ew')
         actions_frame.columnconfigure(0, weight=1)
         actions_frame.columnconfigure(1, weight=1)
+        actions_frame.columnconfigure(2, weight=1)
 
         btn_exportar = ttk.Button(
             actions_frame,
@@ -322,6 +375,16 @@ class FrameContabilidad(ttk.Frame):
             width=18
         )
         btn_exportar.grid(row=0, column=0, padx=(0,6), pady=2, sticky='ew')
+        
+        btn_listar = ttk.Button(
+            actions_frame,
+            text="Listar Clientes",
+            command=self._listar_clientes,
+            style='Blue.TButton',
+            width=18
+        )
+        btn_listar.grid(row=0, column=1, padx=(6,6), pady=2, sticky='ew')
+
         btn_informes = ttk.Button(
             actions_frame,
             text="Informes y gráficos",
@@ -329,7 +392,7 @@ class FrameContabilidad(ttk.Frame):
             style='Blue.TButton',
             width=20
         )
-        btn_informes.grid(row=0, column=1, padx=(6,0), pady=2, sticky='ew')
+        btn_informes.grid(row=0, column=2, padx=(6,0), pady=2, sticky='ew')
 
         # Eventos
         for w in (self.desde, self.hasta):
@@ -426,7 +489,7 @@ class FrameContabilidad(ttk.Frame):
             # Mostrar según selección múltiple
             seleccion = self.metrics_combo.get_selected()
             if not seleccion or ('Todo' in seleccion):
-                seleccion = ['Valor cobrado','Préstamos','Intereses','Gastos','Entradas','Base','Ganancia','Salidas','Caja','Cartera en calle','Número de abonos']
+                seleccion = ['Valor cobrado','Préstamos','Intereses','Gastos','Entradas','Base','Ganancia','Salidas','Caja','Cartera en calle','Número de abonos','Efectivo Operativo','Total Clavos']
             self._render_outputs(data, seleccion)
             # Si se necesita cartera en calle y el backend dio 0, disparar cálculo async sin bloquear (con deduplicación)
             if ('Cartera en calle' in seleccion) and f.get('empleado_id') and float(data.get('cartera_en_calle', 0) or 0) == 0.0:
@@ -444,7 +507,6 @@ class FrameContabilidad(ttk.Frame):
                     t0 = _pc()
                     data = self._calc_metrics_fallback(f['desde'], f['hasta'], f['empleado_id'])
                     fb_elapsed = _pc() - t0
-                    self.txt_datos.delete('1.0', tk.END)
                     try:
                         seleccion = self.metrics_combo.get_selected()
                     except Exception:
@@ -624,6 +686,175 @@ class FrameContabilidad(ttk.Frame):
             'caja': caja_calculada,
         }
 
+    def _listar_clientes(self):
+        # Verificar selección de empleado
+        sel = self.tree.selection()
+        empleado_id = None
+        if sel:
+            val = self.tree.item(sel[0]).get('values')
+            if val and val[0] != 'ALL':
+                empleado_id = str(val[0])
+        
+        if not empleado_id:
+            messagebox.showwarning("Selección", "Por favor seleccione un empleado específico de la lista.")
+            return
+
+        # Diálogo para elegir alcance
+        top = tk.Toplevel(self)
+        top.title("Listar Clientes")
+        top.geometry("320x160")
+        top.resizable(False, False)
+        top.transient(self)
+        try:
+            top.grab_set()
+            # Centrar
+            top.update_idletasks()
+            x = self.winfo_rootx() + (self.winfo_width() // 2) - 160
+            y = self.winfo_rooty() + (self.winfo_height() // 2) - 80
+            top.geometry(f"+{x}+{y}")
+        except:
+            pass
+
+        tk.Label(top, text="¿Qué clientes desea listar?", font=('Segoe UI', 11, 'bold')).pack(pady=(20, 10))
+        
+        def action(scope):
+            top.destroy()
+            self._generar_excel_clientes(empleado_id, scope)
+
+        f_btns = tk.Frame(top)
+        f_btns.pack(fill='x', padx=20, pady=10)
+        
+        ttk.Button(f_btns, text="Solo Activos\n(con deuda)", style='Blue.TButton', 
+                   command=lambda: action('activos')).pack(side='left', expand=True, padx=5, fill='x')
+        ttk.Button(f_btns, text="Todos\n(histórico)", style='Cafe.TButton', 
+                   command=lambda: action('todos')).pack(side='left', expand=True, padx=5, fill='x')
+
+    def _generar_excel_clientes(self, empleado_id: str, scope: str):
+        # Lógica similar a _exportar_excel pero simplificada para clientes
+        try:
+            import os, sys, tempfile
+            from openpyxl import Workbook
+            from openpyxl.styles import Font, PatternFill, Alignment
+            
+            # Ventana de progreso
+            prog = tk.Toplevel(self)
+            prog.title('Generando lista...')
+            prog.geometry("300x120")
+            prog.resizable(False, False)
+            try:
+                prog.transient(self)
+                prog.grab_set()
+                prog.update_idletasks()
+                x = self.winfo_rootx() + (self.winfo_width() // 2) - 150
+                y = self.winfo_rooty() + (self.winfo_height() // 2) - 60
+                prog.geometry(f"+{x}+{y}")
+            except: pass
+            
+            ttk.Label(prog, text="Consultando y generando Excel...").pack(pady=20)
+            pbar = ttk.Progressbar(prog, mode='indeterminate')
+            pbar.pack(fill='x', padx=20)
+            pbar.start(10)
+            
+            def _worker():
+                try:
+                    # 1. Fetch data
+                    clientes = api_client.list_clientes_empleado(empleado_id, scope)
+                    
+                    if not clientes:
+                        raise ValueError("No se encontraron clientes para este criterio.")
+
+                    # 2. Build Excel
+                    wb = Workbook()
+                    ws = wb.active
+                    ws.title = f"Clientes - {scope.capitalize()}"
+                    
+                    cols = ['Identificación', 'Nombre', 'Apellido', 'Teléfono', 'Dirección']
+                    ws.append(cols)
+                    
+                    # Estilos
+                    header_fill = PatternFill(start_color='FF0B63B5', end_color='FF0B63B5', fill_type='solid')
+                    header_font = Font(color='FFFFFFFF', bold=True)
+                    
+                    for c_idx, _ in enumerate(cols, 1):
+                        cell = ws.cell(row=1, column=c_idx)
+                        cell.fill = header_fill
+                        cell.font = header_font
+                        cell.alignment = Alignment(horizontal='center')
+                        
+                    for c in clientes:
+                        ws.append([
+                            c.get('identificacion'),
+                            c.get('nombre'),
+                            c.get('apellido'),
+                            c.get('telefono') or '',
+                            c.get('direccion') or ''
+                        ])
+                        
+                    # Auto-width simple
+                    for col in ws.columns:
+                        max_length = 0
+                        column = col[0].column_letter
+                        for cell in col:
+                            try:
+                                if len(str(cell.value)) > max_length:
+                                    max_length = len(str(cell.value))
+                            except: pass
+                        adjusted_width = (max_length + 2)
+                        ws.column_dimensions[column].width = min(adjusted_width, 50)
+
+                    tmp_path = os.path.join(tempfile.gettempdir(), f"clientes_{empleado_id}_{scope}.xlsx")
+                    wb.save(tmp_path)
+                    
+                    def _finish():
+                        try:
+                            pbar.stop()
+                            prog.destroy()
+                        except: pass
+                        
+                        # Abrir archivo
+                        try:
+                            if sys.platform.startswith('win'):
+                                os.startfile(tmp_path)
+                            else:
+                                import webbrowser
+                                webbrowser.open(tmp_path)
+                        except Exception as e:
+                            messagebox.showerror("Error", f"No se pudo abrir el archivo: {e}")
+
+                    self.after(0, _finish)
+                    
+                except Exception as e:
+                    error_msg = str(e)
+                    def _err(msg=error_msg):
+                        try: pbar.stop(); prog.destroy() 
+                        except: pass
+                        messagebox.showerror("Error", f"Fallo al generar lista: {msg}")
+                    self.after(0, _err)
+
+            import threading
+            threading.Thread(target=_worker, daemon=True).start()
+
+        except Exception as e:
+            messagebox.showerror("Error", f"No se pudo iniciar: {e}")
+
+    def _limpiar_tableros(self):
+        """Limpia los datos mostrados y el caché."""
+        self._cached_metrics = None
+        self._stale = True
+        
+        # Limpiar labels de datos
+        for lbl in [self.lbl_cobrado, self.lbl_bases, self.lbl_prestamos, 
+                   self.lbl_gastos, self.lbl_salidas, self.lbl_entradas, 
+                   self.lbl_intereses, self.lbl_cartera, self.lbl_cartera_desde,
+                   self.lbl_efectivo, getattr(self, 'lbl_clavos', None),
+                   getattr(self, 'lbl_ganancia', None)]:
+            if lbl:
+                lbl.config(text="$ 0")
+        
+        # Limpiar resumen texto
+        self.txt_resumen.delete('1.0', tk.END)
+        self.txt_resumen.insert('1.0', "Datos limpiados.")
+
     def _exportar_excel(self):
         # Previsualización en Excel (xlsx) con estilos, resúmenes y ventana de progreso centrada.
         f = self._get_filters()
@@ -705,9 +936,28 @@ class FrameContabilidad(ttk.Frame):
 
                     def fetch_one(idx: int, dia):
                         data = api_client.contabilidad_metricas(dia, dia, empleado_id)
+                        # Usar el dato histórico calculado por el backend
+                        total_posibles = int(data.get('tarjetas_activas_historicas', 0))
+                        
+                        # Fallback a liquidación guardada si el backend retorna 0
+                        if total_posibles == 0:
+                            try:
+                                liq = api_client.get_liquidacion_diaria(empleado_id, dia)
+                                total_posibles = int(liq.get('tarjetas_activas', 0))
+                            except:
+                                pass
+                            
+                        abonos_hechos = int(data.get('abonos_count', 0))
+                        abonos_str = f"{abonos_hechos} de {total_posibles} posibles" if total_posibles > 0 else f"{abonos_hechos}"
+
+                        # Efectivo (Cobrado + Base - Prestamos - Gastos)
+                        efectivo = float(data.get('total_efectivo', 0))
+
                         return idx, {
                             'Fecha': dia.isoformat(),
-                            'Número de abonos': int(data.get('abonos_count', 0)),
+                            'Número de abonos': abonos_str, # String ahora
+                            'abonos_val': abonos_hechos,    # Para sumas numéricas
+                            'posibles_val': total_posibles, # Para sumas numéricas
                             'Valor cobrado': float(data.get('total_cobrado', 0)),
                             'Préstamos': float(data.get('total_prestamos', 0)),
                             'Intereses': float(data.get('total_intereses', 0)),
@@ -716,6 +966,7 @@ class FrameContabilidad(ttk.Frame):
                             'Ganancias': float(data.get('ganancia', 0)),
                             'Salidas': float(data.get('total_salidas', 0)),
                             'Entradas': float(data.get('total_entradas', 0) or 0), # Asegurar valor no nulo
+                            'Efectivo': efectivo,
                             'Caja': float(data.get('caja', 0)),
                             'Cartera en calle': float(data.get('cartera_en_calle', 0)),
                         }
@@ -729,19 +980,30 @@ class FrameContabilidad(ttk.Frame):
                     t_fetch = _pc() - t_fetch0
 
                     # Construir filas finales con semanas y total mes
-                    cols = ['Fecha','Número de abonos','Valor cobrado','Préstamos','Intereses','Bases','Gastos','Ganancias','Salidas','Entradas','Caja','Cartera en calle']
-                    sum_keys = ['Número de abonos','Valor cobrado','Préstamos','Intereses','Bases','Gastos','Ganancias','Salidas','Entradas']
+                    # Orden de columnas solicitado: ..., Entradas, Efectivo, Caja, ...
+                    cols = ['Fecha','Número de abonos','Valor cobrado','Préstamos','Intereses','Bases','Gastos','Ganancias','Salidas','Entradas','Efectivo','Caja','Cartera en calle']
+                    
+                    # Keys numéricas para sumar
+                    sum_keys = ['abonos_val','posibles_val','Valor cobrado','Préstamos','Intereses','Bases','Gastos','Ganancias','Salidas','Entradas','Efectivo']
                     last_keys = ['Caja','Cartera en calle']
 
                     def _zero_accum():
                         return {k: 0.0 for k in sum_keys}
 
-                    def _append_summary(rows_out, label, sums, last_vals):
+                    def _append_summary(rows_out, label, sums, last_vals, style_tag=None):
                         row = {'Fecha': label}
+                        # Formatear abonos combinados
+                        abonos = int(sums.get('abonos_val', 0))
+                        posibles = int(sums.get('posibles_val', 0))
+                        row['Número de abonos'] = f"{abonos} de {posibles} posibles"
+                        
                         for k in sum_keys:
-                            row[k] = float(sums.get(k, 0.0))
+                            if k not in ('abonos_val', 'posibles_val'):
+                                row[k] = float(sums.get(k, 0.0))
                         for lk in last_keys:
                             row[lk] = float(last_vals.get(lk, 0.0))
+                        
+                        row['_style'] = style_tag
                         rows_out.append(row)
 
                     final_rows = []
@@ -750,19 +1012,28 @@ class FrameContabilidad(ttk.Frame):
                     weeks_in_month_block = 0
                     week_sums = _zero_accum(); week_last = {k: 0.0 for k in last_keys}
                     month_sums = _zero_accum(); month_last = {k: 0.0 for k in last_keys}
+                    
+                    # Acumuladores para total intervalo
+                    total_sums = _zero_accum()
+                    total_last = {k: 0.0 for k in last_keys}
 
                     total_days = len(daily_rows)
                     for i, r in enumerate(daily_rows, start=1):
                         final_rows.append(r)
                         for k in sum_keys:
-                            week_sums[k] += float(r.get(k, 0) or 0)
+                            val = float(r.get(k, 0) or 0)
+                            week_sums[k] += val
+                            total_sums[k] += val
                         for lk in last_keys:
-                            week_last[lk] = float(r.get(lk, 0) or 0)
+                            val = float(r.get(lk, 0) or 0)
+                            week_last[lk] = val
+                            total_last[lk] = val # Sobrescribir con el último valor
+                        
                         days_in_week += 1
 
                         is_last_day = (i == total_days)
                         if days_in_week == 7 or is_last_day:
-                            _append_summary(final_rows, f"Semana {week_idx}", week_sums, week_last)
+                            _append_summary(final_rows, f"Semana {week_idx}", week_sums, week_last, 'week')
                             for k in sum_keys:
                                 month_sums[k] += week_sums[k]
                             for lk in last_keys:
@@ -772,9 +1043,12 @@ class FrameContabilidad(ttk.Frame):
                             weeks_in_month_block += 1
                             week_sums = _zero_accum(); week_last = {k: 0.0 for k in last_keys}
                         if weeks_in_month_block == 4 or (is_last_day and weeks_in_month_block > 0):
-                            _append_summary(final_rows, 'Total mes', month_sums, month_last)
+                            _append_summary(final_rows, 'Total mes', month_sums, month_last, 'month')
                             weeks_in_month_block = 0
                             month_sums = _zero_accum(); month_last = {k: 0.0 for k in last_keys}
+                    
+                    # Total general del intervalo
+                    _append_summary(final_rows, 'TOTAL INTERVALO', total_sums, total_last, 'total')
 
                     # Crear libro Excel con estilos
                     t_build0 = _pc()
@@ -782,11 +1056,18 @@ class FrameContabilidad(ttk.Frame):
                     from openpyxl.styles import Font, PatternFill, Alignment
                     from openpyxl.utils import get_column_letter
                     wb = Workbook(); ws = wb.active; ws.title = 'Contabilidad'
+                    
+                    # Encabezado fijo
+                    ws.freeze_panes = 'A2'
 
                     # Estilos
-                    header_fill = PatternFill(start_color='FFDC2626', end_color='FFDC2626', fill_type='solid')  # rojo
+                    header_fill = PatternFill(start_color='FFDC2626', end_color='FFDC2626', fill_type='solid') # Rojo como antes
                     header_font = Font(color='FFFFFFFF', bold=True)
-                    week_fill = PatternFill(start_color='FFFCD34D', end_color='FFFCD34D', fill_type='solid')  # amarillo ocre
+                    
+                    # Colores de filas de resumen
+                    week_fill = PatternFill(start_color='FFFCD34D', end_color='FFFCD34D', fill_type='solid') # Ocre/Amarillo suave
+                    month_fill = PatternFill(start_color='FFF59E0B', end_color='FFF59E0B', fill_type='solid') # Amarillo intenso
+                    total_fill = PatternFill(start_color='FFBAE6FD', end_color='FFBAE6FD', fill_type='solid') # Azul claro
                     month_fill = PatternFill(start_color='FFF59E0B', end_color='FFF59E0B', fill_type='solid')  # ámbar
 
                     # Encabezados
@@ -798,30 +1079,45 @@ class FrameContabilidad(ttk.Frame):
                         cell.alignment = Alignment(horizontal='center', vertical='center')
 
                     # Filas
-                    for r in final_rows:
-                        ws.append([r.get(k, '') for k in cols])
-                        last_row = ws.max_row
-                        etiqueta = str(r.get('Fecha', ''))
+                    for r_data in final_rows:
+                        row_vals = []
+                        for c in cols:
+                            row_vals.append(r_data.get(c))
+                        
+                        ws.append(row_vals)
+                        curr_row = ws.max_row
+                        
                         # Formatos numéricos
                         for c_idx in range(2, len(cols) + 1):
                             key = cols[c_idx-1]
-                            cell = ws.cell(row=last_row, column=c_idx)
+                            cell = ws.cell(row=curr_row, column=c_idx)
                             if key == 'Número de abonos':
-                                cell.number_format = '0'
+                                cell.number_format = '@' # Texto para "X de Y"
                             else:
                                 cell.number_format = '#,##0.00'
-                        # Colorear filas de resumen completas
-                        if etiqueta.startswith('Semana '):
+
+                        # Detectar filas de resumen por tag
+                        style_tag = r_data.get('_style')
+                        val_fecha = str(r_data.get('Fecha', ''))
+                        
+                        fill = None
+                        if style_tag == 'week' or 'Semana' in val_fecha: 
+                            fill = week_fill
+                        elif style_tag == 'month' or 'Total mes' in val_fecha: 
+                            fill = month_fill
+                        elif style_tag == 'total' or 'TOTAL' in val_fecha: 
+                            fill = total_fill
+                        
+                        if fill:
                             for c_idx in range(1, len(cols) + 1):
-                                ws.cell(row=last_row, column=c_idx).fill = week_fill
-                        elif etiqueta == 'Total mes':
-                            for c_idx in range(1, len(cols) + 1):
-                                ws.cell(row=last_row, column=c_idx).fill = month_fill
+                                cell = ws.cell(row=curr_row, column=c_idx)
+                                cell.fill = fill
+                                cell.font = Font(bold=True)
 
                     # Ancho de columnas: más espaciosas (ajustadas)
                     width_map = {
                         'Fecha': 16,
-                        'Número de abonos': 12,
+                        'Número de abonos': 20,
                         'Valor cobrado': 20,
                         'Préstamos': 20,
                         'Intereses': 20,
@@ -830,6 +1126,7 @@ class FrameContabilidad(ttk.Frame):
                         'Ganancias': 20,
                         'Salidas': 20,
                         'Entradas': 20,
+                        'Efectivo': 20,
                         'Caja': 20,
                         'Cartera en calle': 20,
                     }
@@ -873,12 +1170,13 @@ class FrameContabilidad(ttk.Frame):
                     except Exception:
                         _done_ok()
                 except Exception as e:
-                    def _done_err():
+                    error_msg = str(e) # Capturar el mensaje inmediatamente
+                    def _done_err(err=error_msg): # Usar argumento por defecto o variable capturada
                         try:
                             pbar.stop(); prog.destroy()
                         except Exception:
                             pass
-                        messagebox.showerror('Error', f'No se pudo generar la previsualización de Excel: {e}')
+                        messagebox.showerror('Error', f'No se pudo generar la previsualización de Excel: {err}')
                     try:
                         self.after(0, _done_err)
                     except Exception:
@@ -948,48 +1246,7 @@ class FrameContabilidad(ttk.Frame):
             return None
 
     def _render_outputs(self, data: dict, seleccion: list[str]) -> None:
-        # Render de Datos
-        self.txt_datos.delete('1.0', tk.END)
-        mapa = {
-            'Valor cobrado': ('total_cobrado', 'moneda'),
-            'Préstamos': ('total_prestamos', 'moneda'),
-            'Intereses': ('total_intereses', 'moneda'),
-            'Gastos': ('total_gastos', 'moneda'),
-            'Base': ('total_bases', 'moneda'),
-            'Ganancia': ('ganancia', 'moneda'),
-            'Salidas': ('total_salidas', 'moneda'),
-            'Entradas': ('total_entradas', 'moneda'),
-            'Caja': ('caja', 'moneda'),
-            'Cartera en calle': ('cartera_en_calle', 'moneda'),
-            'Número de abonos': ('abonos_count', 'entero'),
-        }
-        # Preparar filas con valores formateados
-        filas = []
-        for etiqueta in seleccion:
-            clave, tipo = mapa.get(etiqueta, ('total_cobrado','moneda'))
-            val = data.get(clave, 0)
-            if tipo == 'moneda':
-                texto_valor = f"$ {float(val or 0):,.2f}"
-            else:
-                try:
-                    texto_valor = f"{int(val)}"
-                except Exception:
-                    texto_valor = str(val)
-            filas.append((etiqueta, texto_valor))
-        if filas:
-            max_label = max(len(label) for label, _ in filas)
-        else:
-            max_label = 0
-        for idx, (label, valor) in enumerate(filas):
-            label_fmt = label.ljust(max_label)
-            self.txt_datos.insert('end', label_fmt, ('dato_label',))
-            self.txt_datos.insert('end', '   ', ())
-            self.txt_datos.insert('end', valor, ('dato_valor',))
-            if idx < len(filas) - 1:
-                self.txt_datos.insert('end', '\n')
-            else:
-                self.txt_datos.insert('end', '\n')
-        # Render de Resumen
+        # Render de Resumen (incluye actualización de labels de datos)
         self.txt_resumen.delete('1.0', tk.END)
         self._render_resumen_financiero(data, seleccion)
 
@@ -997,6 +1254,22 @@ class FrameContabilidad(ttk.Frame):
         """Muestra un resumen didáctico con ecuaciones usando SOLO datos ya cargados.
         Si falta algún operando por no estar en la selección, marcar como 'no solicitado'.
         """
+        # Actualizar labels de métricas (panel izquierdo)
+        try:
+            self.lbl_cobrado.config(text=f"$ {data.get('total_cobrado', 0):,.0f}")
+            self.lbl_bases.config(text=f"$ {data.get('total_bases', 0):,.0f}")
+            self.lbl_prestamos.config(text=f"$ {data.get('total_prestamos', 0):,.0f}")
+            self.lbl_gastos.config(text=f"$ {data.get('total_gastos', 0):,.0f}")
+            self.lbl_salidas.config(text=f"$ {data.get('total_salidas', 0):,.0f}")
+            self.lbl_entradas.config(text=f"$ {data.get('total_entradas', 0):,.0f}")
+            self.lbl_intereses.config(text=f"$ {data.get('total_intereses', 0):,.0f}")
+            self.lbl_cartera.config(text=f"$ {data.get('cartera_en_calle', 0):,.0f}")
+            self.lbl_cartera_desde.config(text=f"$ {data.get('cartera_en_calle_desde', 0):,.0f}")
+            self.lbl_efectivo.config(text=f"$ {data.get('total_efectivo', 0):,.0f}")
+            self.lbl_clavos.config(text=f"$ {data.get('total_clavos', 0):,.0f}")
+        except Exception:
+            pass
+
         # Configurar estilos de texto
         try:
             self.txt_resumen.tag_config('title', font=('Segoe UI', 11, 'bold'))
@@ -1113,6 +1386,17 @@ class FrameContabilidad(ttk.Frame):
             self.txt_resumen.insert('end', f"  Variación porcentual: {signo}{pct:.2f}%", ('cartera',))
         else:
             self.txt_resumen.insert('end', '  Variación porcentual: (no disponible)', ('muted',))
+
+        # Actualizar labels nuevos y ganancia
+        if hasattr(self, 'lbl_efectivo'):
+            val = data.get('total_efectivo', 0)
+            self.lbl_efectivo.config(text=f"$ {float(val):,.0f}" if val is not None else "$ 0")
+        if hasattr(self, 'lbl_clavos'):
+            val = data.get('total_clavos', 0)
+            self.lbl_clavos.config(text=f"$ {float(val):,.0f}" if val is not None else "$ 0")
+        if hasattr(self, 'lbl_ganancia'):
+            val = data.get('ganancia', 0)
+            self.lbl_ganancia.config(text=f"$ {float(val):,.0f}" if val is not None else "$ 0")
 
     def _compute_cartera_fallback_async(self, empleado_id: str, fecha_hasta: date) -> None:
         t0 = _pc()

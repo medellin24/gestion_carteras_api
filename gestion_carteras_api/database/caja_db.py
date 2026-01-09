@@ -431,6 +431,8 @@ def obtener_metricas_contabilidad(desde: date, hasta: date, empleado_id: Optiona
         "cartera_en_calle": Decimal('0'),
         "cartera_en_calle_desde": Decimal('0'),
         "abonos_count": 0,
+        "total_efectivo": Decimal('0'),  # Nuevo: Cobrado + Base - Prestamos - Gastos
+        "total_clavos": Decimal('0'),    # Nuevo: Saldo de tarjetas vencidas > 60 días
     }
     try:
         # Determinar límites de día local y convertir a UTC para columnas con timestamp
@@ -599,6 +601,48 @@ def obtener_metricas_contabilidad(desde: date, hasta: date, empleado_id: Optiona
                 # fecha_cancelacion (hoy) > (ayer) -> True -> Activa.
                 ayer = desde - timedelta(days=1)
                 totals["cartera_en_calle_desde"] = _calcular_cartera_al_corte(cur, start_naive, ayer, empleado_id)
+            
+            # Calcular TOTAL EFECTIVO (Cobrado + Base - Prestamos - Gastos)
+            # Nota: Esto es puramente efectivo operativo, no incluye entradas/salidas de caja
+            totals["total_efectivo"] = (
+                totals["total_cobrado"] + 
+                totals["total_bases"] - 
+                totals["total_prestamos"] - 
+                totals["total_gastos"]
+            )
+
+            # Tarjetas Activas Históricas (al corte 'hasta')
+            # Para mostrar "X de Y posibles" en reportes históricos
+            if hasta and empleado_id:
+                try:
+                    # Contar tarjetas que existían (creadas antes del fin del día)
+                    # Y que no estaban canceladas en ese momento (fecha_cancelacion > hasta)
+                    # O siguen activas hoy.
+                    q_activas = """
+                        SELECT COUNT(*)
+                        FROM tarjetas
+                        WHERE empleado_identificacion = %s
+                          AND fecha_creacion <= %s
+                          AND (
+                              estado = 'activas' OR 
+                              (estado IN ('cancelada', 'canceladas') AND fecha_cancelacion > %s)
+                          )
+                    """
+                    cur.execute(q_activas, (empleado_id, end_naive, hasta))
+                    totals["tarjetas_activas_historicas"] = cur.fetchone()[0]
+                except Exception as e:
+                    logger.error(f"Error contando activas históricas: {e}")
+                    totals["tarjetas_activas_historicas"] = 0
+            else:
+                totals["tarjetas_activas_historicas"] = 0
+
+            # Calcular TOTAL CLAVOS
+            # Usar la función de tarjetas_db
+            try:
+                from .tarjetas_db import calcular_total_clavos
+                totals["total_clavos"] = calcular_total_clavos(empleado_id, hasta)
+            except Exception as e:
+                logger.error(f"Error calculando clavos en métricas: {e}")
 
         # Agregar caja (saldo_caja) usando el último registro <= 'hasta'
         with DatabasePool.get_cursor() as cur2:

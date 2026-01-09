@@ -36,14 +36,16 @@ class VentanaLogin(tk.Toplevel):
             pass
         style.configure(
             'GlassLogin.TEntry',
-            fieldbackground='#f7cfee',
-            background='#f7cfee',
+            fieldbackground='#A0FEFE',
+            background='#A0FEFE',
             foreground='#1f2937',
             insertcolor='#1f2937',
-            selectbackground='#f0abfc',
-            selectforeground='#1f2937',
+            selectbackground='#0099FF',
+            selectforeground='#ffffff',
             padding=4,
-            font=('Segoe UI', 12)
+            font=('Segoe UI', 12),
+            borderwidth=0,
+            relief='flat'
         )
         style.configure(
             'GlassLogin.Primary.TButton',
@@ -115,9 +117,9 @@ class VentanaLogin(tk.Toplevel):
 
         # Entradas y checkbox sobre la imagen (coordenadas relativas para fácil ajuste)
         # Coordenadas relativas (0..1) estimadas respecto de la imagen proporcionada
-        self._username_pos = (0.465, 0.49)
-        self._password_pos = (0.465, 0.6)
-        self._remember_pos = (0.31, 0.69)
+        self._username_pos = (0.465, 0.41)
+        self._password_pos = (0.465, 0.56)
+        self._remember_pos = (0.31, 0.65)
         entry_width_px = int(self._img_w * 0.34) + 4
         entry_height_px = 28
 
@@ -139,10 +141,10 @@ class VentanaLogin(tk.Toplevel):
         py = int(self._password_pos[1] * self._img_h)
         rx = int(self._remember_pos[0] * self._img_w)
         ry = int(self._remember_pos[1] * self._img_h)
-        login_x = int(self._img_w * 0.51)
-        login_y = int(self._img_h * 0.712)
-        signup_x = int(self._img_w * 0.51)
-        signup_y = int(self._img_h * 0.872)
+        login_x = int(self._img_w * 0.51) - 2
+        login_y = int(self._img_h * 0.712) - 5
+        signup_x = int(self._img_w * 0.51) - 2
+        signup_y = int(self._img_h * 0.902) + 2
         button_width_px = max(82, int(entry_width_px * 0.52))
         button_height_px = max(24, int(entry_height_px * 0.68))
 

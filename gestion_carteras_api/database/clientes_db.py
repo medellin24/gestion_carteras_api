@@ -1,6 +1,7 @@
 from .connection_pool import DatabasePool
 import logging
 from typing import List, Dict, Optional
+from datetime import datetime, date
 
 logger = logging.getLogger(__name__)
 
@@ -227,11 +228,96 @@ def actualizar_score_historial(identificacion: str, score: int, historial: List[
             query = '''
                 UPDATE clientes 
                 SET score_global = %s,
-                    historial_crediticio = %s::jsonb
+                historial_crediticio = %s::jsonb
                 WHERE identificacion = %s
             '''
             cursor.execute(query, (score, historial_json, identificacion))
             return True
     except Exception as e:
         logger.error(f"Error al actualizar score/historial: {e}")
-        return False 
+        return False
+
+def listar_clientes_por_empleado(empleado_id: str, solo_activos: bool = False) -> List[Dict]:
+    """Lista clientes asociados a un empleado, opcionalmente filtrando solo los activos."""
+    try:
+        with DatabasePool.get_cursor() as cursor:
+            # Usamos DISTINCT para evitar duplicados si un cliente tiene varias tarjetas
+            if solo_activos:
+                query = '''
+                    SELECT DISTINCT c.identificacion, c.nombre, c.apellido, c.telefono, c.direccion
+                    FROM clientes c
+                    JOIN tarjetas t ON c.identificacion = t.cliente_identificacion
+                    WHERE t.empleado_identificacion = %s AND t.estado = 'activas'
+                    ORDER BY c.nombre, c.apellido
+                '''
+            else:
+                # "Todos": clientes que tengan o hayan tenido tarjetas con este empleado
+                query = '''
+                    SELECT DISTINCT c.identificacion, c.nombre, c.apellido, c.telefono, c.direccion
+                    FROM clientes c
+                    JOIN tarjetas t ON c.identificacion = t.cliente_identificacion
+                    WHERE t.empleado_identificacion = %s
+                    ORDER BY c.nombre, c.apellido
+                '''
+            cursor.execute(query, (empleado_id,))
+            rows = cursor.fetchall()
+            return [
+                {
+                    'identificacion': row[0],
+                    'nombre': row[1],
+                    'apellido': row[2],
+                    'telefono': row[3],
+                    'direccion': row[4]
+                } for row in rows
+            ]
+    except Exception as e:
+        logger.error(f"Error al listar clientes por empleado: {e}")
+        return []
+
+def buscar_datos_clavo(identificacion: str) -> Optional[Dict]:
+    """
+    Busca cliente por identificación y obtiene sus datos personales
+    más la fecha de su última tarjeta (activa o no).
+    """
+    try:
+        with DatabasePool.get_cursor() as cursor:
+            # Datos del cliente
+            query_cliente = '''
+                SELECT identificacion, nombre, apellido, telefono, direccion
+                FROM clientes
+                WHERE identificacion = %s
+            '''
+            cursor.execute(query_cliente, (identificacion,))
+            cliente = cursor.fetchone()
+            
+            if not cliente:
+                return None
+            
+            # Última tarjeta (fecha de creación más reciente)
+            # Buscamos en todas las tarjetas de este cliente
+            query_tarjeta = '''
+                SELECT fecha_creacion
+                FROM tarjetas
+                WHERE cliente_identificacion = %s
+                ORDER BY fecha_creacion DESC
+                LIMIT 1
+            '''
+            cursor.execute(query_tarjeta, (identificacion,))
+            tarjeta = cursor.fetchone()
+            fecha_ultima = tarjeta[0] if tarjeta else None
+            
+            # Asegurar que sea date (no datetime) para evitar error de validación Pydantic
+            if isinstance(fecha_ultima, datetime):
+                fecha_ultima = fecha_ultima.date()
+
+            return {
+                'identificacion': cliente[0],
+                'nombre': cliente[1],
+                'apellido': cliente[2],
+                'telefono': cliente[3],
+                'direccion': cliente[4],
+                'fecha_ultima_tarjeta': fecha_ultima
+            }
+    except Exception as e:
+        logger.error(f"Error al buscar clavo: {e}")
+        return None

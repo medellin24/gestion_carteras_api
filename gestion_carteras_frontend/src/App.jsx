@@ -10,6 +10,7 @@ import SubirPage from './pages/Subir.jsx'
 import GastosBasePage from './pages/GastosBase.jsx'
 import DataCreditoPage from './pages/DataCreditoPage.jsx'
 import BusquedaDataCreditoPage from './pages/BusquedaDataCreditoPage.jsx'
+import EncontrarClavo from './pages/EncontrarClavo.jsx'
 import { apiClient } from './api/client.js'
 import { formatDateYYYYMMDD } from './utils/date.js'
 import { readPlanInfo, persistPlanInfoFromLimits } from './utils/plan.js'
@@ -106,6 +107,7 @@ function Home() {
       window.removeEventListener('empleado-selected', handleEmployeeChange)
     }
   }, [role])
+
   return (
     <div className="app-shell" style={{ overscrollBehaviorY: 'auto' }}>
       <header className="app-header home-header">
@@ -137,6 +139,7 @@ function Home() {
           <Link className="tile" to="/gastos"><Wallet style={{marginRight:8}} size={20}/> Gastos y base</Link>
           <Link className="tile" to="/subir"><Upload style={{marginRight:8}} size={20}/> Subir tarjetas</Link>
           <Link className="tile" to="/busqueda-datacredito"><Search style={{marginRight:8}} size={20}/> Consultar DataCrédito</Link>
+          <Link className="tile" to="/encontrar-clavo"><Search style={{marginRight:8}} size={20}/> Encontrar Clavo</Link>
           <Link className="tile" to="/logout"><LogOut style={{marginRight:8}} size={20}/> Cerrar sesión</Link>
           <Link className="tile" to="/opciones"><Settings style={{marginRight:8}} size={20}/> Opciones</Link>
         </nav>
@@ -147,7 +150,13 @@ function Home() {
 
 function Logout() {
   useEffect(() => {
-    localStorage.clear()
+    // Solo borrar tokens de autenticación, NO datos de trabajo
+    // (jornada_token, tarjetas, etc. se conservan para el mismo usuario)
+    localStorage.removeItem('access_token')
+    localStorage.removeItem('refresh_token')
+    localStorage.removeItem('user_role')
+    // NO borrar: empleado_identificacion (se usa para detectar cambio de cuenta)
+    // NO borrar: jornada_token, jornada_started_at, tarjetas_data, etc.
     location.href = '/'
   }, [])
   return null
@@ -256,6 +265,7 @@ function App() {
       <Route path="/subir" element={isAuthenticated ? <SubirPage /> : <Navigate to="/" replace />} />
       <Route path="/busqueda-datacredito" element={isAuthenticated ? <BusquedaDataCreditoPage /> : <Navigate to="/" replace />} />
       <Route path="/datacredito/:identificacion" element={isAuthenticated ? <DataCreditoPage /> : <Navigate to="/" replace />} />
+      <Route path="/encontrar-clavo" element={isAuthenticated ? <EncontrarClavo /> : <Navigate to="/" replace />} />
       <Route path="/opciones" element={isAuthenticated ? <div className="app-shell"><header className="app-header"><h1>Opciones</h1></header><main><p>Placeholder opciones.</p></main></div> : <Navigate to="/" replace />} />
       <Route path="/logout" element={<Logout />} />
     </Routes>

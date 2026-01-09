@@ -244,8 +244,9 @@ export default function GastosBasePage(){
           </label>
           <label>Valor
             <input 
+              inputMode="numeric"
               value={valor} 
-              onChange={(e)=>setValor(e.target.value)} 
+              onChange={(e)=>setValor(e.target.value.replace(/\D/g, ''))} 
               placeholder="0" 
               disabled={busy}
             />
@@ -283,8 +284,9 @@ export default function GastosBasePage(){
           )}
           <label>Monto
             <input 
+              inputMode="numeric"
               value={base} 
-              onChange={(e)=>setBase(e.target.value)} 
+              onChange={(e)=>setBase(e.target.value.replace(/\D/g, ''))} 
               placeholder="0" 
               disabled={busy}
             />

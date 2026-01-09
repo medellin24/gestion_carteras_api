@@ -80,7 +80,35 @@ export default function AddTarjetaModal({ onClose, onCreated, posicionAnterior =
     setConnecting(true)
     setLoading(true)
     try {
-      const cli = await apiClient.getClienteByIdentificacion(identificacion).catch(() => null)
+      // Timeout de 10 segundos - si la conexión es muy lenta, tratar como offline
+      const TIMEOUT_MS = 10000
+      let timeoutId
+      const timeoutPromise = new Promise((_, reject) => {
+        timeoutId = setTimeout(() => reject(new Error('TIMEOUT')), TIMEOUT_MS)
+      })
+      
+      let cli = null
+      try {
+        cli = await Promise.race([
+          apiClient.getClienteByIdentificacion(identificacion),
+          timeoutPromise
+        ])
+        clearTimeout(timeoutId)
+      } catch (e) {
+        clearTimeout(timeoutId)
+        if (e?.message === 'TIMEOUT') {
+          // Conexión muy lenta - tratar como offline
+          console.log('⏱️ Timeout buscando cliente, continuando como nuevo')
+          await suggestRuta()
+          setStep('form_new')
+          setLoading(false)
+          setConnecting(false)
+          return
+        }
+        // Otro error de red - también tratar como cliente nuevo
+        cli = null
+      }
+      
       if (cli && cli.identificacion) {
         setCliente(cli)
         setTelefono(cli.telefono || '')
@@ -93,7 +121,10 @@ export default function AddTarjetaModal({ onClose, onCreated, posicionAnterior =
         setStep('form_new')
       }
     } catch (e) {
-      setError(e?.message || 'Error verificando cliente')
+      // Error inesperado - ir a cliente nuevo para no bloquear
+      console.warn('Error verificando cliente:', e)
+      await suggestRuta()
+      setStep('form_new')
     } finally {
       setLoading(false)
       setConnecting(false)
@@ -188,6 +219,7 @@ export default function AddTarjetaModal({ onClose, onCreated, posicionAnterior =
         
         const nueva = {
           codigo: tempId,
+          temp_id: tempId, // Para identificar que es temporal
           monto: payload.monto,
           interes: payload.interes,
           cuotas: payload.cuotas,
@@ -196,6 +228,7 @@ export default function AddTarjetaModal({ onClose, onCreated, posicionAnterior =
           estado: 'activas',
           fecha_creacion: getLocalDateString(),
           cliente_identificacion: clienteData.identificacion,
+          empleado_identificacion: payload.empleado_identificacion, // ← CRÍTICO: necesario para filtrar abonos
           cliente: { ...clienteData },
         }
         console.log('🔍 queueOffline: Nueva tarjeta para cache', nueva)
@@ -381,7 +414,7 @@ export default function AddTarjetaModal({ onClose, onCreated, posicionAnterior =
         {step === 'ident' && (
           <div style={{display:'grid', gap:10}}>
             <label>Identificación
-              <input value={identificacion} onChange={(e)=>setIdentificacion(e.target.value)} onFocus={(e) => e.target.select()} placeholder="Cédula/NIT"/>
+              <input inputMode="numeric" value={identificacion} maxLength={20} onChange={(e)=>setIdentificacion(e.target.value.replace(/[^0-9A-Za-z-]/g, ''))} onFocus={(e) => e.target.select()} placeholder="Cédula/NIT"/>
             </label>
             <label style={{display:'flex', alignItems:'center', gap:8}}>
               <input type="checkbox" checked={ponerPrimera} onChange={(e)=>setPonerPrimera(e.target.checked)} />
@@ -406,30 +439,30 @@ export default function AddTarjetaModal({ onClose, onCreated, posicionAnterior =
           </div>
         )}
         {step === 'form_existing' && (
-          <div style={{display:'grid', gap:8}}>
+          <div style={{display:'grid', gap:8, width:'100%', boxSizing:'border-box'}}>
             <div className="neon-sub">Cliente: {cliente?.nombre} {cliente?.apellido}</div>
             <div className="neon-sub">ID: {cliente?.identificacion || identificacion}</div>
-            <label>Teléfono<input value={telefono} onChange={(e)=>setTelefono(e.target.value)} onFocus={(e) => e.target.select()} placeholder="Teléfono"/></label>
-            <label>Dirección<input value={direccion} onChange={(e)=>setDireccion(e.target.value)} onFocus={(e) => e.target.select()} placeholder="Dirección"/></label>
-            <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap:8}}>
-              <label>Monto<input inputMode="numeric" value={formatMoneyDisplay(monto)} onChange={(e)=>setMonto(e.target.value)} onFocus={(e) => e.target.select()} placeholder="Ej: 500000"/></label>
-              <label>Interés (%)<input type="number" min={0} max={50} step={10} value={interes} onChange={(e)=>setInteres(e.target.value)} onFocus={(e) => e.target.select()} placeholder="20"/></label>
-              <div style={{display:'flex', gap:8, alignItems:'end'}}>
-                <label style={{flex:'0 0 140px'}}>Modalidad
-                  <select value={modalidadPago} onChange={(e)=>setModalidadPago(e.target.value)} style={{width:'100%'}}>
-                    <option value="diario">diario</option>
-                    <option value="semanal">semanal</option>
-                    <option value="quincenal">quincenal</option>
-                    <option value="mensual">mensual</option>
-                  </select>
-                </label>
-                <label style={{flex:'1 1 auto'}}>Cuotas
-                  <input type="number" min={1} step={1} value={cuotas} onChange={(e)=>setCuotas(e.target.value)} onFocus={(e) => e.target.select()} placeholder="30" style={{maxWidth:110}}/>
-                </label>
-              </div>
-              <label>Ruta<input value={numeroRuta} onChange={(e)=>setNumeroRuta(e.target.value)} onFocus={(e) => e.target.select()} placeholder="100"/></label>
+            <label style={{width:'100%'}}>Teléfono<input inputMode="tel" value={telefono} maxLength={20} onChange={(e)=>setTelefono(e.target.value.replace(/\D/g, ''))} onFocus={(e) => e.target.select()} placeholder="Teléfono" style={{width:'100%', boxSizing:'border-box'}}/></label>
+            <label style={{width:'100%'}}>Dirección<input value={direccion} maxLength={200} onChange={(e)=>setDireccion(e.target.value)} onFocus={(e) => e.target.select()} placeholder="Dirección" style={{width:'100%', boxSizing:'border-box'}}/></label>
+            {/* Fila: Monto + Modalidad */}
+            <div style={{display:'flex', gap:8, width:'100%', boxSizing:'border-box'}}>
+              <label style={{flex:'1 1 auto', minWidth:0}}>Monto<input inputMode="numeric" value={formatMoneyDisplay(monto)} onChange={(e)=>setMonto(e.target.value.replace(/\D/g, ''))} onFocus={(e) => e.target.select()} placeholder="Ej: 500000" style={{width:'100%', boxSizing:'border-box'}}/></label>
+              <label style={{flex:'0 0 100px'}}>Modalidad
+                <select value={modalidadPago} onChange={(e)=>setModalidadPago(e.target.value)} style={{width:'100%', boxSizing:'border-box'}}>
+                  <option value="diario">diario</option>
+                  <option value="semanal">semanal</option>
+                  <option value="quincenal">quincenal</option>
+                  <option value="mensual">mensual</option>
+                </select>
+              </label>
             </div>
-            <label>Observaciones<input value={observaciones} onChange={(e)=>setObservaciones(e.target.value)} onFocus={(e) => e.target.select()} placeholder="Opcional"/></label>
+            {/* Fila: Interés + Cuotas + Ruta (campos pequeños) */}
+            <div style={{display:'flex', gap:8, width:'100%', boxSizing:'border-box'}}>
+              <label style={{flex:'0 0 70px'}}>Interés %<input inputMode="numeric" type="number" min={0} max={50} step={1} value={interes} onChange={(e)=>setInteres(e.target.value.replace(/\D/g, ''))} onFocus={(e) => e.target.select()} placeholder="20" style={{width:'100%', boxSizing:'border-box'}}/></label>
+              <label style={{flex:'0 0 70px'}}>Cuotas<input inputMode="numeric" type="number" min={1} step={1} value={cuotas} onChange={(e)=>setCuotas(e.target.value.replace(/\D/g, ''))} onFocus={(e) => e.target.select()} placeholder="30" style={{width:'100%', boxSizing:'border-box'}}/></label>
+              <label style={{flex:'0 0 70px'}}>Ruta<input inputMode="numeric" value={numeroRuta} onChange={(e)=>setNumeroRuta(e.target.value.replace(/\D/g, ''))} onFocus={(e) => e.target.select()} placeholder="100" style={{width:'100%', boxSizing:'border-box'}}/></label>
+            </div>
+            <label style={{width:'100%'}}>Observaciones<input value={observaciones} maxLength={500} onChange={(e)=>setObservaciones(e.target.value)} onFocus={(e) => e.target.select()} placeholder="Opcional" style={{width:'100%', boxSizing:'border-box'}}/></label>
             {error && <div className="error">{error}</div>}
             <div style={{display:'flex', gap:8, justifyContent:'center', width:'100%'}}>
               <button onClick={onClose}>Cancelar</button>
@@ -457,32 +490,32 @@ export default function AddTarjetaModal({ onClose, onCreated, posicionAnterior =
           </div>
         )}
         {step === 'form_new' && (
-          <div style={{display:'grid', gap:8}}>
+          <div style={{display:'grid', gap:8, width:'100%', boxSizing:'border-box'}}>
             <div className="neon-sub">Cliente nuevo</div>
             <div className="neon-sub">ID: {identificacion}</div>
-            <label>Nombre<input value={clienteNombre} onChange={(e)=>setClienteNombre(e.target.value)} onFocus={(e) => e.target.select()} placeholder="Nombre"/></label>
-            <label>Apellido<input value={clienteApellido} onChange={(e)=>setClienteApellido(e.target.value)} onFocus={(e) => e.target.select()} placeholder="Apellido"/></label>
-            <label>Teléfono<input value={telefono} onChange={(e)=>setTelefono(e.target.value)} onFocus={(e) => e.target.select()} placeholder="Teléfono"/></label>
-            <label>Dirección<input value={direccion} onChange={(e)=>setDireccion(e.target.value)} onFocus={(e) => e.target.select()} placeholder="Dirección"/></label>
-            <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap:8}}>
-              <label>Monto<input inputMode="numeric" value={formatMoneyDisplay(monto)} onChange={(e)=>setMonto(e.target.value)} onFocus={(e) => e.target.select()} placeholder="Ej: 500000"/></label>
-              <label>Interés (%)<input type="number" min={0} max={50} step={10} value={interes} onChange={(e)=>setInteres(e.target.value)} onFocus={(e) => e.target.select()} placeholder="20"/></label>
-              <div style={{display:'flex', gap:8, alignItems:'end'}}>
-                <label style={{flex:'0 0 140px'}}>Modalidad
-                  <select value={modalidadPago} onChange={(e)=>setModalidadPago(e.target.value)} style={{width:'100%'}}>
-                    <option value="diario">diario</option>
-                    <option value="semanal">semanal</option>
-                    <option value="quincenal">quincenal</option>
-                    <option value="mensual">mensual</option>
-                  </select>
-                </label>
-                <label style={{flex:'1 1 auto'}}>Cuotas
-                  <input type="number" min={1} step={1} value={cuotas} onChange={(e)=>setCuotas(e.target.value)} onFocus={(e) => e.target.select()} placeholder="30" style={{maxWidth:110}}/>
-                </label>
-              </div>
-              <label>Ruta<input value={numeroRuta} onChange={(e)=>setNumeroRuta(e.target.value)} onFocus={(e) => e.target.select()} placeholder="100"/></label>
+            <label style={{width:'100%'}}>Nombre<input value={clienteNombre} maxLength={40} onChange={(e)=>setClienteNombre(e.target.value)} onFocus={(e) => e.target.select()} placeholder="Nombre" style={{width:'100%', boxSizing:'border-box'}}/></label>
+            <label style={{width:'100%'}}>Apellido<input value={clienteApellido} maxLength={40} onChange={(e)=>setClienteApellido(e.target.value)} onFocus={(e) => e.target.select()} placeholder="Apellido" style={{width:'100%', boxSizing:'border-box'}}/></label>
+            <label style={{width:'100%'}}>Teléfono<input inputMode="tel" value={telefono} maxLength={20} onChange={(e)=>setTelefono(e.target.value.replace(/\D/g, ''))} onFocus={(e) => e.target.select()} placeholder="Teléfono" style={{width:'100%', boxSizing:'border-box'}}/></label>
+            <label style={{width:'100%'}}>Dirección<input value={direccion} maxLength={200} onChange={(e)=>setDireccion(e.target.value)} onFocus={(e) => e.target.select()} placeholder="Dirección" style={{width:'100%', boxSizing:'border-box'}}/></label>
+            {/* Fila: Monto + Modalidad */}
+            <div style={{display:'flex', gap:8, width:'100%', boxSizing:'border-box'}}>
+              <label style={{flex:'1 1 auto', minWidth:0}}>Monto<input inputMode="numeric" value={formatMoneyDisplay(monto)} onChange={(e)=>setMonto(e.target.value.replace(/\D/g, ''))} onFocus={(e) => e.target.select()} placeholder="Ej: 500000" style={{width:'100%', boxSizing:'border-box'}}/></label>
+              <label style={{flex:'0 0 100px'}}>Modalidad
+                <select value={modalidadPago} onChange={(e)=>setModalidadPago(e.target.value)} style={{width:'100%', boxSizing:'border-box'}}>
+                  <option value="diario">diario</option>
+                  <option value="semanal">semanal</option>
+                  <option value="quincenal">quincenal</option>
+                  <option value="mensual">mensual</option>
+                </select>
+              </label>
             </div>
-            <label>Observaciones<input value={observaciones} onChange={(e)=>setObservaciones(e.target.value)} onFocus={(e) => e.target.select()} placeholder="Opcional"/></label>
+            {/* Fila: Interés + Cuotas + Ruta (campos pequeños) */}
+            <div style={{display:'flex', gap:8, width:'100%', boxSizing:'border-box'}}>
+              <label style={{flex:'0 0 70px'}}>Interés %<input inputMode="numeric" type="number" min={0} max={50} step={1} value={interes} onChange={(e)=>setInteres(e.target.value.replace(/\D/g, ''))} onFocus={(e) => e.target.select()} placeholder="20" style={{width:'100%', boxSizing:'border-box'}}/></label>
+              <label style={{flex:'0 0 70px'}}>Cuotas<input inputMode="numeric" type="number" min={1} step={1} value={cuotas} onChange={(e)=>setCuotas(e.target.value.replace(/\D/g, ''))} onFocus={(e) => e.target.select()} placeholder="30" style={{width:'100%', boxSizing:'border-box'}}/></label>
+              <label style={{flex:'0 0 70px'}}>Ruta<input inputMode="numeric" value={numeroRuta} onChange={(e)=>setNumeroRuta(e.target.value.replace(/\D/g, ''))} onFocus={(e) => e.target.select()} placeholder="100" style={{width:'100%', boxSizing:'border-box'}}/></label>
+            </div>
+            <label style={{width:'100%'}}>Observaciones<input value={observaciones} maxLength={500} onChange={(e)=>setObservaciones(e.target.value)} onFocus={(e) => e.target.select()} placeholder="Opcional" style={{width:'100%', boxSizing:'border-box'}}/></label>
             {error && <div className="error">{error}</div>}
             <div style={{display:'flex', gap:8, justifyContent:'center', width:'100%'}}>
               <button onClick={onClose}>Cancelar</button>

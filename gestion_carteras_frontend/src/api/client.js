@@ -322,5 +322,9 @@ export const apiClient = {
   attemptDownload: async (empleadoId) => {
     return request(`/admin/downloads/attempt`, { method: 'POST', body: { empleado_identificacion: empleadoId } })
   },
+  // Función helper general para GET (por compatibilidad con algunos componentes)
+  get: async (path) => {
+    return request(path, { method: 'GET' })
+  },
 }
 export { request }

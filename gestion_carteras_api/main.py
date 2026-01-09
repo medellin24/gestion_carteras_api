@@ -12,14 +12,14 @@ from time import perf_counter as _pc
 from .database.db_config import DB_CONFIG
 from .database.connection_pool import DatabasePool
 
-from .database.clientes_db import crear_cliente, obtener_cliente_por_identificacion, actualizar_cliente, eliminar_cliente
+from .database.clientes_db import crear_cliente, obtener_cliente_por_identificacion, actualizar_cliente, eliminar_cliente, listar_clientes_por_empleado, buscar_datos_clavo
 from .database.empleados_db import insertar_empleado, buscar_empleado_por_identificacion, actualizar_empleado, eliminar_empleado, obtener_empleados, verificar_empleado_tiene_tarjetas, obtener_tarjetas_empleado
-from .database.tarjetas_db import crear_tarjeta, obtener_tarjeta_por_codigo, actualizar_tarjeta, actualizar_estado_tarjeta, mover_tarjeta, eliminar_tarjeta, obtener_todas_las_tarjetas
+from .database.tarjetas_db import crear_tarjeta, obtener_tarjeta_por_codigo, actualizar_tarjeta, actualizar_estado_tarjeta, mover_tarjeta, eliminar_tarjeta, obtener_todas_las_tarjetas, actualizar_rutas_masivo, buscar_tarjetas, verificar_reactivacion_tarjeta, listar_tarjetas_sin_abono_dia
 from .database.abonos_db import registrar_abono, obtener_abono_por_id, actualizar_abono, eliminar_abono_por_id, eliminar_ultimo_abono
 from .database.bases_db import insertar_base, obtener_base, actualizar_base, eliminar_base
 # CORRECCIÓN: Se importa la función correcta 'obtener_tipos_gastos' (plural)
 from .database.gastos_db import agregar_gasto, obtener_gasto_por_id, actualizar_gasto, eliminar_gasto, obtener_resumen_gastos_por_tipo, obtener_tipos_gastos, obtener_todos_los_gastos
-from .database.liquidacion_db import obtener_datos_liquidacion, obtener_resumen_financiero_fecha
+from .database.liquidacion_db import obtener_datos_liquidacion, obtener_resumen_financiero_fecha, mover_liquidacion
 from .database.caja_db import (
     verificar_esquema_caja,
     upsert_caja,
@@ -32,12 +32,13 @@ from .database.caja_db import (
 )
 
 from .schemas import (
-    Cliente, ClienteCreate, ClienteUpdate, Empleado, EmpleadoCreate, EmpleadoUpdate,
+    Cliente, ClienteCreate, ClienteUpdate, ClienteBase, Empleado, EmpleadoCreate, EmpleadoUpdate,
     Tarjeta, TarjetaCreate, TarjetaUpdate, Abono, AbonoCreate, AbonoUpdate, Base,
     BaseCreate, BaseUpdate, TipoGasto, Gasto, GastoCreate, GastoUpdate,
     ResumenGasto, LiquidacionDiaria, ResumenFinanciero,
     SyncRequest, SyncResponse,
-    ContabilidadQuery, ContabilidadMetricas, CajaValor, CajaSalida, CajaSalidaCreate, CajaEntrada, CajaEntradaCreate, VerificacionEsquemaCaja
+    ContabilidadQuery, ContabilidadMetricas, CajaValor, CajaSalida, CajaSalidaCreate, CajaEntrada, CajaEntradaCreate, VerificacionEsquemaCaja,
+    RutaUpdateItem, ClienteClavo
 )
 
 # Configuración del logging (producción-friendly).
@@ -80,6 +81,7 @@ else:
         "http://127.0.0.1:5174",
         "http://172.20.10.7:5174",
         "http://172.20.10.7:5173",
+        "http://192.168.1.135:5174"
     ]
 app.add_middleware(
     CORSMiddleware,
@@ -148,6 +150,7 @@ def startup_event():
             ensure_modalidad_pago_column()
         except Exception:
             pass
+
         logger.info("Pool de conexiones a la base de datos inicializado con éxito.")
     except Exception as e:
         logger.critical(f"Error crítico al inicializar el pool de conexiones: {e}", exc_info=True)
@@ -213,6 +216,9 @@ def contabilidad_metricas_endpoint(query: ContabilidadQuery, principal: dict = D
             'cartera_en_calle_desde': float(datos.get('cartera_en_calle_desde', 0)),
             'abonos_count': int(datos.get('abonos_count', 0)),
             'dias_en_rango': int(dias),
+            'total_efectivo': float(datos.get('total_efectivo', 0)),
+            'total_clavos': float(datos.get('total_clavos', 0)),
+            'tarjetas_activas_historicas': int(datos.get('tarjetas_activas_historicas', 0)),
         }
     except Exception as e:
         logger.error(f"Error al calcular métricas de contabilidad: {e}")
@@ -1006,6 +1012,15 @@ def create_gasto_endpoint(gasto: GastoCreate, principal: dict = Depends(get_curr
         db_gasto = obtener_gasto_por_id(gasto_id)
         if db_gasto is None:
             raise HTTPException(status_code=500, detail="Gasto creado pero no encontrado.")
+            
+        # Recalcular caja
+        try:
+            from datetime import date
+            f_calc = gasto.fecha if gasto.fecha else date.today()
+            _ = recalcular_caja_dia(gasto.empleado_identificacion, f_calc, principal.get("timezone"))
+        except Exception:
+            pass
+
         return db_gasto
     except HTTPException:
         raise
@@ -1041,6 +1056,16 @@ def update_gasto_endpoint(gasto_id: int, gasto: GastoUpdate, principal: dict = D
         db_gasto = obtener_gasto_por_id(gasto_id)
         if db_gasto is None:
             raise HTTPException(status_code=404, detail="Gasto no encontrado después de actualizar.")
+            
+        # Recalcular caja
+        try:
+            from datetime import date
+            f_calc = db_gasto.get("fecha_creacion")
+            if f_calc:
+                _ = recalcular_caja_dia(db_gasto.get("empleado_identificacion"), f_calc, principal.get("timezone"))
+        except Exception:
+            pass
+
         return db_gasto
     except HTTPException:
         raise
@@ -1051,9 +1076,23 @@ def update_gasto_endpoint(gasto_id: int, gasto: GastoUpdate, principal: dict = D
 @app.delete("/gastos/{gasto_id}")
 def delete_gasto_endpoint(gasto_id: int, principal: dict = Depends(get_current_principal)):
     try:
+        # Obtener gasto previo para recalcular
+        prev_gasto = obtener_gasto_por_id(gasto_id)
+
         ok = eliminar_gasto(gasto_id)
         if not ok:
             raise HTTPException(status_code=404, detail="Gasto no encontrado.")
+            
+        # Recalcular caja
+        if prev_gasto:
+            try:
+                from datetime import date
+                f_calc = prev_gasto.get("fecha_creacion")
+                if f_calc:
+                    _ = recalcular_caja_dia(prev_gasto.get("empleado_identificacion"), f_calc, principal.get("timezone"))
+            except Exception:
+                pass
+
         return {"ok": True}
     except HTTPException:
         raise
@@ -1313,6 +1352,8 @@ def read_resumen_gastos_by_empleado_fecha_endpoint(empleado_id: str, fecha: str,
     try:
         tz_name = principal.get('timezone') or 'UTC'
         start_utc, end_utc = _day_bounds_utc_str(fecha, tz_name)
+        start_naive = start_utc.replace(tzinfo=None)
+        end_naive = end_utc.replace(tzinfo=None)
         from .database.connection_pool import DatabasePool as _DB
         with _DB.get_cursor() as cur:
             cur.execute(
@@ -1427,6 +1468,56 @@ def read_tarjetas_endpoint(estado: str = 'activas', skip: int = 0, limit: int = 
         logger.error(f"Error al obtener la lista de tarjetas: {e}")
         raise HTTPException(status_code=500, detail="Error interno al consultar las tarjetas.")
 
+@app.get("/tarjetas/buscar", response_model=List[Tarjeta])
+def buscar_tarjetas_endpoint(
+    termino: str, 
+    empleado_id: Optional[str] = None, 
+    estado: str = 'activas',
+    principal: dict = Depends(get_current_principal)
+):
+    """
+    Busca tarjetas por nombre o apellido del cliente.
+    """
+    if empleado_id:
+        _enforce_empleado_scope(principal, empleado_id)
+        
+    try:
+        hits = buscar_tarjetas(termino, empleado_id, estado)
+        resultados = []
+        for hit in hits:
+            # hit[0] es codigo
+            t_full = obtener_tarjeta_por_codigo(hit[0])
+            if t_full:
+                 # Convert dict to Tarjeta schema structure
+                 # La estructura de t_full (dict) coincide con el esquema Pydantic Tarjeta
+                 # excepto que 'cliente' debe ser un objeto/dict
+                 
+                 tarjeta = {
+                    'codigo': t_full['codigo'],
+                    'monto': float(t_full['monto']),
+                    'interes': t_full['interes'],
+                    'cliente': {
+                        'identificacion': t_full['cliente_identificacion'],
+                        'nombre': t_full['cliente_nombre'],
+                        'apellido': t_full['cliente_apellido']
+                    },
+                    'cuotas': t_full['cuotas'],
+                    'numero_ruta': float(t_full['numero_ruta']) if t_full['numero_ruta'] else 0.0,
+                    'estado': t_full['estado'],
+                    'fecha_creacion': t_full['fecha_creacion'],
+                    'cliente_identificacion': t_full['cliente_identificacion'],
+                    'empleado_identificacion': t_full['empleado_identificacion'],
+                    'observaciones': t_full['observaciones'],
+                    'fecha_cancelacion': t_full['fecha_cancelacion'],
+                    'modalidad_pago': t_full.get('modalidad_pago', 'diario')
+                }
+                 resultados.append(tarjeta)
+        return resultados
+
+    except Exception as e:
+        logger.error(f"Error buscando tarjetas: {e}")
+        raise HTTPException(status_code=500, detail="Error buscando tarjetas")
+
 @app.get("/tarjetas/{tarjeta_codigo}", response_model=Tarjeta)
 def read_tarjeta_endpoint(tarjeta_codigo: str, principal: dict = Depends(get_current_principal)):
     """
@@ -1448,6 +1539,19 @@ def read_tarjeta_endpoint(tarjeta_codigo: str, principal: dict = Depends(get_cur
     except Exception as e:
         logger.error(f"Error al obtener tarjeta: {e}")
         raise HTTPException(status_code=500, detail="Error interno al consultar la tarjeta.")
+
+@app.put("/tarjetas/rutas/masivo")
+def update_rutas_masivo_endpoint(items: List[RutaUpdateItem], principal: dict = Depends(get_current_principal)):
+    """
+    Actualiza masivamente las rutas de las tarjetas.
+    """
+    # Convert to list of tuples for DB function
+    updates = [(item.codigo, item.numero_ruta) for item in items]
+    
+    if actualizar_rutas_masivo(updates):
+        return {"ok": True, "message": "Rutas actualizadas correctamente"}
+    else:
+        raise HTTPException(status_code=500, detail="Error al actualizar rutas")
 
 @app.get("/empleados/{empleado_id}/tarjetas/", response_model=List[Tarjeta])
 def read_tarjetas_by_empleado_endpoint(
@@ -1537,6 +1641,39 @@ def read_tarjetas_by_empleado_endpoint(
         logger.error(f"Error al obtener las tarjetas del empleado: {e}")
         raise HTTPException(status_code=500, detail="Error interno al consultar las tarjetas del empleado.")
 
+@app.get("/empleados/{empleado_id}/clientes", response_model=List[ClienteBase])
+def list_clientes_por_empleado_endpoint(
+    empleado_id: str,
+    scope: str = 'todos',
+    principal: dict = Depends(get_current_principal)
+):
+    """
+    Lista los clientes asociados a un empleado.
+    scope: 'todos' o 'activos'
+    """
+    _enforce_empleado_scope(principal, empleado_id)
+    
+    solo_activos = (scope == 'activos')
+    clientes = listar_clientes_por_empleado(empleado_id, solo_activos)
+    
+    # Mapear a ClienteBase
+    resultados = []
+    for c in clientes:
+        resultados.append({
+            "identificacion": c["identificacion"],
+            "nombre": c["nombre"],
+            "apellido": c["apellido"],
+            "telefono": c.get("telefono"),
+            "direccion": c.get("direccion"),
+            "email": None,
+            "profesion": None,
+            "empresa": None,
+            "referencia_nombre": None,
+            "referencia_telefono": None,
+            "observaciones": None
+        })
+    return resultados
+
 # --- Endpoints para Clientes (Ejemplos) ---
 
 @app.post("/clientes/", response_model=Cliente, status_code=201)
@@ -1552,6 +1689,21 @@ def create_cliente_endpoint(cliente: ClienteCreate):
     if not nuevo:
         raise HTTPException(status_code=400, detail="No se pudo crear el cliente, la identificación podría ya existir.")
     return nuevo
+
+@app.get("/clientes/{identificacion}/rastreo", response_model=ClienteClavo)
+def rastrear_cliente_clavo(identificacion: str, principal: dict = Depends(get_current_principal)):
+    """
+    Busca un cliente por identificación para rastreo ('Encontrar clavo').
+    Devuelve datos personales y fecha de la última tarjeta.
+    """
+    # No filtramos por empleado, permitimos buscar en la base global (del admin)
+    # asumiendo que el 'clavo' puede estar en otra ruta.
+    
+    data = buscar_datos_clavo(identificacion)
+    if not data:
+        raise HTTPException(status_code=404, detail="Cliente no encontrado")
+        
+    return data
 
 @app.get("/clientes/{identificacion}", response_model=Optional[Cliente])
 def read_cliente_endpoint(identificacion: str):
@@ -1785,7 +1937,8 @@ def create_abono_endpoint(abono: AbonoCreate, principal: dict = Depends(get_curr
         abono_id = registrar_abono(
             tarjeta_codigo=abono.tarjeta_codigo,
             monto=Decimal(str(abono.monto)),
-            metodo_pago=metodo
+            metodo_pago=metodo,
+            fecha=abono.fecha
         )
         if abono_id is None:
             raise HTTPException(status_code=400, detail="No se pudo registrar el abono.")
@@ -1803,6 +1956,16 @@ def create_abono_endpoint(abono: AbonoCreate, principal: dict = Depends(get_curr
         except Exception:
             db_abono['indice_orden'] = 0
         db_abono['metodo_pago'] = (db_abono.get('metodo_pago') or 'efectivo')
+
+        # Recalcular caja del día automáticamente
+        try:
+            tarjeta_info = obtener_tarjeta_por_codigo(abono.tarjeta_codigo)
+            if tarjeta_info:
+                from datetime import date
+                _ = recalcular_caja_dia(tarjeta_info["empleado_identificacion"], date.today(), principal.get("timezone"))
+        except Exception:
+            pass
+
         return db_abono
     except HTTPException:
         raise
@@ -1833,6 +1996,18 @@ def update_abono_endpoint(abono_id: int, abono: AbonoUpdate, principal: dict = D
         except Exception:
             db_abono['indice_orden'] = 0
         db_abono['metodo_pago'] = (db_abono.get('metodo_pago') or 'efectivo')
+
+        # Recalcular caja y estado tarjeta
+        try:
+            tarjeta_info = obtener_tarjeta_por_codigo(db_abono.get("tarjeta_codigo"))
+            if tarjeta_info:
+                from datetime import date
+                _ = recalcular_caja_dia(tarjeta_info["empleado_identificacion"], date.today(), principal.get("timezone"))
+                # Verificar si debe reactivarse o cancelarse
+                verificar_reactivacion_tarjeta(db_abono.get("tarjeta_codigo"))
+        except Exception:
+            pass
+
         return db_abono
     except HTTPException:
         raise
@@ -1846,9 +2021,25 @@ def delete_abono_endpoint(abono_id: int, principal: dict = Depends(get_current_p
     Elimina un abono.
     """
     try:
+        # Obtener datos para recalcular antes de eliminar
+        prev_abono = obtener_abono_por_id(abono_id)
+
         success = eliminar_abono_por_id(abono_id)
         if not success:
             raise HTTPException(status_code=404, detail="Abono no encontrado.")
+            
+        # Recalcular caja y estado tarjeta
+        if prev_abono:
+            try:
+                tarjeta_info = obtener_tarjeta_por_codigo(prev_abono.get("tarjeta_codigo"))
+                if tarjeta_info:
+                    from datetime import date
+                    _ = recalcular_caja_dia(tarjeta_info["empleado_identificacion"], date.today(), principal.get("timezone"))
+                    # Verificar si debe reactivarse
+                    verificar_reactivacion_tarjeta(prev_abono.get("tarjeta_codigo"))
+            except Exception:
+                pass
+
         return {"ok": True}
     except HTTPException:
         raise
@@ -1893,6 +2084,30 @@ def read_bases_endpoint(fecha: Optional[str] = None, skip: int = 0, limit: int =
 
 # --- Endpoints de Liquidación ---
 
+class TarjetaSinAbono(BaseModel):
+    codigo: str
+    monto: float
+    cuotas: int
+    cliente_nombre: str
+    cliente_apellido: str
+    numero_ruta: Optional[Decimal] = None
+    interes: float = 0.0
+    atraso: float = 0.0
+
+@app.get("/empleados/{empleado_id}/tarjetas-sin-abono/{fecha}", response_model=List[TarjetaSinAbono])
+def list_tarjetas_sin_abono_dia_endpoint(
+    empleado_id: str,
+    fecha: date,
+    timezone: Optional[str] = None,
+    principal: dict = Depends(get_current_principal)
+):
+    """
+    Lista las tarjetas activas de un empleado que no recibieron abono en la fecha indicada.
+    """
+    _enforce_empleado_scope(principal, empleado_id)
+    tz_name = timezone or principal.get('timezone') or 'UTC'
+    return listar_tarjetas_sin_abono_dia(empleado_id, fecha, tz_name)
+
 @app.get("/liquidacion/{empleado_id}/{fecha}", response_model=LiquidacionDiaria)
 def read_liquidacion_diaria_endpoint(empleado_id: str, fecha: str, principal: dict = Depends(get_current_principal)):
     _enforce_empleado_scope(principal, empleado_id)
@@ -1909,6 +2124,7 @@ def read_liquidacion_diaria_endpoint(empleado_id: str, fecha: str, principal: di
             'tarjetas_canceladas': int(datos.get('tarjetas_canceladas', 0)),
             'tarjetas_nuevas': int(datos.get('tarjetas_nuevas', 0)),
             'total_registros': int(datos.get('total_registros', 0)),
+            'tarjetas_sin_abono': int(datos.get('tarjetas_sin_abono', 0)),
             'total_recaudado': float(datos.get('total_recaudado', 0)),
             'base_dia': float(datos.get('base_dia', 0)),
             'prestamos_otorgados': float(datos.get('prestamos_otorgados', 0)),
@@ -1944,10 +2160,28 @@ def read_resumen_financiero_endpoint(fecha: str, principal: dict = Depends(requi
         logger.error(f"Error al obtener resumen financiero: {e}")
         raise HTTPException(status_code=500, detail="Error interno al consultar el resumen financiero.")
 
+class MoverLiquidacionRequest(BaseModel):
+    empleado_id: str
+    fecha_origen: date
+    fecha_destino: date
+
+@app.post("/liquidacion/mover")
+def mover_liquidacion_endpoint(req: MoverLiquidacionRequest, principal: dict = Depends(get_current_principal)):
+    """Mueve la liquidación de una fecha a otra."""
+    _enforce_empleado_scope(principal, req.empleado_id)
+    
+    # Obtener timezone del usuario autenticado
+    tz = principal.get('timezone') or 'UTC'
+    
+    if mover_liquidacion(req.empleado_id, req.fecha_origen, req.fecha_destino, tz):
+        return {"ok": True, "message": "Liquidación movida correctamente"}
+    else:
+        raise HTTPException(status_code=500, detail="Error al mover liquidación")
+
 # --- Endpoint de Resumen de Tarjeta ---
 
 @app.get("/tarjetas/{tarjeta_codigo}/resumen")
-def read_tarjeta_resumen_endpoint(tarjeta_codigo: str):
+def read_tarjeta_resumen_endpoint(tarjeta_codigo: str, principal: dict = Depends(get_current_principal)):
     """
     Devuelve un resumen de la tarjeta: saldo, total abonado, valor de cuota, etc.
     """
@@ -1974,13 +2208,30 @@ def read_tarjeta_resumen_endpoint(tarjeta_codigo: str):
 
         # Cálculos (al día / atraso) según modalidad de pago (diario/semanal/quincenal/mensual)
         from math import floor, ceil
-        from datetime import datetime as dt
+        from datetime import datetime as dt, timezone as _tz
+        
+        # Timezone del usuario para calcular 'hoy' correctamente
+        tz_name = principal.get("timezone") or "UTC"
+        try:
+            tz = ZoneInfo(tz_name)
+        except Exception:
+            tz = _tz.utc
+            
+        hoy = dt.now(tz).date()
+        
         fecha_creacion = tarjeta.get("fecha_creacion")
-        hoy = dt.now().date()
         if fecha_creacion:
-            fecha_crea = fecha_creacion.date() if hasattr(fecha_creacion, 'date') else fecha_creacion
+            if isinstance(fecha_creacion, dt):
+                if fecha_creacion.tzinfo is None:
+                    fecha_creacion = fecha_creacion.replace(tzinfo=_tz.utc)
+                fecha_crea = fecha_creacion.astimezone(tz).date()
+            elif hasattr(fecha_creacion, 'date'):
+                fecha_crea = fecha_creacion
+            else:
+                fecha_crea = hoy
         else:
             fecha_crea = hoy
+            
         dias_transcurridos = (hoy - fecha_crea).days
         if dias_transcurridos < 0:
             dias_transcurridos = 0
@@ -2433,6 +2684,17 @@ def sync_endpoint(payload: SyncRequest, principal: dict = Depends(get_current_pr
             int((t_bas - t_gas)*1000),
             int((_pc() - t0)*1000),
         )
+
+        # Recalcular caja del día para el empleado sincronizado
+        if empleado_ids:
+            emp_id_sync = next(iter(empleado_ids))
+            try:
+                # Usar timezone del principal o 'UTC' si falló antes
+                tz_sync = principal.get('timezone') or 'UTC'
+                _ = recalcular_caja_dia(emp_id_sync, today_local, tz_sync)
+                logger.info(f"Caja recalculada para {emp_id_sync} en fecha {today_local} tras sincronización")
+            except Exception as e:
+                logger.error(f"Error recalculando caja post-sync: {e}")
 
         response_data = SyncResponse(
             already_processed=False,

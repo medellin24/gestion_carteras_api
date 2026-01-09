@@ -1,6 +1,6 @@
 import tkinter as tk
 from tkinter import ttk, messagebox, simpledialog
-from tkcalendar import Calendar, DateEntry
+from frames.date_selector import DateSelector
 from datetime import datetime, timedelta
 from api_client.client import APIError, api_client
 from decimal import Decimal
@@ -620,14 +620,11 @@ class FrameEmpleado(tk.Frame):
         fecha_input_frame = ttk.Frame(main_frame)
         fecha_input_frame.pack(fill='x', pady=(2, 10))
         self.date_var = tk.StringVar(value=datetime.now().strftime('%Y-%m-%d'))
-        self.entry_fecha = DateEntry(
+        self.entry_fecha = DateSelector(
             fecha_input_frame,
             textvariable=self.date_var,
             date_pattern='yyyy-MM-dd',
             width=18,
-            background='darkblue',
-            foreground='white',
-            borderwidth=2
         )
         self.entry_fecha.pack(side='left', fill='x', expand=True)
         

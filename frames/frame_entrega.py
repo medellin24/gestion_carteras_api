@@ -12,6 +12,7 @@ import webbrowser
 
 # Importar el cliente de la API desde la nueva ruta raíz
 from api_client.client import api_client
+from frames.date_selector import DateSelector
 
 logger = logging.getLogger(__name__)
 
@@ -109,6 +110,7 @@ class FrameEntrega(ttk.Frame):
         self.combo_empleados.bind('<Button-1>', lambda e: self.cargar_empleados())
         # Botón de refresco manual - invalida caché y recarga todo
         ttk.Button(frame_seleccion, text="↻", width=3, command=self._refrescar_todo).pack(side='left', padx=(0,5))
+
         
         self.combo_estado = ttk.Combobox(frame_seleccion, width=14, 
                                        values=['activas', 'cancelada', 'pendiente'],
@@ -188,6 +190,184 @@ class FrameEntrega(ttk.Frame):
         # Eventos
         self.combo_empleados.bind('<<ComboboxSelected>>', self.on_seleccion_cambio)
         self.combo_estado.bind('<<ComboboxSelected>>', self.on_seleccion_cambio)
+
+    def enrutar_tarjetas(self):
+        """Reasigna rutas a las tarjetas visibles en incrementos de 50."""
+        # Confirmación
+        if not messagebox.askyesno("Confirmar Enrutamiento", 
+                                   "¿Está seguro de reorganizar las rutas de TODAS las tarjetas listadas?\n\n"
+                                   "Se asignarán rutas: 50, 100, 150... en el orden actual."):
+            return
+
+        children = self.tree.get_children()
+        if not children:
+            return
+
+        updates = []
+        current_ruta = Decimal('50')
+        
+        # Ignorar item de loading si existe
+        for iid in children:
+            if iid == '__loading__':
+                continue
+            # El iid es el código
+            updates.append({
+                'codigo': iid,
+                'numero_ruta': current_ruta
+            })
+            current_ruta += Decimal('50')
+            
+        if not updates:
+            return
+            
+        # Llamar API
+        try:
+            resp = self.api_client.update_rutas_masivo(updates)
+            if resp and resp.get('ok'):
+                messagebox.showinfo("Éxito", "Rutas actualizadas correctamente.")
+                self._refrescar_todo()
+            else:
+                detail = resp.get('detail') if resp else "Error desconocido"
+                messagebox.showerror("Error", f"No se pudieron actualizar las rutas: {detail}")
+        except Exception as e:
+            logger.error(f"Error al enrutar tarjetas: {e}")
+            messagebox.showerror("Error", f"Error al actualizar rutas: {e}")
+
+    def buscar_tarjeta(self):
+        """Busca una tarjeta por nombre o apellido y filtra la tabla (Ventana mejorada)."""
+        # Crear ventana modal personalizada con estilo
+        top = Toplevel(self)
+        top.title("Buscar Tarjeta")
+        top.geometry("450x230")
+        top.resizable(False, False)
+        top.configure(bg='#f8f9fa')  # Fondo claro
+        
+        # Centrar ventana
+        try:
+            top.transient(self)
+            top.grab_set()
+            top.update_idletasks()
+            x = self.winfo_rootx() + (self.winfo_width() // 2) - (top.winfo_width() // 2)
+            y = self.winfo_rooty() + (self.winfo_height() // 2) - (top.winfo_height() // 2)
+            top.geometry(f"+{x}+{y}")
+        except:
+            pass
+            
+        # --- Encabezado ---
+        header_frame = tk.Frame(top, bg='#73D0E6', height=60)
+        header_frame.pack(fill='x')
+        header_frame.pack_propagate(False)
+        
+        lbl_titulo = tk.Label(header_frame, text="🔍 Búsqueda de Clientes", 
+                             font=('Segoe UI', 14, 'bold'), bg='#73D0E6', fg='white')
+        lbl_titulo.pack(side='left', padx=20, pady=10)
+        
+        # --- Cuerpo ---
+        body_frame = tk.Frame(top, bg='#f8f9fa', padx=25, pady=20)
+        body_frame.pack(fill='both', expand=True)
+        
+        lbl_instruccion = tk.Label(body_frame, text="Ingrese nombre o apellido:", 
+                                  font=('Segoe UI', 10, 'bold'), bg='#f8f9fa', fg='#374151')
+        lbl_instruccion.pack(anchor='w', pady=(0, 5))
+        
+        entry_frame = tk.Frame(body_frame, bg='white', bd=1, relief='solid')
+        entry_frame.pack(fill='x', pady=(0, 5))
+        
+        entry_termino = ttk.Entry(entry_frame, font=('Segoe UI', 12))
+        entry_termino.pack(fill='x', padx=5, pady=5)
+        entry_termino.focus_set()
+        
+        lbl_hint = tk.Label(body_frame, text="Mínimo 3 caracteres", 
+                           font=('Segoe UI', 8), bg='#f8f9fa', fg='#6b7280')
+        lbl_hint.pack(anchor='w', pady=(0, 15))
+        
+        # --- Botones ---
+        btn_frame = tk.Frame(body_frame, bg='#f8f9fa')
+        btn_frame.pack(fill='x', pady=(10,0))
+        
+        def realizar_busqueda(event=None):
+            termino = entry_termino.get().strip()
+            if not termino:
+                return
+            if len(termino) < 3:
+                messagebox.showwarning("Atención", "Por favor ingrese al menos 3 caracteres para buscar.", parent=top)
+                entry_termino.focus_set()
+                return
+            
+            top.destroy()
+            self._ejecutar_busqueda_api(termino)
+
+        entry_termino.bind('<Return>', realizar_busqueda)
+        
+        # Botones estilizados
+        btn_buscar = tk.Button(btn_frame, text="BUSCAR", 
+                              bg='#73D0E6', fg='white', font=('Segoe UI', 10, 'bold'),
+                              activebackground='#4FC3D9', activeforeground='white',
+                              relief='flat', padx=15, pady=5, cursor='hand2',
+                              command=realizar_busqueda)
+        btn_buscar.pack(side='right')
+        
+        btn_cancelar = tk.Button(btn_frame, text="Cancelar", 
+                                bg='#e5e7eb', fg='#374151', font=('Segoe UI', 10),
+                                activebackground='#d1d5db',
+                                relief='flat', padx=15, pady=5, cursor='hand2',
+                                command=top.destroy)
+        btn_cancelar.pack(side='right', padx=(0, 10))
+
+    def _ejecutar_busqueda_api(self, termino):
+        try:
+            empleado_id = self.empleados_dict.get(self.combo_empleados.get())
+            estado = self.combo_estado.get() or 'activas'
+            
+            self.configure(cursor='watch')
+            self.update_idletasks()
+            
+            tarjetas = self.api_client.search_tarjetas(termino, empleado_id, estado)
+            
+            self.configure(cursor='')
+            
+            if not tarjetas:
+                messagebox.showinfo("Buscar", "No se encontraron tarjetas con ese criterio.")
+                return
+                
+            for item in self.tree.get_children():
+                self.tree.delete(item)
+            self._tarjeta_por_iid.clear()
+            self._tarjetas_actuales = tarjetas
+                
+            count = 0
+            for t in tarjetas:
+                cliente = t.get('cliente', {})
+                nombre = cliente.get('nombre', '')
+                apellido = cliente.get('apellido', '')
+                fecha_raw = t.get('fecha') or t.get('fecha_creacion')
+                fecha_str = str(fecha_raw)[:10] if fecha_raw else ''
+                
+                try:
+                    monto_fmt = f"${float(t.get('monto', 0)):,.0f}"
+                except:
+                    monto_fmt = str(t.get('monto', 0))
+
+                iid = t.get('codigo')
+                
+                values = (
+                    t.get('numero_ruta', 0),
+                    monto_fmt,
+                    nombre,
+                    apellido,
+                    fecha_str,
+                    t.get('cuotas', 0),
+                    iid
+                )
+                
+                self.tree.insert('', 'end', values=values, iid=iid)
+                self._tarjeta_por_iid[iid] = t
+                count += 1
+            
+        except Exception as e:
+            self.configure(cursor='')
+            logger.error(f"Error al buscar tarjetas: {e}")
+            messagebox.showerror("Error", f"Error al buscar: {e}")
 
     def _invalidar_cache_tarjetas(self):
         """Invalida todos los cachés relacionados con tarjetas para forzar recarga desde API."""
@@ -955,11 +1135,14 @@ class FrameEntrega(ttk.Frame):
         self.combo_tipo.pack(fill='x', pady=(5,0))
         self.combo_tipo.bind('<<ComboboxSelected>>', self.cambiar_tipo_tarjeta)
 
+        # Botón para enrutar masivamente
+        ttk.Button(self.frame_central, text="Enrutar", style='Bondi.TButton', command=self.enrutar_tarjetas).pack(fill='x', padx=5, pady=(padding_y, 0))
+
         # Frame para observación
         frame_obs = ttk.Frame(self.frame_central)
-        frame_obs.pack(fill='x', padx=5, pady=padding_y)
+        frame_obs.pack(fill='x', padx=5, pady=5)
         ttk.Label(frame_obs, text="Observación").pack(anchor='w')
-        self.text_observacion = tk.Text(frame_obs, height=3, width=20)
+        self.text_observacion = tk.Text(frame_obs, height=2, width=20)
         self.text_observacion.pack(fill='x', pady=3)
 
         # Botones de acción con más padding
@@ -968,7 +1151,7 @@ class FrameEntrega(ttk.Frame):
             ('Tarjeta Editar', self.editar_tarjeta_seleccionada),
             ('Tarjeta Eliminar', self.eliminar_tarjeta_seleccionada),
             ('Ver DataCrédito 🌐', self.abrir_datacredito_web),
-            ('Tarjeta Buscar', None),
+            ('Tarjeta Buscar', self.buscar_tarjeta),
             ('Tarjeta Mover', None),
             ('Importar Tarjetas', self.importar_tarjetas)
         ]
@@ -1136,21 +1319,14 @@ class FrameEntrega(ttk.Frame):
         
         ttk.Label(fila1, text="Fecha:").pack(side='left', padx=(0, 5))
         
-        # Frame para fecha con botón de calendario
+        # Frame para fecha con DateSelector
         frame_fecha = ttk.Frame(fila1)
         frame_fecha.pack(side='left', padx=(0, 15))
         
-        self.entry_fecha_abono = ttk.Entry(frame_fecha, width=10)
+        self.entry_fecha_abono = DateSelector(frame_fecha, width=10, date_pattern='dd/mm/yyyy')
         self.entry_fecha_abono.pack(side='left', padx=(0, 2))
         # Establecer fecha actual por defecto
-        self.entry_fecha_abono.insert(0, datetime.now().strftime("%d/%m/%Y"))
-        
-        # Botón para abrir calendario
-        self.btn_calendario = tk.Button(frame_fecha, text="📅", width=2, height=1,
-                                      bg='#f8f9fa', fg='#495057', font=('Arial', 8),
-                                      relief='raised', bd=1, cursor='hand2',
-                                      command=self.abrir_calendario)
-        self.btn_calendario.pack(side='left')
+        self.entry_fecha_abono.set_date(datetime.now())
         
         ttk.Label(fila1, text="Código:").pack(side='left', padx=(0, 5))
         self.lbl_codigo_tarjeta = ttk.Label(fila1, text="5073", font=('Arial', 10, 'bold'), 
@@ -1168,11 +1344,11 @@ class FrameEntrega(ttk.Frame):
                                    command=self.agregar_abono)
         self.btn_agregar.pack(side='left', padx=(0, 10))
         
-        # Botón Actualizar (azul)
-        self.btn_actualizar = tk.Button(fila2, text="↻", width=3, height=1,
+        # Botón Actualizar/Editar (azul) - Ahora tiene ícono de lápiz ✎ y función editar
+        self.btn_actualizar = tk.Button(fila2, text="✎", width=3, height=1,
                                       bg='#007bff', fg='white', font=('Arial', 12, 'bold'),
                                       relief='raised', bd=2, cursor='hand2',
-                                      command=self.actualizar_vista_abonos)
+                                      command=self.editar_abono_seleccionado)
         self.btn_actualizar.pack(side='left', padx=(0, 10))
         
         # Botón Eliminar (rojo)
@@ -1572,29 +1748,61 @@ class FrameEntrega(ttk.Frame):
                     return
 
             # Usar código de tarjeta para el API de abonos
-            # Preparar fecha/hora LOCAL del usuario para el abono (dd/mm/yyyy -> ISO con zona horaria)
-            fecha_txt = self.entry_fecha_abono.get().strip()
-            from datetime import datetime as _dt
+            # Preparar fecha/hora LOCAL del usuario usando el DateSelector
+            fecha_iso = None
             try:
-                # Usar medio día local para evitar saltos de día por conversiones de zona horaria
+                # 1. Intentar obtener objeto date directo
+                fecha_sel = self.entry_fecha_abono.get_date()
+                
+                # 2. Si falla, intentar parsear texto del entry
+                if not fecha_sel:
+                    fecha_txt = self.entry_fecha_abono.get().strip()
+                    if fecha_txt:
+                        # Intentar multiples formatos
+                        for fmt in ['%d/%m/%Y', '%Y-%m-%d', '%d-%m-%Y', '%Y/%m/%d']:
+                            try:
+                                from datetime import datetime as _dt_parse
+                                fecha_sel = _dt_parse.strptime(fecha_txt, fmt).date()
+                                break
+                            except ValueError:
+                                continue
+                                
+                # 3. Si aun no hay fecha, usar HOY (último recurso)
+                if not fecha_sel:
+                    logger.warning(f"No se pudo parsear fecha '{self.entry_fecha_abono.get()}', usando HOY")
+                    from datetime import date as _d
+                    fecha_sel = _d.today()
+
+                # Construir ISO con hora mediodía (12:00) para evitar líos de zona horaria
+                from datetime import datetime as _dt
+                # Obtener info de zona horaria local
                 tz_local = _dt.now().astimezone().tzinfo
-                if fecha_txt:
-                    d, m, a = fecha_txt.split('/')
-                    dt_local = _dt(int(a), int(m), int(d), 12, 0, 0, tzinfo=tz_local)
-                else:
-                    ahora = _dt.now().astimezone()
-                    dt_local = _dt(ahora.year, ahora.month, ahora.day, 12, 0, 0, tzinfo=ahora.tzinfo)
+                
+                dt_local = _dt(
+                    fecha_sel.year, 
+                    fecha_sel.month, 
+                    fecha_sel.day, 
+                    12, 0, 0, 
+                    tzinfo=tz_local
+                )
                 fecha_iso = dt_local.isoformat()
-            except Exception:
+                
+            except Exception as e:
+                logger.error(f"Error crítico procesando fecha abono: {e}")
                 # Fallback: medio día local de hoy
-                ahora = _dt.now().astimezone()
-                fecha_iso = _dt(ahora.year, ahora.month, ahora.day, 12, 0, 0, tzinfo=ahora.tzinfo).isoformat()
+                from datetime import datetime as _dt_fallback
+                ahora = _dt_fallback.now().astimezone()
+                fecha_iso = ahora.isoformat()
 
             abono_data = {
                 "tarjeta_codigo": self.lbl_codigo_tarjeta.cget('text'),
                 "monto": float(monto),
                 "fecha": fecha_iso
             }
+            
+            # Verificar si estamos en modo edición (botón verde cambiado a "Guardar" o similar)
+            # PERO: El usuario pidió usar el botón AZUL para editar.
+            # Aquí mantenemos la lógica de CREAR abono. La lógica de editar irá en otra función.
             
             nuevo_abono = self.api_client.create_abono(abono_data)
             
@@ -1679,11 +1887,142 @@ class FrameEntrega(ttk.Frame):
                 logger.error(f"Error al eliminar abono vía API: {e}")
                 messagebox.showerror("Error de API", f"Error al eliminar abono: {e}")
     
+    def editar_abono_seleccionado(self):
+        """Permite editar el abono seleccionado (fecha y monto)."""
+        if not self.abono_seleccionado:
+            # Si no hay selección, usar como botón de refresco (comportamiento original parcial)
+            self.actualizar_vista_abonos()
+            # O mostrar mensaje de que debe seleccionar un abono
+            messagebox.showinfo("Editar Abono", "Seleccione un abono de la lista para editarlo.")
+            return
+
+        # Obtener datos actuales del treeview
+        try:
+            item = self.tabla_abonos.item(self.abono_seleccionado)
+            vals = item['values']
+            # vals = (fecha_str, monto_str, item_index, cod)
+            fecha_str_orig = vals[0]
+            monto_str_orig = vals[1]
+            
+            # Parsear monto original
+            monto_orig = Decimal(str(monto_str_orig).replace('$','').replace(',','').strip())
+            
+            # Parsear fecha original (dd/mm/yyyy HH:MM o dd/mm/yyyy)
+            from datetime import datetime as _dt
+            try:
+                if len(fecha_str_orig) > 10:
+                    dt_orig = _dt.strptime(fecha_str_orig, "%d/%m/%Y %H:%M")
+                else:
+                    dt_orig = _dt.strptime(fecha_str_orig, "%d/%m/%Y")
+                fecha_orig_date = dt_orig.date()
+            except:
+                fecha_orig_date = date.today()
+
+            # Crear diálogo modal para editar
+            top = Toplevel(self)
+            top.title("Editar Abono")
+            top.geometry("300x220")
+            top.resizable(False, False)
+            top.transient(self.winfo_toplevel())
+            top.grab_set()
+            
+            # Centrar
+            try:
+                x = self.winfo_rootx() + 50
+                y = self.winfo_rooty() + 50
+                top.geometry(f"+{x}+{y}")
+            except: pass
+
+            ttk.Label(top, text="Editar Abono", font=('Arial', 11, 'bold')).pack(pady=10)
+            
+            f_form = ttk.Frame(top)
+            f_form.pack(pady=10, padx=20, fill='x')
+            
+            ttk.Label(f_form, text="Nuevo Monto:").grid(row=0, column=0, sticky='e', pady=5)
+            ent_monto = ttk.Entry(f_form)
+            ent_monto.grid(row=0, column=1, sticky='ew', padx=5)
+            ent_monto.insert(0, f"{monto_orig:,.0f}")
+            
+            ttk.Label(f_form, text="Nueva Fecha:").grid(row=1, column=0, sticky='e', pady=5)
+            
+            # Usar DateSelector aquí también sería ideal, o un DateEntry simple
+            # Como DateSelector está en frames.date_selector, lo importamos si es necesario o usamos uno simple
+            try:
+                from frames.date_selector import DateSelector
+                sel_fecha = DateSelector(f_form, width=12, date_pattern='dd/mm/yyyy')
+                sel_fecha.set_date(fecha_orig_date)
+                sel_fecha.grid(row=1, column=1, sticky='ew', padx=5)
+                # Hack para que se vea el grid
+                sel_fecha.entry.pack(fill='both') # Asegurar que se muestre dentro del frame custom
+            except:
+                sel_fecha = ttk.Entry(f_form)
+                sel_fecha.insert(0, fecha_orig_date.strftime("%d/%m/%Y"))
+                sel_fecha.grid(row=1, column=1, sticky='ew', padx=5)
+
+            def guardar():
+                try:
+                    # Validar monto
+                    m_txt = ent_monto.get().replace(',','').replace('$','').strip()
+                    nuevo_monto = float(m_txt)
+                    if nuevo_monto <= 0:
+                        raise ValueError("Monto debe ser positivo")
+                    
+                    # Validar fecha
+                    try:
+                        nueva_fecha_date = sel_fecha.get_date() # Si es DateSelector
+                    except:
+                        # Si es entry normal o falló
+                        f_txt = sel_fecha.get()
+                        d, m, a = f_txt.split('/')
+                        nueva_fecha_date = date(int(a), int(m), int(d))
+                    
+                    # Construir ISO con hora mediodía
+                    tz_local = _dt.now().astimezone().tzinfo
+                    dt_new = _dt(nueva_fecha_date.year, nueva_fecha_date.month, nueva_fecha_date.day, 12, 0, 0, tzinfo=tz_local)
+                    fecha_iso = dt_new.isoformat()
+                    
+                    # Llamar API update_abono (se asume que existe o se usa delete+create)
+                    # Si la API no tiene update_abono, habrá que avisar.
+                    # Generalmente update_abono(id, data)
+                    
+                    data = {
+                        "monto": nuevo_monto,
+                        "fecha": fecha_iso
+                    }
+                    
+                    # Intentar update
+                    if hasattr(self.api_client, 'update_abono'):
+                        res = self.api_client.update_abono(self.abono_seleccionado, data)
+                        if res and res.get('id'):
+                            messagebox.showinfo("Éxito", "Abono actualizado.", parent=top)
+                            top.destroy()
+                            # Invalidar cachés y recargar
+                            cod = self.lbl_codigo_tarjeta.cget('text')
+                            if cod:
+                                self._resumen_cache_por_tarjeta.pop(cod, None)
+                                self._abonos_cache_por_tarjeta.pop(cod, None)
+                            self.cargar_datos_tarjeta_diferido(self.tarjeta_seleccionada)
+                        else:
+                            messagebox.showerror("Error", "No se pudo actualizar el abono.", parent=top)
+                    else:
+                        # Fallback: borrar y crear (peligroso si pierde ID, mejor avisar)
+                        messagebox.showwarning("No implementado", "La API no soporta edición directa de abonos. Elimine y cree uno nuevo.", parent=top)
+                        top.destroy()
+
+                except Exception as e:
+                    messagebox.showerror("Error", f"Datos inválidos: {e}", parent=top)
+
+            ttk.Button(top, text="Guardar Cambios", command=guardar, style='Bondi.TButton').pack(pady=20)
+
+        except Exception as e:
+            logger.error(f"Error preparando edición: {e}")
+            messagebox.showerror("Error", f"No se pudo editar: {e}")
+    
     def actualizar_vista_abonos(self):
         """Actualiza la vista de abonos y resumen"""
         if self.tarjeta_seleccionada:
             self.cargar_datos_tarjeta_diferido(self.tarjeta_seleccionada)
-    
+
     def actualizar_monto_cuota_defecto(self, resumen: dict):
         """Actualiza el campo de monto con el valor de la cuota por defecto desde el resumen"""
         try:
@@ -1739,135 +2078,6 @@ class FrameEntrega(ttk.Frame):
         self.entry_monto_abono.after(1, lambda: self.entry_monto_abono.select_range(0, tk.END))
         # No retornar 'break' para permitir edición normal
     
-    def abrir_calendario(self):
-        """Abre una ventana simple para seleccionar fecha"""
-        try:
-            # Crear ventana simple
-            ventana_fecha = Toplevel(self)
-            ventana_fecha.title("Seleccionar Fecha")
-            ventana_fecha.geometry("300x150")
-            ventana_fecha.resizable(False, False)
-            ventana_fecha.grab_set()  # Modal
-            
-            # Centrar la ventana
-            ventana_fecha.transient(self.winfo_toplevel())
-            try:
-                ventana_fecha.update_idletasks()
-                x = (ventana_fecha.winfo_screenwidth() // 2) - (300 // 2)
-                y = (ventana_fecha.winfo_screenheight() // 2) - (150 // 2)
-                ventana_fecha.geometry(f"300x150+{x}+{y}")
-            except Exception:
-                pass
-            
-            # Obtener fecha actual
-            try:
-                fecha_str = self.entry_fecha_abono.get()
-                if fecha_str and len(fecha_str) == 10:
-                    partes = fecha_str.split('/')
-                    dia_actual = int(partes[0])
-                    mes_actual = int(partes[1])
-                    año_actual = int(partes[2])
-                else:
-                    hoy = datetime.now()
-                    dia_actual = hoy.day
-                    mes_actual = hoy.month
-                    año_actual = hoy.year
-            except:
-                hoy = datetime.now()
-                dia_actual = hoy.day
-                mes_actual = hoy.month
-                año_actual = hoy.year
-            
-            # Frame principal
-            main_frame = ttk.Frame(ventana_fecha, padding=20)
-            main_frame.pack(fill='both', expand=True)
-            
-            # Título
-            ttk.Label(main_frame, text="Seleccionar Fecha", 
-                     font=('Arial', 12, 'bold')).pack(pady=(0, 15))
-            
-            # Frame para los campos
-            campos_frame = ttk.Frame(main_frame)
-            campos_frame.pack(pady=(0, 15))
-            
-            # Día
-            ttk.Label(campos_frame, text="Día:").grid(row=0, column=0, padx=5, sticky='e')
-            self.spin_dia = tk.Spinbox(campos_frame, from_=1, to=31, width=4, 
-                                     value=dia_actual, font=('Arial', 10))
-            self.spin_dia.grid(row=0, column=1, padx=5)
-            
-            # Mes
-            ttk.Label(campos_frame, text="Mes:").grid(row=0, column=2, padx=5, sticky='e')
-            self.spin_mes = tk.Spinbox(campos_frame, from_=1, to=12, width=4, 
-                                     value=mes_actual, font=('Arial', 10))
-            self.spin_mes.grid(row=0, column=3, padx=5)
-            
-            # Año
-            ttk.Label(campos_frame, text="Año:").grid(row=0, column=4, padx=5, sticky='e')
-            self.spin_año = tk.Spinbox(campos_frame, from_=2020, to=2030, width=6, 
-                                     value=año_actual, font=('Arial', 10))
-            self.spin_año.grid(row=0, column=5, padx=5)
-            
-            # Frame para botones
-            botones_frame = ttk.Frame(main_frame)
-            botones_frame.pack()
-            
-            # Botones
-            ttk.Button(botones_frame, text="Hoy", 
-                      command=lambda: self.fecha_hoy(ventana_fecha)).pack(side='left', padx=5)
-            ttk.Button(botones_frame, text="Aceptar", 
-                      command=lambda: self.aceptar_fecha(ventana_fecha)).pack(side='left', padx=5)
-            ttk.Button(botones_frame, text="Cancelar", 
-                      command=ventana_fecha.destroy).pack(side='left', padx=5)
-            
-        except Exception as e:
-            logger.error(f"Error al abrir selector de fecha: {e}")
-            messagebox.showerror("Error", f"No se pudo abrir el selector de fecha: {str(e)}")
-    
-    def fecha_hoy(self, ventana):
-        """Establece la fecha de hoy"""
-        try:
-            hoy = datetime.now()
-            self.spin_dia.delete(0, tk.END)
-            self.spin_dia.insert(0, str(hoy.day))
-            self.spin_mes.delete(0, tk.END)
-            self.spin_mes.insert(0, str(hoy.month))
-            self.spin_año.delete(0, tk.END)
-            self.spin_año.insert(0, str(hoy.year))
-        except Exception as e:
-            logger.error(f"Error al establecer fecha de hoy: {e}")
-    
-    def aceptar_fecha(self, ventana):
-        """Acepta la fecha seleccionada"""
-        try:
-            dia = int(self.spin_dia.get())
-            mes = int(self.spin_mes.get())
-            año = int(self.spin_año.get())
-            
-            # Validar rangos básicos
-            if not (1 <= dia <= 31):
-                raise ValueError("Día inválido")
-            if not (1 <= mes <= 12):
-                raise ValueError("Mes inválido")
-            if not (2020 <= año <= 2030):
-                raise ValueError("Año inválido")
-            
-            # Intentar crear la fecha para validar
-            from datetime import date
-            fecha_test = date(año, mes, dia)
-            
-            # Si llegamos aquí, la fecha es válida
-            fecha_formateada = f"{dia:02d}/{mes:02d}/{año}"
-            
-            self.entry_fecha_abono.delete(0, tk.END)
-            self.entry_fecha_abono.insert(0, fecha_formateada)
-            ventana.destroy()
-            
-        except ValueError as e:
-            messagebox.showerror("Error", f"Fecha inválida: {str(e)}")
-        except Exception as e:
-            logger.error(f"Error al aceptar fecha: {e}")
-            messagebox.showerror("Error", "Error al procesar la fecha")
             
             
             
@@ -2205,3 +2415,46 @@ class FrameEntrega(ttk.Frame):
         if e in ("pendiente", "pendientes"):
             return "pendiente"
         return "activas"
+
+    def enrutar_tarjetas(self):
+        """Reasigna rutas secuencialmente (50 en 50) basado en el orden actual y actualiza la lista."""
+        try:
+            items = self.tree.get_children()
+            if not items:
+                messagebox.showinfo("Información", "No hay tarjetas para enrutar.")
+                return
+
+            if not messagebox.askyesno("Confirmar Enrutamiento", 
+                "¿Está seguro de que desea reorganizar las rutas de TODAS las tarjetas visibles?\n"
+                "Se asignarán números de 50 en 50 respetando el orden actual.\n"
+                "Esta acción modificará la base de datos."):
+                return
+
+            updates = []
+            ruta_actual = 50
+            
+            for item_id in items:
+                # El código está en la columna 6 de los valores
+                vals = self.tree.item(item_id, 'values')
+                # Verificamos que tengamos suficientes valores
+                if len(vals) > 6:
+                    codigo = vals[6]
+                    updates.append({'codigo': codigo, 'numero_ruta': ruta_actual})
+                    ruta_actual += 50
+            
+            if not updates:
+                return
+
+            # Llamar API
+            res = self.api_client.update_rutas_masivo(updates)
+            
+            if res.get('ok'):
+                messagebox.showinfo("Éxito", "Rutas actualizadas correctamente.")
+                self._refrescar_todo()
+            else:
+                msg = res.get('detail') or "Error desconocido"
+                messagebox.showerror("Error", f"No se pudieron actualizar las rutas: {msg}")
+
+        except Exception as e:
+            logger.error(f"Error en enrutar: {e}")
+            messagebox.showerror("Error", f"Ocurrió un error: {e}")

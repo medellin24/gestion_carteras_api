@@ -22,8 +22,8 @@ def _modalidad_column_exists() -> bool:
                 SELECT 1
                 FROM information_schema.columns
                 WHERE table_schema = 'public'
-                  AND table_name = 'tarjetas'
-                  AND column_name = 'modalidad_pago'
+                AND table_name = 'tarjetas'
+                AND column_name = 'modalidad_pago'
                 LIMIT 1
                 """
             )
@@ -270,6 +270,25 @@ def actualizar_estado_tarjeta(tarjeta_codigo: str, nuevo_estado: str) -> bool:
             
     except Exception as e:
         logger.error(f"Error al actualizar estado de tarjeta: {e}")
+        return False
+
+def actualizar_rutas_masivo(updates: List[Tuple[str, Decimal]]) -> bool:
+    """
+    Actualiza masivamente las rutas de las tarjetas.
+    updates: Lista de tuplas (codigo, nuevo_numero_ruta)
+    """
+    try:
+        with DatabasePool.get_cursor() as cursor:
+            # executemany es eficiente para actualizaciones por lotes
+            query = "UPDATE tarjetas SET numero_ruta = %s WHERE codigo = %s"
+            # Invertir el orden para coincidir con la query (ruta, codigo)
+            params = [(ruta, codigo) for codigo, ruta in updates]
+            cursor.executemany(query, params)
+            
+            _cache.clear()
+            return True
+    except Exception as e:
+        logger.error(f"Error al actualizar rutas masivamente: {e}")
         return False
 
 def contar_tarjetas_por_estado(empleado_identificacion: Optional[str] = None, 
@@ -904,3 +923,229 @@ def obtener_tarjetas_canceladas_antiguas(meses_antiguedad: int = 12) -> List[Dic
     except Exception as e:
         logger.error(f"Error al obtener tarjetas antiguas: {e}")
         return []
+
+def verificar_reactivacion_tarjeta(tarjeta_codigo: str) -> bool:
+    """
+    Verifica el saldo de una tarjeta y actualiza su estado automáticamente.
+    - Si saldo > 0 y estaba cancelada -> Reactiva a 'activas' y quita fecha_cancelacion.
+    - Si saldo <= 0 y estaba activa -> Cancela y pone fecha_cancelacion.
+    Retorna True si hubo cambio de estado.
+    """
+    try:
+        # Importación local para evitar circularidad
+        from .abonos_db import obtener_saldo_tarjeta
+        
+        saldo = obtener_saldo_tarjeta(tarjeta_codigo)
+        if saldo is None:
+            return False
+            
+        tarjeta = obtener_tarjeta_por_codigo(tarjeta_codigo)
+        if not tarjeta:
+            return False
+            
+        estado_actual = tarjeta.get('estado')
+        nuevo_estado = None
+        nueva_fecha_cancelacion = None
+        cambio_necesario = False
+        
+        # Lógica de transición
+        if saldo > 0 and estado_actual in ('cancelada', 'canceladas'):
+            nuevo_estado = 'activas'
+            nueva_fecha_cancelacion = None
+            cambio_necesario = True
+            logger.info(f"Reactivando tarjeta {tarjeta_codigo} (Saldo: {saldo})")
+            
+        elif saldo <= 0 and estado_actual == 'activas':
+            nuevo_estado = 'cancelada'
+            nueva_fecha_cancelacion = date.today()
+            cambio_necesario = True
+            logger.info(f"Cancelando tarjeta {tarjeta_codigo} (Saldo: {saldo})")
+            
+        if cambio_necesario:
+            with DatabasePool.get_cursor() as cursor:
+                query = '''
+                    UPDATE tarjetas 
+                    SET estado = %s,
+                        fecha_cancelacion = %s
+                    WHERE codigo = %s
+                '''
+                cursor.execute(query, (nuevo_estado, nueva_fecha_cancelacion, tarjeta_codigo))
+                
+            _cache.clear()
+            return True
+            
+        return False
+        
+    except Exception as e:
+        logger.error(f"Error al verificar reactivación de tarjeta {tarjeta_codigo}: {e}")
+        return False
+
+def listar_tarjetas_sin_abono_dia(empleado_identificacion: str, fecha_filtro: date, timezone_name: Optional[str] = None) -> List[Dict]:
+    """
+    Lista las tarjetas ACTIVAS asignadas al empleado que NO tienen abonos
+    registrados en la fecha específica (fecha local del usuario).
+    """
+    try:
+        from datetime import datetime, timezone
+        from zoneinfo import ZoneInfo
+        
+        tz_name = timezone_name or 'America/Bogota'
+        
+        # ... (código existente comentado o eliminado en el replace) ...
+
+        with DatabasePool.get_cursor() as cursor:
+            modalidad_expr = "COALESCE(t.modalidad_pago, 'diario')" if _modalidad_column_exists() else "'diario'"
+            
+            query = f'''
+                SELECT 
+                    t.codigo, t.monto, t.cuotas,
+                    c.nombre, c.apellido, t.numero_ruta,
+                    t.interes,
+                    t.fecha_creacion,
+                    {modalidad_expr},
+                    COALESCE(SUM(ah.monto), 0) as total_pagado
+                FROM tarjetas t
+                JOIN clientes c ON t.cliente_identificacion = c.identificacion
+                LEFT JOIN abonos ah ON t.codigo = ah.tarjeta_codigo
+                WHERE t.empleado_identificacion = %s
+                  AND t.estado = 'activas'
+                  AND t.codigo NOT IN (
+                      SELECT a.tarjeta_codigo 
+                      FROM abonos a
+                      JOIN tarjetas t2 ON a.tarjeta_codigo = t2.codigo
+                      WHERE t2.empleado_identificacion = %s
+                        AND (a.fecha AT TIME ZONE 'UTC' AT TIME ZONE %s)::date = %s
+                  )
+                GROUP BY t.codigo, c.identificacion
+                ORDER BY t.numero_ruta ASC, t.codigo ASC
+            '''
+            cursor.execute(query, (empleado_identificacion, empleado_identificacion, tz_name, fecha_filtro))
+            rows = cursor.fetchall()
+            
+            resultado = []
+            for row in rows:
+                codigo = row[0]
+                monto = Decimal(str(row[1] or 0))
+                cuotas = int(row[2] or 1)
+                interes = Decimal(str(row[6] or 0))
+                fecha_creacion = row[7]
+                if hasattr(fecha_creacion, 'date'): fecha_creacion = fecha_creacion.date()
+                modalidad = str(row[8] or 'diario').lower()
+                pagado = Decimal(str(row[9] or 0))
+                
+                # Calcular atraso
+                if 'semanal' in modalidad: factor = 7
+                elif 'quincenal' in modalidad: factor = 15
+                elif 'mensual' in modalidad: factor = 30
+                else: factor = 1
+                
+                dias_transcurridos = (fecha_filtro - fecha_creacion).days
+                cuotas_teoricas = dias_transcurridos // factor
+                
+                monto_total_deuda = monto * (1 + interes/100)
+                valor_cuota = monto_total_deuda / cuotas if cuotas > 0 else Decimal(1)
+                
+                cuotas_pagadas = int(pagado / valor_cuota) if valor_cuota > 0 else 0
+                atraso = max(0, cuotas_teoricas - cuotas_pagadas)
+
+                resultado.append({
+                    'codigo': codigo,
+                    'monto': float(monto),
+                    'cuotas': cuotas,
+                    'cliente_nombre': row[3],
+                    'cliente_apellido': row[4],
+                    'numero_ruta': row[5],
+                    'interes': float(interes),
+                    'atraso': atraso
+                })
+            return resultado
+
+    except Exception as e:
+        logger.error(f"Error al listar tarjetas sin abono: {e}")
+        return []
+
+def calcular_total_clavos(empleado_identificacion: Optional[str], fecha_corte: date) -> Decimal:
+    """
+    Calcula el saldo total de tarjetas 'activas' que tienen más de 60 días de vencidas
+    a la fecha de corte.
+    
+    Criterio Clavo: (Fecha Corte - Fecha Vencimiento) >= 60 días.
+    Fecha Vencimiento = Fecha Creación + (Cuotas * Factor Modalidad)
+    Factor Modalidad: diario=1, semanal=7, quincenal=15, mensual=30.
+    """
+    try:
+        with DatabasePool.get_cursor() as cursor:
+            # Primero obtenemos las tarjetas activas y sus datos para calcular en Python
+            # (Más fácil que manejar la lógica de modalidad compleja en SQL puro portable)
+            
+            # Filtro de empleado
+            if empleado_identificacion:
+                where_emp = "AND t.empleado_identificacion = %s"
+                params = (empleado_identificacion,)
+            else:
+                where_emp = ""
+                params = ()
+
+            modalidad_expr = "COALESCE(t.modalidad_pago, 'diario')" if _modalidad_column_exists() else "'diario'"
+            
+            query = f'''
+                SELECT 
+                    t.codigo, 
+                    t.fecha_creacion, 
+                    t.cuotas, 
+                    {modalidad_expr},
+                    t.monto,
+                    t.interes,
+                    COALESCE(SUM(a.monto), 0) as abonado
+                FROM tarjetas t
+                LEFT JOIN abonos a ON t.codigo = a.tarjeta_codigo
+                WHERE t.estado = 'activas'
+                  {where_emp}
+                GROUP BY t.codigo
+            '''
+            cursor.execute(query, params)
+            rows = cursor.fetchall()
+            
+            total_clavos = Decimal(0)
+            
+            from datetime import timedelta, datetime
+            
+            for row in rows:
+                fecha_creacion = row[1]
+                if not fecha_creacion: continue
+
+                # Asegurar que es date
+                if isinstance(fecha_creacion, datetime):
+                    fecha_creacion = fecha_creacion.date()
+                
+                cuotas = int(row[2] or 0)
+                modalidad = str(row[3] or 'diario').lower()
+                monto = Decimal(row[4] or 0)
+                interes = Decimal(row[5] or 0)
+                abonado = Decimal(row[6] or 0)
+                
+                monto_total = monto * (1 + (interes / Decimal(100)))
+                saldo = monto_total - abonado
+                
+                if saldo <= 0: continue # No debe pasar si está activa, pero por seguridad
+                
+                # Factor modalidad
+                if 'semanal' in modalidad: factor = 7
+                elif 'quincenal' in modalidad: factor = 15
+                elif 'mensual' in modalidad: factor = 30
+                else: factor = 1
+                
+                dias_duracion = cuotas * factor
+                fecha_vencimiento = fecha_creacion + timedelta(days=dias_duracion)
+                
+                # Días pasados desde vencimiento hasta corte
+                dias_pasados = (fecha_corte - fecha_vencimiento).days
+                
+                if dias_pasados >= 60:
+                    total_clavos += saldo
+            
+            return total_clavos
+
+    except Exception as e:
+        logger.error(f"Error calculando total clavos: {e}")
+        return Decimal(0)

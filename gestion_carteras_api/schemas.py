@@ -1,21 +1,30 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Optional, List
 from datetime import date, datetime
 
 class ClienteBase(BaseModel):
-    identificacion: str
-    nombre: str
-    apellido: str
-    telefono: Optional[str] = None
-    direccion: Optional[str] = None
-    email: Optional[str] = None
-    profesion: Optional[str] = None
-    empresa: Optional[str] = None
-    referencia_nombre: Optional[str] = None
-    referencia_telefono: Optional[str] = None
-    observaciones: Optional[str] = None
+    identificacion: str = Field(..., max_length=20)
+    nombre: str = Field(..., max_length=40)
+    apellido: str = Field(..., max_length=40)
+    telefono: Optional[str] = Field(None, max_length=20)
+    direccion: Optional[str] = Field(None, max_length=200)
+    email: Optional[str] = Field(None, max_length=100)
+    profesion: Optional[str] = Field(None, max_length=100)
+    empresa: Optional[str] = Field(None, max_length=100)
+    referencia_nombre: Optional[str] = Field(None, max_length=100)
+    referencia_telefono: Optional[str] = Field(None, max_length=50)
+    observaciones: Optional[str] = Field(None, max_length=500)
 
 # --- Modelos para DataCrédito Interno ---
+
+from decimal import Decimal
+
+class RutaUpdateItem(BaseModel):
+    codigo: str
+    numero_ruta: Decimal
+
+class RutasBatchRequest(BaseModel):
+    updates: List[RutaUpdateItem]
 
 class IndicadoresTarjeta(BaseModel):
     # ID de la tarjeta original (o código)
@@ -73,6 +82,14 @@ class Cliente(ClienteBase):
     class Config:
         from_attributes = True
 
+class ClienteClavo(BaseModel):
+    identificacion: str
+    nombre: str
+    apellido: str
+    telefono: Optional[str] = None
+    direccion: Optional[str] = None
+    fecha_ultima_tarjeta: Optional[date] = None
+
 class EmpleadoBase(BaseModel):
     identificacion: str
     nombre_completo: str
@@ -92,13 +109,13 @@ class Empleado(EmpleadoBase):
         orm_mode = True
 
 class TarjetaBase(BaseModel):
-    cliente_identificacion: str
-    empleado_identificacion: str
-    monto: float
-    cuotas: int
-    interes: int
+    cliente_identificacion: str = Field(..., max_length=20)
+    empleado_identificacion: str = Field(..., max_length=20)
+    monto: float = Field(..., gt=0)
+    cuotas: int = Field(..., gt=0)
+    interes: int = Field(..., ge=0)
     modalidad_pago: str = 'diario'
-    observaciones: Optional[str] = None
+    observaciones: Optional[str] = Field(None, max_length=500)
 
 class TarjetaCreate(TarjetaBase):
     numero_ruta: Optional[float] = None
@@ -133,12 +150,13 @@ class Tarjeta(TarjetaBase):
         orm_mode = True
 
 class AbonoBase(BaseModel):
-    monto: float
+    monto: float = Field(..., gt=0)
     metodo_pago: Optional[str] = 'efectivo'
 
 class AbonoCreate(AbonoBase):
     tarjeta_codigo: str
     id_temporal: Optional[str] = None
+    fecha: Optional[datetime] = None
 
 class AbonoUpdate(BaseModel):
     monto: Optional[float] = None
@@ -185,9 +203,9 @@ class TipoGasto(BaseModel):
     descripcion: str
 
 class GastoBase(BaseModel):
-    tipo: str
-    valor: float
-    observacion: Optional[str] = None
+    tipo: str = Field(..., max_length=50)
+    valor: float = Field(..., gt=0)
+    observacion: Optional[str] = Field(None, max_length=500)
     fecha: Optional[date] = None
 
 class GastoCreate(GastoBase):
@@ -218,6 +236,7 @@ class LiquidacionDiaria(BaseModel):
     tarjetas_canceladas: int
     tarjetas_nuevas: int
     total_registros: int
+    tarjetas_sin_abono: int = 0  # Nuevo campo
     total_recaudado: float
     base_dia: float
     prestamos_otorgados: float
@@ -316,6 +335,9 @@ class ContabilidadMetricas(BaseModel):
     cartera_en_calle_desde: float = 0.0
     abonos_count: int = 0
     dias_en_rango: int = 0
+    total_efectivo: float = 0.0
+    total_clavos: float = 0.0
+    tarjetas_activas_historicas: int = 0
 
 class CajaValor(BaseModel):
     fecha: date

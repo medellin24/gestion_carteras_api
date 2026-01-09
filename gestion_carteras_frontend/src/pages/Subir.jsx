@@ -31,6 +31,8 @@ export default function SubirPage() {
   const [outboxData, setOutboxData] = useState({ tarjetas: 0, abonos: 0, gastos: 0, bases: 0 })
   const [localGastos, setLocalGastos] = useState([])
   const [localBases, setLocalBases] = useState([])
+  const [localTarjetas, setLocalTarjetas] = useState([])
+  const [localAbonos, setLocalAbonos] = useState([])
   const [preflightModal, setPreflightModal] = useState(null)
   const navigate = useNavigate()
   const debugProfile = true
@@ -57,11 +59,21 @@ export default function SubirPage() {
     const outbox = await offlineDB.readOutbox()
     profilerInstance?.mark('getTarjetas')
     const tarjetasEmpleado = await offlineDB.getTarjetas()
+    
+    // Códigos de tarjetas del empleado desde el cache local
     const codigosTarjetasEmpleado = new Set(
       (tarjetasEmpleado || [])
         .filter(t => t && String(t.empleado_identificacion) === empId)
         .map(t => String(t.codigo))
     )
+    
+    // IMPORTANTE: También incluir tarjetas temporales del outbox del mismo empleado
+    // Esto es necesario porque los abonos a tarjetas temporales deben sincronizarse junto con la tarjeta
+    const tarjetasTemporalesOutbox = (outbox || [])
+      .filter(item => item?.type === 'tarjeta:new' && item?.temp_id?.startsWith('tmp-') && String(item?.empleado_identificacion) === empId)
+      .map(item => String(item.temp_id))
+    tarjetasTemporalesOutbox.forEach(tempId => codigosTarjetasEmpleado.add(tempId))
+    
     const shadowData = []
     const empleadoData = (outbox || []).filter(item => {
       if (!item) return false
@@ -189,7 +201,7 @@ export default function SubirPage() {
     try {
       const outbox = await offlineDB.readOutbox()
       const currentEmpleadoId = localStorage.getItem('empleado_identificacion')
-
+      
       if (!currentEmpleadoId) {
         setPending(0)
         setOutboxData({ tarjetas: 0, abonos: 0, gastos: 0, bases: 0 })
@@ -197,7 +209,7 @@ export default function SubirPage() {
         setLocalBases([])
         return
       }
-
+      
       // Obtener las tarjetas del empleado actual para filtrar abonos
       const tarjetasEmpleado = await offlineDB.getTarjetas()
       const codigosTarjetasEmpleado = new Set(
@@ -205,7 +217,13 @@ export default function SubirPage() {
           .filter(t => t && String(t.empleado_identificacion) === String(currentEmpleadoId))
           .map(t => String(t.codigo))
       )
-
+      
+      // IMPORTANTE: También incluir tarjetas temporales del outbox del mismo empleado
+      const tarjetasTemporalesOutbox = (outbox || [])
+        .filter(item => item?.type === 'tarjeta:new' && item?.temp_id?.startsWith('tmp-') && String(item?.empleado_identificacion) === String(currentEmpleadoId))
+        .map(item => String(item.temp_id))
+      tarjetasTemporalesOutbox.forEach(tempId => codigosTarjetasEmpleado.add(tempId))
+      
       // Filtrar solo los datos del empleado actualmente seleccionado
       const empleadoData = outbox.filter(item => {
         if (!item) return false
@@ -219,10 +237,10 @@ export default function SubirPage() {
         const itemEmpleadoId = item.empleado_identificacion || item.empleado_id
         return itemEmpleadoId != null && String(itemEmpleadoId) === String(currentEmpleadoId)
       })
-
+      
       const count = empleadoData.length
       setPending(count)
-
+      
       // Contar por tipo (solo del empleado actual)
       const data = {
         tarjetas: empleadoData.filter(item => item.type === 'tarjeta:new' && item.temp_id?.startsWith('tmp-')).length,
@@ -231,8 +249,13 @@ export default function SubirPage() {
         bases: empleadoData.filter(item => item.type === 'base:set').length,
       }
       setOutboxData(data)
-
-      // Cargar gastos y bases locales para edición (solo del empleado actual)
+      
+      // Cargar tarjetas y abonos locales para visualización y eliminación
+      const tarjetasNuevas = empleadoData.filter(item => item.type === 'tarjeta:new' && item.temp_id?.startsWith('tmp-'))
+      const abonos = empleadoData.filter(item => item.type === 'abono:add')
+      setLocalTarjetas(tarjetasNuevas)
+      setLocalAbonos(abonos)
+      
       const gastos = empleadoData.filter(item => item.type === 'gasto:new')
       const bases = empleadoData.filter(item => item.type === 'base:set')
       setLocalGastos(gastos)
@@ -250,10 +273,10 @@ export default function SubirPage() {
       const audioContext = new (window.AudioContext || window.webkitAudioContext)()
       const oscillator = audioContext.createOscillator()
       const gainNode = audioContext.createGain()
-
+      
       oscillator.connect(gainNode)
       gainNode.connect(audioContext.destination)
-
+      
       if (type === 'success') {
         // Sonido de éxito: dos tonos ascendentes
         oscillator.frequency.setValueAtTime(523.25, audioContext.currentTime) // C5
@@ -280,14 +303,14 @@ export default function SubirPage() {
   function showMessage(msg, type = 'info') {
     setMessage(msg)
     setMessageType(type)
-
+    
     // Reproducir sonido según el tipo
     if (type === 'success') {
       playSound('success')
     } else if (type === 'error') {
       playSound('error')
     }
-
+    
     // Duraciones: error 10s, success 10s, info 5s
     const duration = type === 'error' ? 10000 : (type === 'success' ? 10000 : 5000)
     setTimeout(() => setMessage(''), duration)
@@ -296,7 +319,7 @@ export default function SubirPage() {
   async function handleUpload() {
     if (busy) return
     const currentEmpleadoId = localStorage.getItem('empleado_identificacion')
-
+    
     if (!currentEmpleadoId) {
       showMessage('No hay empleado seleccionado. Selecciona un empleado primero.', 'error')
       return
@@ -330,17 +353,17 @@ export default function SubirPage() {
     if (!preflight) return
     const currentEmpleadoId = preflight.empleadoId
     const p = debugProfile ? profiler() : null
-
+    
     setBusy(true)
     showMessage('Sincronizando datos...', 'info')
-
+    
     const timeoutId = setTimeout(() => {
       if (busy) {
         setBusy(false)
         showMessage('❌ TIMEOUT: La sincronización tardó demasiado. Verifica tu conexión e inténtalo de nuevo.', 'error')
       }
     }, 180000)
-
+    
     try {
       p && p.mark('start')
       const snapshot = await collectEmpleadoOutboxData(currentEmpleadoId, p)
@@ -360,8 +383,8 @@ export default function SubirPage() {
           showMessage('No hay datos válidos para sincronizar del empleado actual.', 'error')
         }
         return
-      }
-
+        }
+        
       // Verificar permisos justo antes de sincronizar
       try {
         const perms = await apiClient.getEmpleadoPermissions(currentEmpleadoId)
@@ -389,9 +412,9 @@ export default function SubirPage() {
         gastos: [],
         bases: [],
       }
-
+      
       let syncCount = 0
-
+      
       for (const item of empleadoData) {
         if (item.type === 'tarjeta:new') {
           if (!item.temp_id || typeof item.temp_id !== 'string' || !item.temp_id.startsWith('tmp-')) {
@@ -452,7 +475,7 @@ export default function SubirPage() {
 
       const rawEmpleadoId = localStorage.getItem('empleado_identificacion')
       const empleadoId = rawEmpleadoId ? String(rawEmpleadoId).substring(0, 20) : null
-
+      
       if (!empleadoId && (payload.gastos.length > 0 || payload.bases.length > 0)) {
         showMessage('No se encontró empleado_identificacion en la sesión. Debes seleccionar un empleado primero.', 'error')
         return
@@ -471,7 +494,7 @@ export default function SubirPage() {
 
       const res = await apiClient.sync(payload)
       p && p.mark('apiSync')
-
+      
       console.log('=== RESPUESTA DE SINCRONIZACIÓN ===')
       console.log('Respuesta completa:', res)
       console.log('Gastos creados:', res?.data?.created_gastos)
@@ -568,7 +591,7 @@ export default function SubirPage() {
       showMessage(`${successMsg} Total: ${totalSync}.${formulaText}`, 'success')
       localStorage.setItem('flash_message', 'Sincronización completada con éxito. Listo para nueva jornada.')
       p && p.table()
-
+      
       // Limpieza final de DB (Puede tardar, pero la UI ya respondió)
       try {
         await Promise.all(outbox.map(item => offlineDB.removeOutbox(item.id)))
@@ -583,13 +606,13 @@ export default function SubirPage() {
       }
 
       setTimeout(() => { navigate('/home') }, 10000)
-
+      
     } catch (e) {
-      setBusy(false) // Asegurar desbloqueo en error
       console.error('Error en sincronización (inesperado):', e)
       showMessage('❌ ERROR INESPERADO — Etapa: cliente. ' + (e?.message || 'Revisa la consola y tu conexión'), 'error')
       refresh() // Solo refrescar si hubo error y NO se borró la DB
     } finally {
+      setBusy(false)
       clearTimeout(timeoutId)
       // No llamamos a refresh() incondicionalmente aquí para evitar revivir la DB recién borrada
     }
@@ -642,7 +665,7 @@ export default function SubirPage() {
         empleado_identificacion: gasto.empleado_identificacion,
         ts: Date.now()
       })
-
+      
       showMessage('Gasto actualizado exitosamente.', 'success')
       refresh()
     } catch (e) {
@@ -660,6 +683,46 @@ export default function SubirPage() {
     }
   }
 
+  async function deleteTarjeta(item) {
+    if (!window.confirm('¿Seguro que deseas eliminar esta tarjeta del outbox? Se borrará permanentemente de los pendientes.')) return
+    try {
+      const outboxId = item.id
+      const tempId = item.temp_id
+
+      // También debemos intentar quitarla del cache local de tarjetas para que no se vea en el listado
+      // Usamos tempId para identificarla en el cache local
+      const tarjetas = await offlineDB.getTarjetas()
+      const filtradas = tarjetas.filter(t => t.codigo !== tempId && t.temp_id !== tempId)
+      await offlineDB.setTarjetas(filtradas)
+      
+      if (outboxId) {
+        await offlineDB.removeOutbox(outboxId)
+      }
+      
+      showMessage('Tarjeta eliminada de los pendientes.', 'success')
+      refresh()
+    } catch (e) {
+      console.error(e)
+      showMessage('Error al eliminar tarjeta: ' + (e?.message || 'Error'), 'error')
+    }
+  }
+
+  async function deleteAbono(abonoId, tarjetaCodigo) {
+    if (!window.confirm('¿Seguro que deseas eliminar este abono?')) return
+    try {
+      // Quitar de la lista de abonos en el cache local de la tarjeta
+      const existentes = await offlineDB.getAbonos(tarjetaCodigo)
+      const filtrados = existentes.filter(a => (a.id !== abonoId && a.id_temporal !== abonoId))
+      await offlineDB.setAbonos(tarjetaCodigo, filtrados)
+      
+      await offlineDB.removeOutbox(abonoId)
+      showMessage('Abono eliminado.', 'success')
+      refresh()
+    } catch (e) {
+      showMessage('Error al eliminar abono: ' + (e?.message || 'Error'), 'error')
+    }
+  }
+
   async function updateBase(base) {
     try {
       // Actualizar la base en el outbox
@@ -671,7 +734,7 @@ export default function SubirPage() {
         empleado_id: base.empleado_id || base.empleado_identificacion,
         ts: Date.now()
       })
-
+      
       showMessage('Base actualizada exitosamente.', 'success')
       refresh()
     } catch (e) {
@@ -695,7 +758,7 @@ export default function SubirPage() {
             <span style={{ color: '#93c5fd', fontSize: 14 }}>Solo se sincronizarán los datos de este empleado</span>
           </div>
         )}
-
+        
         {!currentEmpleadoId && (
           <div className="card" style={{ maxWidth: 680, background: '#7f1d1d', color: 'white' }}>
             <strong>⚠️ No hay empleado seleccionado</strong>
@@ -717,23 +780,59 @@ export default function SubirPage() {
           </div>
         </div>
 
+        {/* Tarjetas nuevas locales */}
+        {localTarjetas.length > 0 && (
+          <div className="card" style={{ maxWidth: 680 }}>
+            <strong>Tarjetas nuevas (sin subir)</strong>
+            <div style={{ display: 'grid', gap: 8, marginTop: 8 }}>
+              {localTarjetas.map((t, idx) => (
+                <div key={t.id || t.temp_id || idx} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: 8, border: '1px solid #223045', borderRadius: 4 }}>
+                  <div>
+                    <div style={{fontWeight: 'bold'}}>{t.cliente?.nombre} {t.cliente?.apellido}</div>
+                    <div style={{fontSize: 12, color: 'var(--muted)'}}>ID: {t.cliente?.identificacion} | Monto: {currency(t.monto)}</div>
+                  </div>
+                  <button onClick={() => deleteTarjeta(t)} style={{ color: '#ef4444', background: 'transparent', border: 'none' }} title="Eliminar"><Trash2 size={20} /></button>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Abonos locales */}
+        {localAbonos.length > 0 && (
+          <div className="card" style={{ maxWidth: 680 }}>
+            <strong>Abonos pendientes</strong>
+            <div style={{ display: 'grid', gap: 8, marginTop: 8 }}>
+              {localAbonos.map((a, idx) => (
+                <div key={a.id || idx} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: 8, border: '1px solid #223045', borderRadius: 4 }}>
+                  <div>
+                    <div style={{fontWeight: 'bold'}}>{currency(a.monto)} — {a.metodo_pago}</div>
+                    <div style={{fontSize: 12, color: 'var(--muted)'}}>Tarjeta: {a.tarjeta_codigo}</div>
+                  </div>
+                  <button onClick={() => deleteAbono(a.id, a.tarjeta_codigo)} style={{ color: '#ef4444', background: 'transparent', border: 'none' }} title="Eliminar"><Trash2 size={20} /></button>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
         {/* Gastos locales */}
         {localGastos.length > 0 && (
           <div className="card" style={{ maxWidth: 680, overflow: 'hidden' }}>
             <strong>Gastos pendientes</strong>
             {localGastos.map((gasto, idx) => (
               <div key={gasto.id || idx} style={{ padding: 8, border: '1px solid #223045', borderRadius: 4, marginTop: 8 }}>
-                <input
-                  value={gasto.observacion || ''}
+                <input 
+                  value={gasto.observacion || ''} 
                   onChange={(e) => setLocalGastos(prev => prev.map((g, i) => i === idx ? { ...g, observacion: e.target.value } : g))}
-                  placeholder="Detalle del gasto"
+                  placeholder="Detalle del gasto" 
                   style={{ width: '100%', marginBottom: 8 }}
                 />
                 <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
-                  <input
-                    value={gasto.valor}
+                  <input 
+                    value={gasto.valor} 
                     onChange={(e) => setLocalGastos(prev => prev.map((g, i) => i === idx ? { ...g, valor: Number(e.target.value) } : g))}
-                    placeholder="Valor"
+                    placeholder="Valor" 
                     style={{ width: 120, marginRight: 4 }}
                     type="number"
                   />
@@ -751,16 +850,16 @@ export default function SubirPage() {
             <strong>Bases pendientes</strong>
             {localBases.map((base, idx) => (
               <div key={base.id || idx} style={{ display: 'flex', flexWrap: 'wrap', gap: 8, padding: 8, border: '1px solid #223045', borderRadius: 4, marginTop: 8, alignItems: 'center' }}>
-                <input
-                  value={base.fecha}
+                <input 
+                  value={base.fecha} 
                   onChange={(e) => setLocalBases(prev => prev.map((b, i) => i === idx ? { ...b, fecha: e.target.value } : b))}
-                  type="date"
+                  type="date" 
                   style={{ flex: '1 1 140px', minWidth: 140 }}
                 />
-                <input
-                  value={base.monto}
+                <input 
+                  value={base.monto} 
                   onChange={(e) => setLocalBases(prev => prev.map((b, i) => i === idx ? { ...b, monto: Number(e.target.value) } : b))}
-                  placeholder="Monto"
+                  placeholder="Monto" 
                   style={{ flex: '1 1 120px', minWidth: 120 }}
                   type="number"
                 />
@@ -786,7 +885,7 @@ export default function SubirPage() {
               gap: 8
             }}>
               <span style={{ flex: 1 }}>{message}</span>
-              <button
+              <button 
                 onClick={() => setMessage('')}
                 style={{
                   background: 'transparent',

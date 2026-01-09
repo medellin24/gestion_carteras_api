@@ -20,16 +20,40 @@ function LoginForm({ onSuccess }) {
     setIsLoading(true)
     try {
       const { access_token, refresh_token, role } = await apiClient.login({ username, password })
+      
+      // Detectar cambio de cuenta ANTES de guardar nuevos datos
+      const empleadoAnterior = localStorage.getItem('empleado_identificacion')
+      let nuevoEmpleado = null
+      try {
+        const payload = decodeJwtPayload(access_token)
+        nuevoEmpleado = payload?.empleado_identificacion ? String(payload.empleado_identificacion) : null
+      } catch {}
+      
+      // Si es una cuenta DIFERENTE, limpiar datos de trabajo del usuario anterior
+      if (empleadoAnterior && nuevoEmpleado && empleadoAnterior !== nuevoEmpleado) {
+        console.log('🔄 Cambio de cuenta detectado, limpiando datos anteriores...')
+        localStorage.removeItem('tarjetas_data')
+        localStorage.removeItem('tarjetas_stats')
+        localStorage.removeItem('tarjetas_last_download')
+        localStorage.removeItem('jornada_token')
+        localStorage.removeItem('jornada_started_at')
+        // Limpiar IndexedDB del usuario anterior
+        try {
+          const { offlineDB } = await import('../offline/db.js')
+          await offlineDB.resetWorkingMemory()
+        } catch (e) {
+          console.warn('Error limpiando IndexedDB:', e)
+        }
+      }
+      
+      // Guardar tokens y datos del nuevo usuario
       localStorage.setItem('access_token', access_token)
       localStorage.setItem('refresh_token', refresh_token)
       localStorage.setItem('user_role', role)
       localStorage.setItem('username', username)
-      try {
-        const payload = decodeJwtPayload(access_token)
-        if (payload?.empleado_identificacion) {
-          localStorage.setItem('empleado_identificacion', String(payload.empleado_identificacion))
-        }
-      } catch {}
+      if (nuevoEmpleado) {
+        localStorage.setItem('empleado_identificacion', nuevoEmpleado)
+      }
       onSuccess?.(role)
     } catch (err) {
       if (err?.status === 401) {

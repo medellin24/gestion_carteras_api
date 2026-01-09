@@ -466,6 +466,14 @@ class APIClient:
     def get_tarjeta(self, codigo: str) -> Dict:
         """Obtiene una tarjeta por código"""
         return self._make_request('GET', f'/tarjetas/{codigo}')
+
+    def search_tarjetas(self, termino: str, empleado_id: Optional[str] = None, estado: str = 'activas') -> List[Dict]:
+        """Busca tarjetas por término (nombre/apellido)"""
+        params = {'termino': termino, 'estado': estado}
+        if empleado_id:
+            params['empleado_id'] = empleado_id
+        return self._make_request('GET', '/tarjetas/buscar', params=params)
+
     
     def update_tarjeta(self, codigo: str, tarjeta_data: Dict) -> Dict:
         """Actualiza una tarjeta"""
@@ -480,6 +488,15 @@ class APIClient:
         """Actualiza el estado de una tarjeta"""
         return self._make_request('PUT', f'/tarjetas/{codigo}/estado', data={'estado': estado})
     
+    def update_rutas_masivo(self, updates_list: List[Dict]) -> Dict:
+        """
+        Actualiza rutas masivamente.
+        updates_list: Lista de dicts con keys 'codigo' y 'numero_ruta'.
+        """
+        # Convert types just in case
+        payload = [self._convert_types_for_json(item) for item in updates_list]
+        return self._make_request('PUT', '/tarjetas/rutas/masivo', data=payload)
+
     def mover_tarjeta(self, codigo: str, nuevo_empleado_id: str) -> Dict:
         """Mueve una tarjeta a otro empleado"""
         return self._make_request('PUT', f'/tarjetas/{codigo}/mover', data={'nuevo_empleado_id': nuevo_empleado_id})
@@ -525,6 +542,20 @@ class APIClient:
         if isinstance(fecha, date):
             fecha = fecha.isoformat()
         return self._make_request('GET', f'/liquidacion/resumen/{fecha}')
+    
+    def mover_liquidacion(self, empleado_id: str, fecha_origen: Union[str, date], fecha_destino: Union[str, date]) -> Dict:
+        """Mueve la liquidación de una fecha a otra."""
+        if isinstance(fecha_origen, date):
+            fecha_origen = fecha_origen.isoformat()
+        if isinstance(fecha_destino, date):
+            fecha_destino = fecha_destino.isoformat()
+        
+        payload = {
+            "empleado_id": empleado_id,
+            "fecha_origen": fecha_origen,
+            "fecha_destino": fecha_destino
+        }
+        return self._make_request('POST', '/liquidacion/mover', data=payload)
 
     def get_tarjeta_resumen(self, tarjeta_codigo: str) -> Dict:
         """Obtiene el resumen de una tarjeta por código"""
@@ -641,6 +672,15 @@ class APIClient:
             fecha = fecha.isoformat()
         return self._make_request('GET', f'/empleados/{empleado_id}/abonos/{fecha}')
 
+    def list_tarjetas_sin_abono_dia(self, empleado_id: str, fecha: Union[str, date], timezone_name: Optional[str] = None) -> List[Dict]:
+        if isinstance(fecha, date):
+            fecha = fecha.isoformat()
+        url = f'/empleados/{empleado_id}/tarjetas-sin-abono/{fecha}'
+        if timezone_name:
+            import urllib.parse
+            url += f"?timezone={urllib.parse.quote(timezone_name)}"
+        return self._make_request('GET', url)
+
     # --- Métodos para Clientes ---
 
     def get_cliente(self, identificacion: str) -> Dict:
@@ -659,6 +699,10 @@ class APIClient:
 
     def get_cliente_estadisticas(self, identificacion: str) -> Dict:
         return self._make_request('GET', f'/clientes/{identificacion}/estadisticas')
+
+    def list_clientes_empleado(self, empleado_id: str, scope: str = 'todos') -> List[Dict]:
+        """Obtiene la lista de clientes de un empleado (todos o solo activos)"""
+        return self._make_request('GET', f'/empleados/{empleado_id}/clientes', params={'scope': scope})
 
 # Instancia global del cliente
 api_client = APIClient() 

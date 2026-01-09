@@ -61,8 +61,17 @@ class VentanaNuevaTarjeta(tk.Toplevel):
         # Enfocar el campo de monto
         self.entry_monto.focus()
 
+    def validar_longitud(self, valor, longitud):
+        """Valida que la longitud del texto no exceda el límite"""
+        return len(valor) <= int(longitud)
+
     def setup_ui_solicitar_documento(self):
         """Configura la interfaz para solicitar documento"""
+        # Registrar validadores de longitud
+        vcmd_20 = (self.register(lambda P: self.validar_longitud(P, 20)), '%P')
+        vcmd_40 = (self.register(lambda P: self.validar_longitud(P, 40)), '%P')
+        vcmd_200 = (self.register(lambda P: self.validar_longitud(P, 200)), '%P')
+
         # Frame principal sin padding
         main_frame = ttk.Frame(self)
         main_frame.pack(fill='both', expand=True)
@@ -76,16 +85,16 @@ class VentanaNuevaTarjeta(tk.Toplevel):
         frame_cliente.pack(side='left', fill='both', expand=True, padx=(0, 10))
         
         campos_cliente = [
-            ("Nombre", 'entry_nombre'),
-            ("Apellido", 'entry_apellido'),
-            ("Identificación", 'entry_id'),
-            ("Teléfono", 'entry_telefono'),
-            ("Dirección", 'entry_direccion')
+            ("Nombre", 'entry_nombre', vcmd_40),
+            ("Apellido", 'entry_apellido', vcmd_40),
+            ("Identificación", 'entry_id', vcmd_20),
+            ("Teléfono", 'entry_telefono', vcmd_20),
+            ("Dirección", 'entry_direccion', vcmd_200)
         ]
         
-        for label_text, entry_name in campos_cliente:
+        for label_text, entry_name, vcmd in campos_cliente:
             ttk.Label(frame_cliente, text=label_text).pack(anchor='w', pady=(5,0))
-            entry = ttk.Entry(frame_cliente, width=30)
+            entry = ttk.Entry(frame_cliente, width=30, validate='key', validatecommand=vcmd)
             entry.pack(fill='x', pady=(2,5))
             setattr(self, entry_name, entry)
 
@@ -162,8 +171,8 @@ class VentanaNuevaTarjeta(tk.Toplevel):
         ttk.Label(frame_tarjeta, text="Observaciones").pack(anchor='w', pady=(10,0))
         self.entry_observaciones = tk.Text(frame_tarjeta, width=30, height=3)
         self.entry_observaciones.pack(fill='x', pady=(5,10))
-        # Limitar caracteres en observaciones
-        self.entry_observaciones.bind('<KeyPress>', self.limitar_observaciones)
+        # Limitar caracteres en observaciones a 500 (antes 30)
+        self.entry_observaciones.bind('<KeyPress>', lambda e: self.limitar_observaciones(e, 500))
         # Mayúsculas en tiempo real para observaciones
         self.entry_observaciones.bind('<KeyRelease>', lambda e: self._uppercase_text(self.entry_observaciones))
         
@@ -235,15 +244,14 @@ class VentanaNuevaTarjeta(tk.Toplevel):
             self.entry_monto.delete(0, tk.END)
             self.entry_monto.insert(0, texto_formateado)
 
-    def limitar_observaciones(self, event):
-        """Limita el texto de observaciones a 30 caracteres"""
-        texto_actual = self.entry_observaciones.get("1.0", "end-1c")
-        
+    def limitar_observaciones(self, event, limit=30):
+        """Limita el texto de observaciones al límite especificado"""
         # Permitir teclas de control (backspace, delete, etc.)
         if len(event.char) == 0:
             return
         
-        if len(texto_actual) >= 30:
+        texto_actual = self.entry_observaciones.get("1.0", "end-1c")
+        if len(texto_actual) >= limit:
             return "break"  # Evita que se escriba el carácter
 
     def validar_monto(self, nuevo_valor):

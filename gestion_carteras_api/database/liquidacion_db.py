@@ -27,7 +27,8 @@ def obtener_datos_liquidacion(empleado_identificacion: str, fecha: date, tz_name
             'prestamos_otorgados': Decimal('0'),
             'total_gastos': Decimal('0'),
             'subtotal': Decimal('0'),
-            'total_final': Decimal('0')
+            'total_final': Decimal('0'),
+            'tarjetas_sin_abono': 0
         }
         
         # Calcular límites UTC del día local y la fecha local (DATE)
@@ -137,8 +138,25 @@ def obtener_datos_liquidacion(empleado_identificacion: str, fecha: date, tz_name
             ''', (empleado_identificacion, start_naive, end_naive))
             result = cursor.fetchone()[0]
             datos['total_gastos'] = Decimal(str(result)) if result is not None else Decimal('0')
+
+            # 9. Contar tarjetas activas SIN abono hoy (No dieron)
+            cursor.execute('''
+                SELECT COUNT(*)
+                FROM tarjetas t
+                WHERE t.empleado_identificacion = %s
+                  AND t.estado = 'activas'
+                  AND t.codigo NOT IN (
+                      SELECT a.tarjeta_codigo 
+                      FROM abonos a
+                      JOIN tarjetas t2 ON a.tarjeta_codigo = t2.codigo
+                      WHERE t2.empleado_identificacion = %s
+                        AND a.fecha >= %s 
+                        AND a.fecha <= %s
+                  )
+            ''', (empleado_identificacion, empleado_identificacion, start_naive, end_naive))
+            datos['tarjetas_sin_abono'] = cursor.fetchone()[0]
             
-            # 9. Calcular totales
+            # 10. Calcular totales
             # Subtotal = Recaudado + Base - Préstamos
             datos['subtotal'] = (datos['total_recaudado'] + 
                                datos['base_dia'] - 
@@ -285,4 +303,89 @@ def obtener_resumen_financiero_fecha(fecha: date) -> Dict:
     except Exception as e:
         logger.error(f"Error al obtener resumen financiero: {e}")
         # Devuelve el objeto de resumen con los valores por defecto en caso de error
-        return resumen 
+        return resumen
+
+def mover_liquidacion(empleado_identificacion: str, fecha_origen: date, fecha_destino: date, tz_name: str = 'UTC') -> bool:
+    """Mueve los datos de liquidación de una fecha a otra."""
+    try:
+        delta_days = (fecha_destino - fecha_origen).days
+        if delta_days == 0:
+            return True
+
+        interval_str = f"{int(delta_days)} days"
+
+        with DatabasePool.get_cursor() as cursor:
+            # 1. Abonos (ajustando timezone dinámico)
+            cursor.execute(f'''
+                UPDATE abonos a
+                SET fecha = a.fecha + INTERVAL '{interval_str}'
+                FROM tarjetas t
+                WHERE a.tarjeta_codigo = t.codigo
+                  AND t.empleado_identificacion = %s
+                  AND (a.fecha AT TIME ZONE 'UTC' AT TIME ZONE %s)::date = %s
+            ''', (empleado_identificacion, tz_name, fecha_origen))
+
+            # 2. Tarjetas creadas
+            cursor.execute(f'''
+                UPDATE tarjetas
+                SET fecha_creacion = fecha_creacion + INTERVAL '{interval_str}'
+                WHERE empleado_identificacion = %s
+                  AND (fecha_creacion AT TIME ZONE 'UTC' AT TIME ZONE %s)::date = %s
+            ''', (empleado_identificacion, tz_name, fecha_origen))
+
+            # 2.1 Tarjetas canceladas (fecha_cancelacion es DATE, no necesita tz shift si se almacena como tal)
+            # Pero si se almacena con hora o si el usuario ve "cancelada hoy" y en DB es fecha, usualmente es DATE puro.
+            # Verifiquemos: schemas dice Optional[date]. DB dice DATE o TIMESTAMP?
+            # En main.py vimos: fc_norm = _dt.utcnow()... fecha_cancelacion row[12].
+            # En tarjetas_db.py: fecha_cancelacion = date.today() if nuevo_estado == 'cancelada'.
+            # Al ser date.today() (local del servidor o pc), se guarda como DATE.
+            # Si es columna DATE, ::date es redundante pero inocuo. NO aplicar TZ shift a DATE puro.
+            # Dejaremos fecha_cancelacion igual que antes (sin TZ shift complejo) a menos que sea TIMESTAMP.
+            # El SQL original tenia: AND fecha_cancelacion::date = %s.
+            cursor.execute(f'''
+                UPDATE tarjetas
+                SET fecha_cancelacion = fecha_cancelacion + INTERVAL '{interval_str}'
+                WHERE empleado_identificacion = %s
+                  AND fecha_cancelacion IS NOT NULL
+                  AND fecha_cancelacion = %s
+            ''', (empleado_identificacion, fecha_origen))
+
+            # 3. Gastos (fecha_creacion es TIMESTAMP)
+            cursor.execute(f'''
+                UPDATE gastos
+                SET fecha_creacion = fecha_creacion + INTERVAL '{interval_str}'
+                WHERE empleado_identificacion = %s
+                  AND (fecha_creacion AT TIME ZONE 'UTC' AT TIME ZONE %s)::date = %s
+            ''', (empleado_identificacion, tz_name, fecha_origen))
+            
+            # 3.1 Gastos (fecha date column if exists)
+            # Intentamos actualizar también la columna 'fecha' si coincide con origen
+            cursor.execute('''
+                UPDATE gastos
+                SET fecha = %s
+                WHERE empleado_identificacion = %s
+                  AND fecha = %s
+            ''', (fecha_destino, empleado_identificacion, fecha_origen))
+
+            # 4. Bases
+            cursor.execute('''
+                UPDATE bases
+                SET fecha = %s
+                WHERE empleado_id = %s
+                  AND fecha = %s
+            ''', (fecha_destino, empleado_identificacion, fecha_origen))
+            
+        # Recalcular caja
+        try:
+            from .caja_db import recalcular_caja_dia
+            # Usar la timezone proporcionada
+            recalcular_caja_dia(empleado_identificacion, fecha_origen, tz_name)
+            recalcular_caja_dia(empleado_identificacion, fecha_destino, tz_name)
+        except Exception as e:
+            logger.warning(f"Error recalculando caja tras mover liquidación: {e}")
+
+        return True
+
+    except Exception as e:
+        logger.error(f"Error al mover liquidación: {e}")
+        return False

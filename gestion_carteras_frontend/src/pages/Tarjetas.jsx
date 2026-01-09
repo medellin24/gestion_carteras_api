@@ -28,14 +28,41 @@ export default function TarjetasPage() {
   const [scrollToCodigo, setScrollToCodigo] = useState(() => sessionStorage.getItem('last_tarjeta_codigo') || '')
   const location = useLocation()
   const searchInputRef = useRef(null)
-  const searchHistoryTokenRef = useRef(null)
   
   // Detectar si hay una ruta hija activa (detalle o abonos)
   const hasChildRoute = location.pathname !== '/tarjetas'
 
   useEffect(() => {
     async function refreshData() {
-      const { token: jornadaToken, startedAt: jornadaInicio } = getCurrentJornada()
+      let { token: jornadaToken, startedAt: jornadaInicio } = getCurrentJornada()
+      
+      // Pre-cargar outbox para posible restauración de jornada
+      const outOps = await offlineDB.readOutbox().catch(() => [])
+      
+      // Si no hay jornada activa pero hay operaciones pendientes con session_id,
+      // restaurar el token de jornada desde el outbox (evita UI corrupta al cerrar sesión)
+      if (!jornadaToken && !jornadaInicio && outOps.length > 0) {
+        // Buscar session_id en operaciones pendientes (abonos tienen prioridad)
+        const opsConSession = outOps.filter(op => op?.session_id && op.session_id.startsWith('jor-'))
+        if (opsConSession.length > 0) {
+          // Usar el session_id más reciente (por timestamp)
+          const sorted = [...opsConSession].sort((a, b) => (b.ts || 0) - (a.ts || 0))
+          jornadaToken = sorted[0].session_id
+          // Encontrar el timestamp más antiguo de esa sesión como inicio
+          const sameSession = opsConSession.filter(op => op.session_id === jornadaToken)
+          const minTs = Math.min(...sameSession.map(op => op.ts || Infinity))
+          if (Number.isFinite(minTs)) {
+            jornadaInicio = minTs
+          }
+          // Persistir para que no se pierda de nuevo
+          try {
+            localStorage.setItem('jornada_token', jornadaToken)
+            if (jornadaInicio) localStorage.setItem('jornada_started_at', String(jornadaInicio))
+            console.log('🔄 Jornada restaurada desde outbox:', jornadaToken)
+          } catch {}
+        }
+      }
+      
       const isCurrentOp = (op) => {
         if (!op) return false
         if (op.session_id && jornadaToken) return op.session_id === jornadaToken
@@ -49,10 +76,9 @@ export default function TarjetasPage() {
         return true
       }
 
-      const [s, t, outOps] = await Promise.all([
+      const [s, t] = await Promise.all([
         offlineDB.getStats(),
         offlineDB.getTarjetas(),
-        offlineDB.readOutbox().catch(()=>[]),
       ])
       // stats se recalculará abajo con abonos del día para actualización en vivo
       setTarjetas(t.length ? t : tarjetasStore.getTarjetas())
@@ -139,8 +165,11 @@ export default function TarjetasPage() {
     if (showRecaudos) {
       document.body.style.overflow = 'hidden'
     }
-    return () => { document.body.style.overflow = prev }
+    return () => {
+      document.body.style.overflow = prev
+    }
   }, [showRecaudos])
+
 
   const filtradas = useMemo(() => {
     const q = query.trim().toLowerCase()
@@ -156,43 +185,6 @@ export default function TarjetasPage() {
       return nombre.toLowerCase().includes(q)
     })
   }, [query, tarjetas])
-
-  // Permitir que el botón/gesto "Atrás" limpie la búsqueda antes de salir de la lista
-  useEffect(() => {
-    if (typeof window === 'undefined') return
-    const hasQuery = query.trim().length > 0
-    if (hasQuery) {
-      if (!searchHistoryTokenRef.current) {
-        const token = `search-${Date.now()}-${Math.random().toString(36).slice(2)}`
-        searchHistoryTokenRef.current = token
-        const newState = { ...(window.history.state || {}), searchToken: token }
-        window.history.pushState(newState, '', window.location.href)
-      }
-    } else if (searchHistoryTokenRef.current) {
-      if (window.history.state && window.history.state.searchToken === searchHistoryTokenRef.current) {
-        const nextState = { ...window.history.state }
-        delete nextState.searchToken
-        window.history.replaceState(nextState, '', window.location.href)
-      }
-      searchHistoryTokenRef.current = null
-    }
-  }, [query])
-
-  useEffect(() => {
-    if (typeof window === 'undefined') return undefined
-    const handlePopState = (event) => {
-      if (!searchHistoryTokenRef.current) return
-      const stateToken = event?.state?.searchToken || null
-      if (stateToken === searchHistoryTokenRef.current) return
-      searchHistoryTokenRef.current = null
-      setQuery('')
-      window.setTimeout(() => {
-        try { searchInputRef.current?.blur() } catch {}
-      }, 0)
-    }
-    window.addEventListener('popstate', handlePopState)
-    return () => window.removeEventListener('popstate', handlePopState)
-  }, [])
 
   // Efecto separado para restaurar scroll cuando las tarjetas estén renderizadas
   useEffect(() => {
@@ -242,7 +234,6 @@ export default function TarjetasPage() {
   }, [filtradas.length, scrollToCodigo])
 
 function RecaudosOverlay({ tarjetas, abonosPorTarjeta, onClose }){
-  const today = formatDateYYYYMMDD()
   const [abonosHoyPorTarjeta, setAbonosHoyPorTarjeta] = useState({})
   const [totalHoy, setTotalHoy] = useState(0)
   const [noAbonan, setNoAbonan] = useState([])
@@ -254,13 +245,45 @@ function RecaudosOverlay({ tarjetas, abonosPorTarjeta, onClose }){
     let cancelled = false
     ;(async()=>{
       try {
+        const { token: jornadaToken, startedAt: jornadaInicio } = getCurrentJornada()
+        const today = formatDateYYYYMMDD() // Fallback
+
+        // Función unificada para determinar si una operación pertenece a la jornada actual
+        const isCurrent = (op) => {
+            if (!op) return false
+            // 1. Coincidencia explícita de token
+            if (jornadaToken && (op.session_id === jornadaToken || op.jornada_token === jornadaToken)) return true
+            
+            // 2. Por tiempo (si hay inicio de jornada registrado)
+            // Para objetos online (que pueden tener 'fecha' string ISO) o offline (ts numérico)
+            let ts = op.ts
+            if (!ts && op.fecha) {
+                // Convertir fecha ISO a timestamp
+                const d = typeof op.fecha === 'string' ? parseISODateToLocal(op.fecha) : op.fecha
+                if (d) ts = d.getTime()
+            }
+            if (!ts && op.fecha_creacion) {
+                 const d = typeof op.fecha_creacion === 'string' ? parseISODateToLocal(op.fecha_creacion) : op.fecha_creacion
+                 if (d) ts = d.getTime()
+            }
+            
+            if (jornadaInicio && ts) {
+                return ts >= jornadaInicio
+            }
+            
+            // 3. Fallback: Si no hay jornada activa, usar día calendario
+            if (!jornadaToken && !jornadaInicio && ts) {
+                return formatDateYYYYMMDD(new Date(ts)) === today
+            }
+            return false
+        }
+
         // Obtener outbox para verificar operaciones locales pendientes
         const outOps = await offlineDB.readOutbox().catch(()=>[])
         
         // --- 1. TARJETAS NUEVAS ---
         const tarjetasNuevasOffline = outOps.filter(op => 
-          op && op.type === 'tarjeta:new' && 
-          op.ts && formatDateYYYYMMDD(new Date(op.ts)) === today
+          op && op.type === 'tarjeta:new' && isCurrent(op)
         ).map(op => ({
           codigo: op.temp_id || 'temp',
           cliente: op.cliente || {},
@@ -268,12 +291,12 @@ function RecaudosOverlay({ tarjetas, abonosPorTarjeta, onClose }){
         }))
         
         const tarjetasNuevasOnline = (tarjetas || []).filter(t => {
-          const fechaCreacion = t?.fecha_creacion || t?.created_at
-          if (!fechaCreacion) return false
-          const fecha = fechaCreacion instanceof Date ? 
-            formatDateYYYYMMDD(fechaCreacion) : 
-            formatDateYYYYMMDD(parseISODateToLocal(String(fechaCreacion)))
-          return fecha === today
+          // Adaptar objeto tarjeta para que funcione con isCurrent
+          const mockOp = { 
+              fecha: t.fecha_creacion || t.created_at,
+              ts: t.ts // Si tuviera
+          }
+          return isCurrent(mockOp)
         }).map(t => ({
           codigo: t.codigo,
           cliente: t.cliente || {},
@@ -284,10 +307,9 @@ function RecaudosOverlay({ tarjetas, abonosPorTarjeta, onClose }){
           .filter((t, index, arr) => arr.findIndex(other => other.codigo === t.codigo) === index)
 
         // --- 2. ABONOS DEL DÍA (Online + Offline/Outbox) ---
-        // Abonos en outbox hechos hoy
+        // Abonos en outbox hechos hoy/jornada
         const abonosOutboxHoy = outOps.filter(op => 
-          op && op.op === 'abono' && 
-          op.ts && formatDateYYYYMMDD(new Date(op.ts)) === today
+          op && op.op === 'abono' && isCurrent(op)
         )
         // IDs de abonos en outbox para evitar duplicar si ya se sincronizaron parcialmente
         const abonoOutboxIds = new Set(
@@ -299,27 +321,13 @@ function RecaudosOverlay({ tarjetas, abonosPorTarjeta, onClose }){
           const list = abonosPorTarjeta[t.codigo] || []
           const seenIds = new Set()
           
-          // Sumar abonos de la DB que sean de hoy
+          // Sumar abonos de la DB que sean de la jornada
           const sumDB = list.reduce((s,a)=>{
-            const d = a?.fecha ? parseISODateToLocal(String(a.fecha)) : (a?.ts ? new Date(a.ts): null)
-            if (d && formatDateYYYYMMDD(d) === today) {
+            if (isCurrent(a)) {
               const entryId = a && (a.id || a.outbox_id)
               if (entryId) {
                 seenIds.add(String(entryId))
-                // Si este abono ya está en outbox (porque se bajó pero sigue pendiente de confirmación o algo así),
-                // o si la lógica de outbox lo cubre, hay que tener cuidado.
-                // Simplificación: si está en DB y es de hoy, lo sumamos. 
-                // PERO si también está en outbox, la lógica de abajo lo sumaría de nuevo?
-                // `abonosOutboxHoy` son operaciones pendientes. 
-                // Si ya se sincronizó, debería desaparecer de outbox.
-                // Si está en outbox, NO debería estar en DB todavía (a menos que sea un update?).
-                // Asumimos que si está en DB es "confirmado" o "sincronizado".
-                // EXCEPCIÓN: Si acabamos de agregar a DB localmente (optimistic UI) y TAMBIÉN a outbox.
-                // `handlePagarCuota` hace ambas cosas: `offlineDB.queueOperation` Y `offlineDB.setAbonos`.
-                // Por tanto, debemos evitar duplicados.
                 if (abonoOutboxIds.has(String(entryId))) {
-                   // Ya lo contaremos desde el outbox o viceversa.
-                   // Mejor contarlo aquí (DB) y excluirlo de la suma de outbox si ya está "visto".
                    return s + Number(a?.monto||0)
                 }
               }
@@ -332,7 +340,6 @@ function RecaudosOverlay({ tarjetas, abonosPorTarjeta, onClose }){
           const sumOutbox = abonosOutboxHoy
             .filter(op => op.tarjeta_codigo === t.codigo)
             .reduce((s, op) => {
-              // Si el abono de outbox tiene ID y ese ID ya fue visto en la DB, no lo sumamos de nuevo
               if (op.id && seenIds.has(String(op.id))) return s
               return s + Number(op.monto || 0)
             }, 0)
@@ -353,7 +360,7 @@ function RecaudosOverlay({ tarjetas, abonosPorTarjeta, onClose }){
           if (op.type === 'tarjeta:update' && op.payload && (op.tarjeta_id || op.codigo)) {
             const cid = String(op.tarjeta_id || op.codigo)
             if (!updatesMap[cid] || op.ts > updatesMap[cid].ts) {
-              updatesMap[cid] = { ...op.payload, ts: op.ts }
+              updatesMap[cid] = { ...op.payload, ts: op.ts, session_id: op.session_id }
             }
           }
         })
@@ -368,19 +375,19 @@ function RecaudosOverlay({ tarjetas, abonosPorTarjeta, onClose }){
           
           if (estado !== 'cancelada' && estado !== 'canceladas') return false
           
-          // Fecha cancelación efectiva
-          let fechaCancel = t.fecha_cancelacion ? parseISODateToLocal(String(t.fecha_cancelacion)) : null
+          // Verificar fecha/jornada de cancelación
+          // Si hay update en outbox, verificar si pertenece a jornada
           if (update) {
-            if (update.fecha_cancelacion) {
-              fechaCancel = parseISODateToLocal(String(update.fecha_cancelacion))
-            } else if (update.estado === 'cancelada' && !fechaCancel) {
-              // Si se canceló en outbox pero no tiene fecha explícita, usar timestamp de la op
-              fechaCancel = new Date(update.ts)
-            }
+              if (isCurrent(update)) return true
           }
           
-          if (!fechaCancel) return false
-          return formatDateYYYYMMDD(fechaCancel) === today
+          // Si es online, verificar fecha cancelación
+          if (t.fecha_cancelacion) {
+              // Mock op para fecha cancelación
+              if (isCurrent({ fecha: t.fecha_cancelacion })) return true
+          }
+          
+          return false
         })
 
         setAbonosHoyPorTarjeta(map)
@@ -485,7 +492,7 @@ function RecaudosOverlay({ tarjetas, abonosPorTarjeta, onClose }){
             </button>
           </div>
         </div>
-        <div className="tarjetas-search">
+        <div className="tarjetas-search" style={{position:'relative'}}>
           <input
             ref={searchInputRef}
             type="search"
@@ -493,7 +500,20 @@ function RecaudosOverlay({ tarjetas, abonosPorTarjeta, onClose }){
             value={query}
             onChange={(e)=>setQuery(e.target.value)}
             onKeyDown={(e)=>{ if (e.key === 'Escape') { e.preventDefault(); setQuery('') } }}
+            style={{paddingRight: query.trim() ? 32 : undefined}}
           />
+          {query.trim() && (
+            <button 
+              type="button"
+              onClick={()=>{ setQuery(''); searchInputRef.current?.focus() }}
+              style={{
+                position:'absolute', right:8, top:'50%', transform:'translateY(-50%)',
+                background:'none', border:'none', padding:4, cursor:'pointer',
+                fontSize:18, lineHeight:1, color:'#888', fontWeight:'bold'
+              }}
+              aria-label="Limpiar búsqueda"
+            >✕</button>
+          )}
         </div>
       </div>
 
@@ -898,6 +918,7 @@ function PanelPago({ onClose, onPagar, onReset, maxCuotas = 99, cuotaMonto = 0, 
         <div style={{display:'flex', alignItems:'center', justifyContent:'center', marginTop:12}}>
           <input type="text" inputMode="numeric" placeholder="$ monto" pattern="[0-9]*"
                  value={montoBase}
+                 maxLength={20}
                  onChange={(e)=>{
                    const raw = e.target.value.replace(/[^0-9]/g,'')
                    setMontoBase(formatMoney(Number(raw||0)))
