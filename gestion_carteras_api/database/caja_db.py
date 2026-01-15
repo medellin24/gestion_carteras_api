@@ -348,7 +348,7 @@ def _calcular_cartera_al_corte(cur, fecha_corte_utc, fecha_corte_local_date, emp
         
         filtros_estado = """
             AND (
-                COALESCE(estado,'activa') NOT ILIKE 'cancelad%%' 
+                (COALESCE(estado,'activa') NOT ILIKE 'cancelad%%' AND COALESCE(estado,'activa') NOT ILIKE 'pendiente%%')
                 OR (t.fecha_cancelacion IS NOT NULL AND t.fecha_cancelacion > %s)
             )
         """
