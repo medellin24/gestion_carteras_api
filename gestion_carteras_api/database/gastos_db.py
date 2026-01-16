@@ -92,6 +92,7 @@ def agregar_gasto(empleado_identificacion: str, tipo: str, valor: Decimal,
                   fecha: date = None, observacion: str = None) -> Optional[int]:
     """Agrega un nuevo gasto"""
     try:
+        # Si no viene fecha, usamos HOY local (por defecto date.today() usa la del servidor)
         if fecha is None:
             fecha = date.today()
         
@@ -101,11 +102,29 @@ def agregar_gasto(empleado_identificacion: str, tipo: str, valor: Decimal,
             return None
         
         with DatabasePool.get_cursor() as cursor:
-            cursor.execute('''
+            # Determinamos qué poner en fecha_creacion (TIMESTAMP)
+            # Si la fecha es HOY, usamos NOW() para tener la hora exacta real.
+            # Si la fecha es diferente a HOY (pasado/futuro), usamos esa fecha a las 12:00:00
+            # para evitar que el desfase de zona horaria lo mueva de día.
+            
+            es_hoy = (fecha == date.today())
+            
+            if es_hoy:
+                ts_creacion_sql = "NOW()"
+                params = (empleado_identificacion, tipo, fecha, valor, observacion)
+            else:
+                # Forzamos una hora segura para evitar que el desfase de zona horaria lo mueva de día.
+                # Combinamos la fecha con las 12:00:00.
+                from datetime import time as _time
+                ts_creacion_val = datetime.combine(fecha, _time(12, 0, 0))
+                ts_creacion_sql = "%s"
+                params = (empleado_identificacion, tipo, fecha, valor, observacion, ts_creacion_val)
+
+            cursor.execute(f'''
                 INSERT INTO gastos (empleado_identificacion, tipo, fecha, valor, observacion, fecha_creacion)
-                VALUES (%s, %s, %s, %s, %s, NOW())
+                VALUES (%s, %s, %s, %s, %s, {ts_creacion_sql})
                 RETURNING id
-            ''', (empleado_identificacion, tipo, fecha, valor, observacion))
+            ''', params)
             
             return cursor.fetchone()[0]
             

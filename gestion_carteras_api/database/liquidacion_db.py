@@ -368,6 +368,14 @@ def mover_liquidacion(empleado_identificacion: str, fecha_origen: date, fecha_de
             ''', (fecha_destino, empleado_identificacion, fecha_origen))
 
             # 4. Bases
+            # Verificar si ya existe base en destino para evitar conflicto
+            cursor.execute(
+                "SELECT 1 FROM bases WHERE empleado_id = %s AND fecha = %s",
+                (empleado_identificacion, fecha_destino)
+            )
+            if cursor.fetchone():
+                raise ValueError(f"El empleado ya tiene una base asignada en la fecha destino ({fecha_destino}). No se puede mover la liquidación.")
+
             cursor.execute('''
                 UPDATE bases
                 SET fecha = %s
@@ -386,6 +394,9 @@ def mover_liquidacion(empleado_identificacion: str, fecha_origen: date, fecha_de
 
         return True
 
+    except ValueError:
+        # Re-lanzar errores de validación conocidos
+        raise
     except Exception as e:
         logger.error(f"Error al mover liquidación: {e}")
         return False

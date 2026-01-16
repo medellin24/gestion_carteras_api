@@ -157,7 +157,8 @@ def get_datacredito_report(identificacion: str, principal: dict = Depends(get_cu
             empresa_label = get_empresa_label(tarjeta_cuenta_id, t.get("empleado_identificacion"))
             
             abonos = obtener_abonos_por_tarjeta(codigo)
-            indicadores = RiskEngine.calcular_indicadores_tarjeta_activa(t, abonos)
+            user_timezone = principal.get("timezone", "America/Bogota")
+            indicadores = RiskEngine.calcular_indicadores_tarjeta_activa(t, abonos, timezone_name=user_timezone)
             
             # Crear objeto IndicadoresTarjeta
             fecha_inicio_val = t.get('fecha_creacion') or t.get('fecha')

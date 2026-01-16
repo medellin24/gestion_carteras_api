@@ -2027,22 +2027,33 @@ class FrameLiquidacion(ttk.Frame):
                 if fecha_destino == fecha_origen:
                     messagebox.showinfo("Información", "La fecha destino es la misma que la origen.", parent=top)
                     return
-
+                
                 if not messagebox.askyesno("Confirmar", f"¿Mover TODOS los datos (abonos, tarjetas, gastos, bases)\ndel {fecha_origen} al {fecha_destino}?", parent=top):
                     return
                 
+                # Intentar mover vía API
                 res = self.api_client.mover_liquidacion(self.empleado_actual_id, fecha_origen, fecha_destino)
-                if res.get('ok'):
+                
+                if res and res.get('ok'):
                     messagebox.showinfo("Éxito", "Liquidación movida correctamente.", parent=top)
                     top.destroy()
                     # Refrescar view
                     self.limpiar_datos_liquidacion()
                     self.actualizar_liquidacion()
                 else:
-                    msg = res.get('detail') or "Error desconocido"
-                    messagebox.showerror("Error", f"Error al mover: {msg}", parent=top)
+                    messagebox.showerror("Error", "No se pudo mover la liquidación", parent=top)
+                        
             except Exception as e:
-                messagebox.showerror("Error", f"Fecha inválida o error: {e}", parent=top)
+                # Capturar el mensaje de error de la API (ej. conflicto de bases)
+                err_msg = str(e)
+                # Si el error contiene el mensaje de la base duplicada, mostrarlo amigablemente
+                if "ya tiene una base" in err_msg:
+                    # Extraer el mensaje limpio si es posible
+                    clean_msg = err_msg.split("Error de validación:")[-1].strip() if "Error de validación:" in err_msg else err_msg
+                    messagebox.showerror("Conflicto de Datos", 
+                        f"No se puede mover la liquidación:\n\n{clean_msg}", parent=top)
+                else:
+                    messagebox.showerror("Error", f"Ocurrió un error al mover: {err_msg}", parent=top)
 
         ttk.Button(top, text="Confirmar Movimiento", command=confirmar, style='Blue.TButton').pack(pady=20)
 

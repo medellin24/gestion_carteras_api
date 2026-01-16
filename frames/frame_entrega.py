@@ -1657,8 +1657,44 @@ class FrameEntrega(ttk.Frame):
                     messagebox.showerror("Error de API", "No se pudo actualizar el estado de la tarjeta.")
             
             # Actualizar labels con valores del resumen
-            self.info_labels['Cuotas'].config(
-                text=f"{resumen['cuotas_restantes']} cuota(s) de $ {Decimal(resumen['valor_cuota']):,.0f}")
+            # Lógica para mostrar cuotas residuales si existen
+            cuotas_rest = int(resumen.get('cuotas_restantes', 0))
+            saldo = Decimal(str(resumen.get('saldo_pendiente', 0)))
+            
+            # Recalcular valor exacto de cuota base (monto total / cuotas totales)
+            total_abonado = Decimal(str(resumen.get('total_abonado', 0)))
+            monto_teorico = total_abonado + saldo
+            cuotas_totales = int(resumen.get('cuotas', 1) or 1)
+            valor_cuota_exacto = monto_teorico / cuotas_totales
+            
+            # Formatear el valor base para mostrar
+            if valor_cuota_exacto % 1 == 0:
+                txt_valor_base = f"$ {valor_cuota_exacto:,.0f}"
+            else:
+                txt_valor_base = f"$ {valor_cuota_exacto:,.2f}"
+
+            # Detectar residuo en la última cuota restante
+            # Si el saldo pendiente no es múltiplo "casi exacto" de la cuota base...
+            # (usamos una tolerancia pequeña por flotantes)
+            es_multiplo = (saldo % valor_cuota_exacto) == 0
+            if not es_multiplo and abs((saldo % valor_cuota_exacto) - valor_cuota_exacto) > Decimal('0.01'):
+                # Hay una cuota residual distinta
+                cuotas_enteras = int(saldo // valor_cuota_exacto)
+                residuo = saldo - (valor_cuota_exacto * cuotas_enteras)
+                
+                if residuo > 0:
+                    if residuo % 1 == 0:
+                        txt_residuo = f"$ {residuo:,.0f}"
+                    else:
+                        txt_residuo = f"$ {residuo:,.2f}"
+                        
+                    texto_final = f"{cuotas_enteras} cuota(s) de {txt_valor_base} y una de {txt_residuo}"
+                else:
+                    texto_final = f"{cuotas_rest} cuota(s) de {txt_valor_base}"
+            else:
+                texto_final = f"{cuotas_rest} cuota(s) de {txt_valor_base}"
+
+            self.info_labels['Cuotas'].config(text=texto_final)
 
             # Modalidad (si el backend la incluye; fallback a diario)
             try:
@@ -2024,19 +2060,69 @@ class FrameEntrega(ttk.Frame):
             self.cargar_datos_tarjeta_diferido(self.tarjeta_seleccionada)
 
     def actualizar_monto_cuota_defecto(self, resumen: dict):
-        """Actualiza el campo de monto con el valor de la cuota por defecto desde el resumen"""
+        """Actualiza el campo de monto de abono con el valor de la cuota por defecto"""
+        if not resumen:
+            return
+            
         try:
-            valor_cuota = Decimal(resumen.get('valor_cuota', 0))
+            # Calcular cuota exacta con decimales para precisión
+            total_abonado = Decimal(str(resumen.get('total_abonado', 0)))
+            saldo_pendiente = Decimal(str(resumen.get('saldo_pendiente', 0)))
+            # Monto total teórico = abonado + saldo
+            monto_total_teorico = total_abonado + saldo_pendiente
+            
+            num_cuotas = int(resumen.get('cuotas', 0) or 1)
+            # Calcular cuota exacta sin redondear
+            valor_exacto = monto_total_teorico / num_cuotas
+            
+            # Formatear: si tiene decimales significativos usar .2f, si no .0f
+            if valor_exacto % 1 == 0:
+                txt_val = f"{valor_exacto:,.0f}"
+            else:
+                txt_val = f"{valor_exacto:,.2f}"
+            
             self.entry_monto_abono.delete(0, tk.END)
-            self.entry_monto_abono.insert(0, f"{valor_cuota:,.0f}")
+            self.entry_monto_abono.insert(0, txt_val)
         except Exception as e:
-            logger.error(f"Error al actualizar monto por defecto desde resumen: {e}")
+            logger.error(f"Error al establecer cuota por defecto: {e}")
 
     def _render_resumen_labels_sin_autocancel(self, resumen: dict):
         """Actualiza labels de resumen sin ejecutar la lógica de autocancelación."""
         try:
-            self.info_labels['Cuotas'].config(
-                text=f"{resumen.get('cuotas_restantes', 0)} cuota(s) de $ {Decimal(resumen.get('valor_cuota', 0)):,.0f}")
+            # Lógica para mostrar cuotas residuales si existen
+            cuotas_rest = int(resumen.get('cuotas_restantes', 0))
+            saldo = Decimal(str(resumen.get('saldo_pendiente', 0)))
+            
+            # Recalcular valor exacto de cuota base (monto total / cuotas totales)
+            total_abonado = Decimal(str(resumen.get('total_abonado', 0)))
+            monto_teorico = total_abonado + saldo
+            cuotas_totales = int(resumen.get('cuotas', 1) or 1)
+            valor_cuota_exacto = monto_teorico / cuotas_totales
+            
+            # Formatear el valor base para mostrar
+            if valor_cuota_exacto % 1 == 0:
+                txt_valor_base = f"$ {valor_cuota_exacto:,.0f}"
+            else:
+                txt_valor_base = f"$ {valor_cuota_exacto:,.2f}"
+
+            # Detectar residuo en la última cuota restante
+            es_multiplo = (saldo % valor_cuota_exacto) == 0
+            if not es_multiplo and abs((saldo % valor_cuota_exacto) - valor_cuota_exacto) > Decimal('0.01'):
+                cuotas_enteras = int(saldo // valor_cuota_exacto)
+                residuo = saldo - (valor_cuota_exacto * cuotas_enteras)
+                if residuo > 0:
+                    if residuo % 1 == 0:
+                        txt_residuo = f"$ {residuo:,.0f}"
+                    else:
+                        txt_residuo = f"$ {residuo:,.2f}"
+                    texto_final = f"{cuotas_enteras} cuota(s) de {txt_valor_base} y una de {txt_residuo}"
+                else:
+                    texto_final = f"{cuotas_rest} cuota(s) de {txt_valor_base}"
+            else:
+                texto_final = f"{cuotas_rest} cuota(s) de {txt_valor_base}"
+
+            self.info_labels['Cuotas'].config(text=texto_final)
+            
             # Modalidad (si viene en resumen; fallback a diario)
             try:
                 modalidad = str(resumen.get('modalidad_pago') or 'diario')

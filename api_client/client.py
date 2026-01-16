@@ -96,6 +96,44 @@ class APIClient:
                         # HTML o texto plano
                         error_message = response.text[:300] if response.text else error_message
                 
+                if response.status_code == 401:
+                    # Intento de renovación automática de token (Refresh Token)
+                    # Solo intentar si NO es la ruta de login o refresh para evitar bucle infinito
+                    if endpoint not in ('/auth/login', '/auth/refresh') and getattr(self, '_refresh_token', None):
+                        logger.info("Token expirado (401). Intentando renovar con refresh token...")
+                        try:
+                            # Intentar renovar
+                            self.refresh()
+                            # Si tuvo éxito, actualizar headers y reintentar la petición original
+                            # (La nueva petición usará self.config.auth_token actualizado)
+                            logger.info("Token renovado con éxito. Reintentando petición original.")
+                            # Recursividad segura: reintentar UNA vez
+                            # Usamos el nuevo token en el header para la siguiente llamada
+                            # Ojo: 'response' se sobrescribirá si funciona
+                            # NOTA: Debemos tener cuidado con los reintentos del loop 'for attempt'.
+                            # Simplemente continuamos el loop o hacemos llamada directa.
+                            # Haremos llamada directa para no quemar intentos del loop externo
+                            
+                            # Reconstruir URL por si acaso
+                            retry_url = self.config.get_endpoint_url(endpoint)
+                            retry_response = self.session.request(method=method, url=retry_url, json=data, params=params)
+                            
+                            if 200 <= retry_response.status_code < 300:
+                                if not retry_response.content:
+                                    return {}
+                                try:
+                                    return retry_response.json()
+                                except ValueError:
+                                    return {"raw": retry_response.text}
+                            
+                            # Si falla el reintento, devolver ese error (probablemente 401 de nuevo o 403)
+                            response = retry_response # Actualizar response para el manejo de errores abajo
+                            
+                        except Exception as e:
+                            logger.warning(f"Fallo al renovar token automáticamente: {e}")
+                            # Si falla el refresh, dejar pasar el 401 original
+                            pass
+
                 if response.status_code == 404:
                     raise APIError(f"Recurso no encontrado: {endpoint}", response.status_code, error_data)
                 elif response.status_code == 400:

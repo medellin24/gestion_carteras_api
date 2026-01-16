@@ -1,6 +1,10 @@
 from datetime import date, datetime, timedelta
 import math
 from typing import List, Dict, Any, Optional
+try:
+    from zoneinfo import ZoneInfo
+except ImportError:
+    from backports.zoneinfo import ZoneInfo # type: ignore
 
 class RiskEngine:
     @staticmethod
@@ -124,19 +128,61 @@ class RiskEngine:
         return int(acumulado / divisor)
 
     @staticmethod
-    def calcular_indicadores_tarjeta_activa(tarjeta: Dict[str, Any], abonos: List[Dict[str, Any]], fecha_calculo: date = None) -> Dict[str, Any]:
+    def calcular_indicadores_tarjeta_activa(tarjeta: Dict[str, Any], abonos: List[Dict[str, Any]], fecha_calculo: date = None, timezone_name: str = 'UTC') -> Dict[str, Any]:
         """
         Calcula los 3 indicadores clave + Score para una tarjeta activa.
+        Soporta timezone para convertir fechas UTC (BD) a local antes de procesar días.
         """
         if not fecha_calculo:
             fecha_calculo = date.today()
 
+        # Helper para manejar timezones y normalizar a date local
+        def _to_local_date(val: Any) -> Optional[date]:
+            if val is None: return None
+            
+            # Si es datetime (tiene hora), convertir a la TZ destino
+            if isinstance(val, datetime):
+                # Si viene naive (sin tz), asumimos UTC (que es como suele guardar Postgres/ORM)
+                if val.tzinfo is None:
+                    val = val.replace(tzinfo=ZoneInfo("UTC"))
+                
+                # Convertir a la zona horaria solicitada
+                try:
+                    val_local = val.astimezone(ZoneInfo(timezone_name))
+                    return val_local.date()
+                except Exception:
+                    # Fallback si timezone_name es inválido
+                    return val.date()
+
+            if isinstance(val, date):
+                return val
+
+            if isinstance(val, str):
+                try:
+                    # Intentar parsear como datetime ISO primero
+                    # str(val) podría ser '2025-12-12 23:19:11.301362'
+                    dt = datetime.fromisoformat(str(val))
+                    return _to_local_date(dt)
+                except ValueError:
+                    try:
+                        # Si falla, intentar solo fecha YYYY-MM-DD
+                        return date.fromisoformat(str(val)[:10])
+                    except:
+                        return None
+            return None
+
         # Datos básicos
-        fecha_inicio = tarjeta.get('fecha_creacion') or tarjeta.get('fecha')
-        if isinstance(fecha_inicio, datetime):
-            fecha_inicio = fecha_inicio.date()
-        elif isinstance(fecha_inicio, str):
-            fecha_inicio = date.fromisoformat(str(fecha_inicio)[:10])
+        fecha_inicio_raw = tarjeta.get('fecha_creacion') or tarjeta.get('fecha')
+        fecha_inicio = _to_local_date(fecha_inicio_raw)
+        
+        # Fallback si falla conversión
+        if not fecha_inicio:
+            # Intento crudo
+            try:
+                if isinstance(fecha_inicio_raw, datetime): fecha_inicio = fecha_inicio_raw.date()
+                else: fecha_inicio = date.fromisoformat(str(fecha_inicio_raw)[:10])
+            except:
+                fecha_inicio = date.today() # Fallback extremo
 
         cuotas_pactadas = int(tarjeta.get('cuotas', 1))
         monto_capital = float(tarjeta.get('monto', 0))
@@ -153,29 +199,14 @@ class RiskEngine:
         es_cancelada = estado == 'cancelada'
         fecha_cancelacion = tarjeta.get('fecha_cancelacion')
 
-        # Helper: normalizar fecha (date/datetime/str) a date
-        def _to_date(x) -> Optional[date]:
-            if x is None:
-                return None
-            if isinstance(x, datetime):
-                return x.date()
-            if isinstance(x, date):
-                return x
-            if isinstance(x, str):
-                try:
-                    return date.fromisoformat(str(x)[:10])
-                except Exception:
-                    return None
-            return None
-
         # Si está cancelada pero NO tiene fecha_cancelacion (datos viejos),
         # usamos la fecha del último abono como proxy de cierre.
         fecha_fin_real: Optional[date] = None
         if es_cancelada:
-            fecha_fin_real = _to_date(fecha_cancelacion)
+            fecha_fin_real = _to_local_date(fecha_cancelacion)
             if fecha_fin_real is None and abonos:
                 try:
-                    fechas_ab = [_to_date(a.get('fecha')) for a in abonos]
+                    fechas_ab = [_to_local_date(a.get('fecha')) for a in abonos]
                     fechas_ab = [f for f in fechas_ab if f is not None]
                     if fechas_ab:
                         fecha_fin_real = max(fechas_ab)
@@ -231,10 +262,9 @@ class RiskEngine:
         
         abonos_por_fecha = {}
         for a in abonos:
-            f = a.get('fecha')
-            if isinstance(f, datetime): f = f.date()
-            elif isinstance(f, str): f = date.fromisoformat(str(f)[:10])
-            abonos_por_fecha[f] = abonos_por_fecha.get(f, 0) + float(a.get('monto', 0))
+            f = _to_local_date(a.get('fecha'))
+            if f:
+                abonos_por_fecha[f] = abonos_por_fecha.get(f, 0) + float(a.get('monto', 0))
 
         total_abonado_acum = 0
         
@@ -265,12 +295,29 @@ class RiskEngine:
             # Un día se considera "cubierto" si:
             # A) Se hizo un abono ese mismo día (intención de pago).
             # B) El acumulado pagado >= deuda esperada hasta ese momento.
+            # C) [NUEVO] Gabela de 1 día para DIARIO: Si hoy falla, pero mañana se pone al día, hoy cuenta como bueno.
             
             cubierto = False
             if abono_hoy > 0:
                 cubierto = True
             elif total_abonado_acum >= (deuda_esperada - (valor_cuota * 0.1)): # Tolerancia 10% cuota
                 cubierto = True
+            
+            # Gabela para modalidad DIARIA (domingos/festivos/olvidos de 1 día)
+            if not cubierto and 'diario' in modalidad and i < dias_transcurridos:
+                # Mirar al día siguiente (i+1)
+                deuda_manana = valor_cuota * ((i + 1) // step_dias)
+                if deuda_manana > monto_total_con_interes: deuda_manana = monto_total_con_interes
+                
+                # Calcular acumulado hasta mañana
+                dia_manana = fecha_inicio + timedelta(days=i+1)
+                abono_manana = abonos_por_fecha.get(dia_manana, 0)
+                acumulado_manana = total_abonado_acum + abono_manana
+                
+                # Si mañana cumple con la deuda de mañana (recupera el atraso de hoy + cuota mañana)
+                # Ojo: la regla dice "si se atrasa un solo dia y al dia siguiente da las dos".
+                if acumulado_manana >= (deuda_manana - (valor_cuota * 0.1)):
+                    cubierto = True # Perdonado
             
             if cubierto:
                 dias_cubiertos += 1

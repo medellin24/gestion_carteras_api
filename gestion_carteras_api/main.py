@@ -2173,10 +2173,17 @@ def mover_liquidacion_endpoint(req: MoverLiquidacionRequest, principal: dict = D
     # Obtener timezone del usuario autenticado
     tz = principal.get('timezone') or 'UTC'
     
-    if mover_liquidacion(req.empleado_id, req.fecha_origen, req.fecha_destino, tz):
-        return {"ok": True, "message": "Liquidación movida correctamente"}
-    else:
-        raise HTTPException(status_code=500, detail="Error al mover liquidación")
+    try:
+        if mover_liquidacion(req.empleado_id, req.fecha_origen, req.fecha_destino, tz):
+            return {"ok": True, "message": "Liquidación movida correctamente"}
+        else:
+            raise HTTPException(status_code=500, detail="Error al mover liquidación")
+    except ValueError as e:
+        # Errores de validación (ej. base duplicada) -> 400 Bad Request
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"Error moviendo liquidación: {e}")
+        raise HTTPException(status_code=500, detail="Error interno al mover liquidación")
 
 # --- Endpoint de Resumen de Tarjeta ---
 
@@ -2273,6 +2280,7 @@ def read_tarjeta_resumen_endpoint(tarjeta_codigo: str, principal: dict = Depends
             "valor_cuota": float(valor_cuota),
             "saldo_pendiente": float(saldo_pendiente),
             "cuotas_restantes": int(cuotas_restantes),
+            "cuotas": int(cuotas),  # Agregado para frontend
             "cuotas_pendientes_a_la_fecha": int(cuotas_pendientes_a_la_fecha),
             "dias_pasados_cancelacion": int(dias_pasados_cancelacion),
             "fecha_vencimiento": fecha_venc.isoformat() if fecha_venc else None,
