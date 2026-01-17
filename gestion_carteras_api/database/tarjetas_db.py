@@ -1064,10 +1064,10 @@ def listar_tarjetas_sin_abono_dia(empleado_identificacion: str, fecha_filtro: da
         logger.error(f"Error al listar tarjetas sin abono: {e}")
         return []
 
-def calcular_total_clavos(empleado_identificacion: Optional[str], fecha_corte: date) -> Decimal:
+def calcular_total_clavos(empleado_identificacion: Optional[str], fecha_corte: date, cuenta_id: Optional[int] = None) -> Decimal:
     """
     Calcula el saldo total de tarjetas 'activas' que tienen más de 60 días de vencidas
-    a la fecha de corte.
+    a la fecha de corte. Aislado por cuenta si se proporciona cuenta_id.
     
     Criterio Clavo: (Fecha Corte - Fecha Vencimiento) >= 60 días.
     Fecha Vencimiento = Fecha Creación + (Cuotas * Factor Modalidad)
@@ -1075,18 +1075,21 @@ def calcular_total_clavos(empleado_identificacion: Optional[str], fecha_corte: d
     """
     try:
         with DatabasePool.get_cursor() as cursor:
-            # Primero obtenemos las tarjetas activas y sus datos para calcular en Python
-            # (Más fácil que manejar la lógica de modalidad compleja en SQL puro portable)
+            # Filtros de aislamiento
+            where_clauses = ["t.estado = 'activas'"]
+            params = []
             
-            # Filtro de empleado
             if empleado_identificacion:
-                where_emp = "AND t.empleado_identificacion = %s"
-                params = (empleado_identificacion,)
-            else:
-                where_emp = ""
-                params = ()
+                where_clauses.append("t.empleado_identificacion = %s")
+                params.append(empleado_identificacion)
+            
+            if cuenta_id is not None:
+                where_clauses.append("e.cuenta_id = %s")
+                params.append(cuenta_id)
 
             modalidad_expr = "COALESCE(t.modalidad_pago, 'diario')" if _modalidad_column_exists() else "'diario'"
+            
+            where_sql = " AND ".join(where_clauses)
             
             query = f'''
                 SELECT 
@@ -1098,10 +1101,10 @@ def calcular_total_clavos(empleado_identificacion: Optional[str], fecha_corte: d
                     t.interes,
                     COALESCE(SUM(a.monto), 0) as abonado
                 FROM tarjetas t
+                JOIN empleados e ON t.empleado_identificacion = e.identificacion
                 LEFT JOIN abonos a ON t.codigo = a.tarjeta_codigo
-                WHERE t.estado = 'activas'
-                  {where_emp}
-                GROUP BY t.codigo
+                WHERE {where_sql}
+                GROUP BY t.codigo, t.fecha_creacion, t.cuotas, t.modalidad_pago, t.monto, t.interes
             '''
             cursor.execute(query, params)
             rows = cursor.fetchall()

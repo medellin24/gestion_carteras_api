@@ -332,7 +332,7 @@ def obtener_salidas(fecha_desde: date, fecha_hasta: date, empleado_id: Optional[
         return []
 
 
-def _calcular_cartera_al_corte(cur, fecha_corte_utc, fecha_corte_local_date, empleado_id=None) -> Decimal:
+def _calcular_cartera_al_corte(cur, fecha_corte_utc, fecha_corte_local_date, empleado_id=None, cuenta_id=None) -> Decimal:
     """Calcula el saldo pendiente de la cartera activa a una fecha de corte.
     
     Snapshot histórico preciso:
@@ -380,18 +380,22 @@ def _calcular_cartera_al_corte(cur, fecha_corte_utc, fecha_corte_local_date, emp
             # Parámetros: empleado, fecha_limite_creacion(UTC), fecha_corte_cancelacion(DATE), fecha_limite_abonos(UTC)
             cur.execute(sql, (empleado_id, fecha_corte_utc, fecha_corte_local_date, fecha_corte_utc))
         else:
+            # Consolidado por cuenta
             sql = (
                 f"""
                 WITH tarjetas_all AS (
-                  SELECT codigo, monto, COALESCE(interes,0)::numeric AS interes
+                  SELECT t.codigo, t.monto, COALESCE(t.interes,0)::numeric AS interes
                   FROM tarjetas t
-                  WHERE t.fecha_creacion <= %s
+                  JOIN empleados e ON t.empleado_identificacion = e.identificacion
+                  WHERE e.cuenta_id = %s
+                    AND t.fecha_creacion <= %s
                     {filtros_estado}
                 ),
                 tot_abonos AS (
                   SELECT a.tarjeta_codigo, COALESCE(SUM(a.monto),0) AS abonado
                   FROM abonos a
                   WHERE a.fecha <= %s
+                    AND a.tarjeta_codigo IN (SELECT codigo FROM tarjetas_all)
                   GROUP BY a.tarjeta_codigo
                 )
                 SELECT COALESCE(SUM(
@@ -401,8 +405,8 @@ def _calcular_cartera_al_corte(cur, fecha_corte_utc, fecha_corte_local_date, emp
                 LEFT JOIN tot_abonos ta ON ta.tarjeta_codigo = t.codigo
                 """
             )
-            # Parámetros: fecha_limite_creacion(UTC), fecha_corte_cancelacion(DATE), fecha_limite_abonos(UTC)
-            cur.execute(sql, (fecha_corte_utc, fecha_corte_local_date, fecha_corte_utc))
+            # Parámetros: cuenta_id, fecha_limite_creacion(UTC), fecha_corte_cancelacion(DATE), fecha_limite_abonos(UTC)
+            cur.execute(sql, (cuenta_id, fecha_corte_utc, fecha_corte_local_date, fecha_corte_utc))
             
         r = cur.fetchone()
         return Decimal(str((r[0] if (r and len(r) > 0) else 0) or 0))
@@ -411,8 +415,8 @@ def _calcular_cartera_al_corte(cur, fecha_corte_utc, fecha_corte_local_date, emp
         return Decimal('0')
 
 
-def obtener_metricas_contabilidad(desde: date, hasta: date, empleado_id: Optional[str] = None, timezone_name: Optional[str] = None) -> Dict:
-    """Calcula métricas de contabilidad para el rango."""
+def obtener_metricas_contabilidad(desde: date, hasta: date, empleado_id: Optional[str] = None, timezone_name: Optional[str] = None, cuenta_id: Optional[int] = None) -> Dict:
+    """Calcula métricas de contabilidad para el rango, aisladas por cuenta."""
     from datetime import datetime as _dt, timezone as _tz, timedelta
     # Preparar zona horaria local (desde token/cuenta) para convertir a UTC
     try:
@@ -444,9 +448,7 @@ def obtener_metricas_contabilidad(desde: date, hasta: date, empleado_id: Optiona
         start_naive = start_utc.replace(tzinfo=None)
         end_naive = end_utc.replace(tzinfo=None)
         with DatabasePool.get_cursor() as cur:
-            # ... (código existente de cobrado, prestamos, gastos, bases, salidas) ...
-
-
+            # COBRADO
             if empleado_id:
                 cur.execute(
                     """
@@ -463,9 +465,12 @@ def obtener_metricas_contabilidad(desde: date, hasta: date, empleado_id: Optiona
                     """
                     SELECT COALESCE(SUM(a.monto),0), COUNT(*)
                     FROM abonos a
-                    WHERE a.fecha >= %s AND a.fecha <= %s
+                    JOIN tarjetas t ON a.tarjeta_codigo = t.codigo
+                    JOIN empleados e ON t.empleado_identificacion = e.identificacion
+                    WHERE e.cuenta_id = %s
+                      AND a.fecha >= %s AND a.fecha <= %s
                     """,
-                    (start_naive, end_naive),
+                    (cuenta_id, start_naive, end_naive),
                 )
             row = cur.fetchone()
             if not row:
@@ -498,9 +503,11 @@ def obtener_metricas_contabilidad(desde: date, hasta: date, empleado_id: Optiona
                     """
                     SELECT COALESCE(SUM(t.monto),0), COALESCE(SUM(t.monto * t.interes/100.0),0)
                     FROM tarjetas t
-                    WHERE t.fecha_creacion >= %s AND t.fecha_creacion <= %s
+                    JOIN empleados e ON t.empleado_identificacion = e.identificacion
+                    WHERE e.cuenta_id = %s
+                      AND t.fecha_creacion >= %s AND t.fecha_creacion <= %s
                     """,
-                    (start_naive, end_naive),
+                    (cuenta_id, start_naive, end_naive),
                 )
             row = cur.fetchone()
             if not row:
@@ -532,9 +539,11 @@ def obtener_metricas_contabilidad(desde: date, hasta: date, empleado_id: Optiona
                     """
                     SELECT COALESCE(SUM(g.valor),0)
                     FROM gastos g
-                    WHERE g.fecha_creacion >= %s AND g.fecha_creacion <= %s
+                    JOIN empleados e ON g.empleado_identificacion = e.identificacion
+                    WHERE e.cuenta_id = %s
+                      AND g.fecha_creacion >= %s AND g.fecha_creacion <= %s
                     """,
-                    (start_naive, end_naive),
+                    (cuenta_id, start_naive, end_naive),
                 )
             r = cur.fetchone()
             totals["total_gastos"] = Decimal(str((r[0] if (r and len(r)>0) else 0) or 0))
@@ -554,9 +563,10 @@ def obtener_metricas_contabilidad(desde: date, hasta: date, empleado_id: Optiona
                     """
                     SELECT COALESCE(SUM(b.monto),0)
                     FROM bases b
-                    WHERE b.fecha >= %s AND b.fecha <= %s
+                    JOIN empleados e ON b.empleado_id = e.identificacion
+                    WHERE e.cuenta_id = %s AND b.fecha >= %s AND b.fecha <= %s
                     """,
-                    (desde, hasta),
+                    (cuenta_id, desde, hasta),
                 )
             r = cur.fetchone()
             totals["total_bases"] = Decimal(str((r[0] if (r and len(r)>0) else 0) or 0))
@@ -576,10 +586,11 @@ def obtener_metricas_contabilidad(desde: date, hasta: date, empleado_id: Optiona
                 cur.execute(
                     """
                     SELECT COALESCE(SUM(COALESCE(dividendos,0)),0), COALESCE(SUM(COALESCE(entradas,0)),0)
-                    FROM control_caja
-                    WHERE fecha >= %s AND fecha <= %s
+                    FROM control_caja c
+                    JOIN empleados e ON c.empleado_identificacion = e.identificacion
+                    WHERE e.cuenta_id = %s AND c.fecha >= %s AND c.fecha <= %s
                     """,
-                    (desde, hasta),
+                    (cuenta_id, desde, hasta),
                 )
             r = cur.fetchone()
             totals["total_salidas"] = Decimal(str((r[0] if (r and len(r)>0) else 0) or 0))
@@ -590,7 +601,7 @@ def obtener_metricas_contabilidad(desde: date, hasta: date, empleado_id: Optiona
             if hasta:
                 # end_naive es el fin del día 'hasta' en UTC.
                 # 'hasta' es la fecha local. Si se cancela mañana, hoy sigue activa.
-                totals["cartera_en_calle"] = _calcular_cartera_al_corte(cur, end_naive, hasta, empleado_id)
+                totals["cartera_en_calle"] = _calcular_cartera_al_corte(cur, end_naive, hasta, empleado_id, cuenta_id)
             
             # 2. Cartera al inicio del periodo (desde)
             # start_naive es el inicio del día 'desde' en UTC (00:00 local).
@@ -600,7 +611,7 @@ def obtener_metricas_contabilidad(desde: date, hasta: date, empleado_id: Optiona
                 # Por eso usamos (desde - 1 día) como referencia de corte para cancelación.
                 # fecha_cancelacion (hoy) > (ayer) -> True -> Activa.
                 ayer = desde - timedelta(days=1)
-                totals["cartera_en_calle_desde"] = _calcular_cartera_al_corte(cur, start_naive, ayer, empleado_id)
+                totals["cartera_en_calle_desde"] = _calcular_cartera_al_corte(cur, start_naive, ayer, empleado_id, cuenta_id)
             
             # Calcular TOTAL EFECTIVO (Cobrado + Base - Prestamos - Gastos)
             # Nota: Esto es puramente efectivo operativo, no incluye entradas/salidas de caja
@@ -613,34 +624,46 @@ def obtener_metricas_contabilidad(desde: date, hasta: date, empleado_id: Optiona
 
             # Tarjetas Activas Históricas (al corte 'hasta')
             # Para mostrar "X de Y posibles" en reportes históricos
-            if hasta and empleado_id:
+            if hasta:
                 try:
-                    # Contar tarjetas que existían (creadas antes del fin del día)
-                    # Y que no estaban canceladas en ese momento (fecha_cancelacion > hasta)
-                    # O siguen activas hoy.
-                    q_activas = """
-                        SELECT COUNT(*)
-                        FROM tarjetas
-                        WHERE empleado_identificacion = %s
-                          AND fecha_creacion <= %s
-                          AND (
-                              estado = 'activas' OR 
-                              (estado IN ('cancelada', 'canceladas') AND fecha_cancelacion > %s)
-                          )
-                    """
-                    cur.execute(q_activas, (empleado_id, end_naive, hasta))
+                    if empleado_id:
+                        # Contar tarjetas que existían (creadas antes del fin del día)
+                        # Y que no estaban canceladas en ese momento (fecha_cancelacion > hasta)
+                        # O siguen activas hoy.
+                        q_activas = """
+                            SELECT COUNT(*)
+                            FROM tarjetas
+                            WHERE empleado_identificacion = %s
+                              AND fecha_creacion <= %s
+                              AND (
+                                  estado = 'activas' OR 
+                                  (estado IN ('cancelada', 'canceladas') AND fecha_cancelacion > %s)
+                              )
+                        """
+                        cur.execute(q_activas, (empleado_id, end_naive, hasta))
+                    else:
+                        q_activas = """
+                            SELECT COUNT(*)
+                            FROM tarjetas t
+                            JOIN empleados e ON t.empleado_identificacion = e.identificacion
+                            WHERE e.cuenta_id = %s
+                              AND t.fecha_creacion <= %s
+                              AND (
+                                  t.estado = 'activas' OR 
+                                  (t.estado IN ('cancelada', 'canceladas') AND t.fecha_cancelacion > %s)
+                              )
+                        """
+                        cur.execute(q_activas, (cuenta_id, end_naive, hasta))
                     totals["tarjetas_activas_historicas"] = cur.fetchone()[0]
                 except Exception as e:
                     logger.error(f"Error contando activas históricas: {e}")
                     totals["tarjetas_activas_historicas"] = 0
-            else:
-                totals["tarjetas_activas_historicas"] = 0
 
             # Calcular TOTAL CLAVOS
             # Usar la función de tarjetas_db
             try:
                 from .tarjetas_db import calcular_total_clavos
-                totals["total_clavos"] = calcular_total_clavos(empleado_id, hasta)
+                totals["total_clavos"] = calcular_total_clavos(empleado_id, hasta, cuenta_id)
             except Exception as e:
                 logger.error(f"Error calculando clavos en métricas: {e}")
 
@@ -678,14 +701,15 @@ def obtener_metricas_contabilidad(desde: date, hasta: date, empleado_id: Optiona
                 cur2.execute(
                     """
                     SELECT COALESCE(SUM(saldo_caja),0) FROM (
-                        SELECT DISTINCT ON (empleado_identificacion)
-                               empleado_identificacion, saldo_caja, fecha
-                        FROM control_caja
-                        WHERE fecha <= %s
-                        ORDER BY empleado_identificacion, fecha DESC
+                        SELECT DISTINCT ON (c.empleado_identificacion)
+                               c.empleado_identificacion, c.saldo_caja, c.fecha
+                        FROM control_caja c
+                        JOIN empleados e ON c.empleado_identificacion = e.identificacion
+                        WHERE e.cuenta_id = %s AND c.fecha <= %s
+                        ORDER BY c.empleado_identificacion, c.fecha DESC
                     ) x
                     """,
-                    (hasta,),
+                    (cuenta_id, hasta),
                 )
                 rr = cur2.fetchone()
                 caja_val = Decimal(str((rr[0] if (rr and len(rr)>0) else 0) or 0))

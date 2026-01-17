@@ -191,6 +191,7 @@ def contabilidad_metricas_endpoint(query: ContabilidadQuery, principal: dict = D
             hasta=query.hasta,
             empleado_id=query.empleado_id,
             timezone_name=tz_name,
+            cuenta_id=principal.get("cuenta_id")
         )
         # días en rango
         try:
