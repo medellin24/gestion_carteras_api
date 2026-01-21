@@ -25,10 +25,74 @@ export default defineConfig({
         scope: '/',
         categories: ['finance', 'business', 'productivity'],
         icons: [
-          { src: '/icons/home.png', sizes: '192x192', type: 'image/png', purpose: 'any maskable' },
-          { src: '/icons/home.png', sizes: '512x512', type: 'image/png', purpose: 'any maskable' },
-          { src: '/icons/manifest-icon-192.maskable.png', sizes: '192x192', type: 'image/png', purpose: 'any maskable' },
-          { src: '/icons/manifest-icon-512.maskable.png', sizes: '512x512', type: 'image/png', purpose: 'any maskable' }
+          {
+            src: '/icons/home.png',
+            sizes: '194x194',
+            type: 'image/png',
+            purpose: 'any'
+          },
+          {
+            src: '/icons/home.png',
+            sizes: '194x194',
+            type: 'image/png',
+            purpose: 'maskable'
+          },
+          {
+            src: '/icons/home_512.png',
+            sizes: '512x512',
+            type: 'image/png',
+            purpose: 'any'
+          },
+          {
+            src: '/icons/home_512.png',
+            sizes: '512x512',
+            type: 'image/png',
+            purpose: 'maskable'
+          }
+        ],
+        screenshots: [
+          {
+            src: '/screenshots/screenshot_1.png',
+            sizes: '1206x2622',
+            type: 'image/png',
+            form_factor: 'narrow',
+            label: 'Vista Principal'
+          },
+          {
+            src: '/screenshots/screenshot_2.png',
+            sizes: '1206x2622',
+            type: 'image/png',
+            form_factor: 'narrow',
+            label: 'Gestión de Tarjetas'
+          },
+          {
+            src: '/screenshots/screenshot_3.png',
+            sizes: '1206x2622',
+            type: 'image/png',
+            form_factor: 'narrow',
+            label: 'Detalle de Cobro'
+          },
+          {
+            src: '/screenshots/screenshot_4.png',
+            sizes: '1206x2622',
+            type: 'image/png',
+            form_factor: 'narrow',
+            label: 'Liquidación Diaria'
+          },
+          {
+            src: '/screenshots/screenshot_5.png',
+            sizes: '1206x2622',
+            type: 'image/png',
+            form_factor: 'narrow',
+            label: 'Estadísticas'
+          },
+          {
+            src: '/screenshots/screenshot_6.png',
+            sizes: '1206x2622',
+            type: 'image/png',
+            form_factor: 'narrow',
+            label: 'Configuración'
+          }
         ],
         shortcuts: [
           {

@@ -5,6 +5,7 @@ Toma todos los archivos PNG y los redimensiona.
 MEJORAS:
 - Soporte para imagen de login grande.
 - Modo 'fill' para íconos de app (home) para evitar bordes vacíos.
+- Match flexible (case-insensitive y por subcadena).
 """
 
 import os
@@ -40,7 +41,7 @@ def procesar_icono(img_path, ancho, alto, modo='fit'):
         return new_img
         
     except Exception as e:
-        print(f"❌ Error procesando {img_path}: {e}")
+        print(f"Error procesando {img_path}: {e}")
         return None
 
 def procesar_todos_los_iconos():
@@ -49,39 +50,42 @@ def procesar_todos_los_iconos():
     icons_dir = "assets/icons"
     
     if not os.path.exists(icons_dir):
-        print(f"❌ No se encontró la carpeta: {icons_dir}")
+        print(f"No se encontró la carpeta: {icons_dir}")
         return
     
     archivos_png = glob.glob(os.path.join(icons_dir, "*.png"))
     
     if not archivos_png:
-        print(f"⚠️  No se encontraron archivos PNG en {icons_dir}")
+        print(f"No se encontraron archivos PNG en {icons_dir}")
         return
     
-    print(f"🎨 Procesando {len(archivos_png)} archivos PNG...")
+    print(f"Procesando {len(archivos_png)} archivos PNG...")
     print("=" * 50)
     
     # Configuración: (ancho, alto, modo)
-    # modo 'fill' evita bordes transparentes/blancos en íconos de app
     config_iconos = {
         # Imágenes grandes
-        'login_image': (460, 360, 'fill'),  # AHORA TIENE TAMAÑO CORRECTO
+        'login_image': (460, 360, 'fill'),
         'profile_right': (176, 196, 'fit'),
         
-        # Íconos de App (PWA / Launcher) - Usamos 'fill' para quitar bordes
+        # Íconos de App (PWA / Launcher)
+        'home_512': (512, 512, 'fill'),
         'home': (194, 194, 'fill'),
         'app_store': (512, 512, 'fill'),
         'google_play': (512, 512, 'fill'),
 
-        # Íconos de UI (24x24)
+        # Íconos de UI (24x24 o 32x32)
+        'excel': (32, 32, 'fit'),
+        'informes': (32, 32, 'fit'),
+        'employee': (24, 24, 'fit'),
+        'money': (24, 24, 'fit'),
+        'user': (24, 24, 'fit'),
         'add': (24, 24, 'fit'),
         'edit': (24, 24, 'fit'), 
         'delete': (24, 24, 'fit'),
         'collector': (24, 24, 'fit'),
         'search': (24, 24, 'fit'),
         'date': (24, 24, 'fit'),
-        'money': (24, 24, 'fit'),
-        'user': (24, 24, 'fit'),
         
         # Íconos pequeños (16x16)
         'id': (16, 16, 'fit'),
@@ -91,27 +95,33 @@ def procesar_todos_los_iconos():
     
     for archivo in archivos_png:
         nombre_archivo = os.path.basename(archivo)
-        nombre_sin_ext = os.path.splitext(nombre_archivo)[0]
+        nombre_sin_ext = os.path.splitext(nombre_archivo)[0].lower()
         
-        # Determinar configuración
-        if nombre_sin_ext in config_iconos:
-            ancho, alto, modo = config_iconos[nombre_sin_ext]
-            print(f"🔄 Procesando {nombre_archivo} -> {ancho}x{alto} (modo: {modo})")
+        # Buscar el match más cercano en la configuración (prioridad a nombres más largos)
+        match_config = None
+        for key in sorted(config_iconos.keys(), key=len, reverse=True):
+            if key in nombre_sin_ext:
+                match_config = config_iconos[key]
+                break
+        
+        if match_config:
+            ancho, alto, modo = match_config
+            print(f"Procesando {nombre_archivo} -> {ancho}x{alto} (modo: {modo})")
         else:
             ancho, alto, modo = 24, 24, 'fit'
-            print(f"🔄 Procesando {nombre_archivo} -> {ancho}x{alto} (default)")
+            print(f"Procesando {nombre_archivo} -> {ancho}x{alto} (default 24x24)")
         
         img_procesada = procesar_icono(archivo, ancho, alto, modo)
         
         if img_procesada:
             img_procesada.save(archivo, "PNG")
-            print(f"✅ {nombre_archivo} guardado")
+            print(f"OK: {nombre_archivo} guardado")
         else:
-            print(f"❌ Error en {nombre_archivo}")
+            print(f"Error en {nombre_archivo}")
         
         print("-" * 30)
     
-    print("\n🎉 ¡Proceso terminado!")
+    print("\nProceso terminado!")
 
 if __name__ == "__main__":
     procesar_todos_los_iconos()
