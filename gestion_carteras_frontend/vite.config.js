@@ -8,7 +8,7 @@ export default defineConfig({
     VitePWA({
       registerType: 'autoUpdate',
       devOptions: { enabled: true },
-      includeAssets: ['favicon.svg', 'icons/app-icon.svg', 'icons/maskable-icon.svg'],
+      includeAssets: ['favicon.svg', 'icons/home.png', 'icons/home_512.png'],
       manifest: {
         id: '/',
         name: 'NeonBlue',
@@ -53,42 +53,42 @@ export default defineConfig({
         screenshots: [
           {
             src: '/screenshots/screenshot_1.png',
-            sizes: '1206x2622',
+            sizes: '1206x2483',
             type: 'image/png',
             form_factor: 'narrow',
             label: 'Vista Principal'
           },
           {
             src: '/screenshots/screenshot_2.png',
-            sizes: '1206x2622',
+            sizes: '1204x2459',
             type: 'image/png',
             form_factor: 'narrow',
             label: 'Gestión de Tarjetas'
           },
           {
             src: '/screenshots/screenshot_3.png',
-            sizes: '1206x2622',
+            sizes: '1205x2443',
             type: 'image/png',
             form_factor: 'narrow',
             label: 'Detalle de Cobro'
           },
           {
             src: '/screenshots/screenshot_4.png',
-            sizes: '1206x2622',
+            sizes: '1206x2490',
             type: 'image/png',
             form_factor: 'narrow',
             label: 'Liquidación Diaria'
           },
           {
             src: '/screenshots/screenshot_5.png',
-            sizes: '1206x2622',
+            sizes: '1206x2498',
             type: 'image/png',
             form_factor: 'narrow',
             label: 'Estadísticas'
           },
           {
             src: '/screenshots/screenshot_6.png',
-            sizes: '1206x2622',
+            sizes: '1206x2498',
             type: 'image/png',
             form_factor: 'narrow',
             label: 'Configuración'
@@ -100,21 +100,21 @@ export default defineConfig({
             short_name: 'Descargar',
             description: 'Descargar tarjetas para trabajar offline',
             url: '/descargar',
-            icons: [{ src: '/icons/manifest-icon-192.maskable.png', sizes: '192x192', type: 'image/png' }]
+            icons: [{ src: '/icons/home.png', sizes: '194x194', type: 'image/png' }]
           },
           {
             name: 'Ver tarjetas',
             short_name: 'Tarjetas',
             description: 'Ir a listado de tarjetas',
             url: '/tarjetas',
-            icons: [{ src: '/icons/manifest-icon-192.maskable.png', sizes: '192x192', type: 'image/png' }]
+            icons: [{ src: '/icons/home.png', sizes: '194x194', type: 'image/png' }]
           },
           {
             name: 'Subir cambios',
             short_name: 'Subir',
             description: 'Sincronizar cambios pendientes',
             url: '/subir',
-            icons: [{ src: '/icons/manifest-icon-192.maskable.png', sizes: '192x192', type: 'image/png' }]
+            icons: [{ src: '/icons/home.png', sizes: '194x194', type: 'image/png' }]
           }
         ]
       },
