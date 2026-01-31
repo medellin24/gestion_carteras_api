@@ -65,6 +65,7 @@ def procesar_todos_los_iconos():
     # Configuración: (ancho, alto, modo)
     config_iconos = {
         # Imágenes grandes
+        'imagen_funcion': (1024, 500, 'fill'),
         'login_image': (460, 360, 'fill'),
         'profile_right': (176, 196, 'fit'),
         

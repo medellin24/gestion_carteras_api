@@ -1,0 +1,11 @@
+[
+  {
+    "relation": ["delegate_permission/common.handle_all_urls"],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "dev.pages.gestion_carteras_api.twa",
+      "sha256_cert_fingerprints":
+        ["BD:87:EE:A9:7E:2C:EE:65:BD:69:86:EB:0D:7C:6A:B3:78:9A:3E:15:5A:64:2F:C0:AE:D9:61:93:05:DC:3F:19"]
+    }
+  }
+]
