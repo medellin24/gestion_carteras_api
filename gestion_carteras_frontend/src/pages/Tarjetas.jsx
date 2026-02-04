@@ -217,7 +217,15 @@ export default function TarjetasPage() {
           const code2 = sessionStorage.getItem('last_tarjeta_codigo') || scrollToCodigo
           if (code2) {
             const el2 = document.querySelector(`[data-tarjeta-id="${code2}"]`)
-            if (el2) { el2.scrollIntoView({ behavior: 'instant', block: 'start' }); return }
+            if (el2) { 
+              const header = document.querySelector('.app-header')
+              const headerH = header?.getBoundingClientRect()?.height || 0
+              const rect = el2.getBoundingClientRect()
+              const baseY = (window.scrollY || window.pageYOffset || 0)
+              const targetY = Math.max(0, baseY + rect.top - headerH - 6)
+              window.scrollTo({ top: targetY, behavior: 'instant' })
+              return 
+            }
           }
           // 3) Fallback: scroll absoluto guardado
           const saved = Number(sessionStorage.getItem('tarjetas_last_scroll') || '0')
@@ -505,7 +513,14 @@ function RecaudosOverlay({ tarjetas, abonosPorTarjeta, onClose }){
           {query.trim() && (
             <button 
               type="button"
-              onClick={()=>{ setQuery(''); searchInputRef.current?.focus() }}
+              onClick={()=>{ 
+                setQuery(''); 
+                // Al limpiar, desenfocar para ocultar teclado
+                if (searchInputRef.current) searchInputRef.current.blur()
+                // Restaurar scroll a la última tarjeta vista/interactuada si existe
+                const lastCode = sessionStorage.getItem('last_tarjeta_codigo')
+                if (lastCode) setScrollToCodigo(lastCode)
+              }}
               style={{
                 position:'absolute', right:8, top:'50%', transform:'translateY(-50%)',
                 background:'none', border:'none', padding:4, cursor:'pointer',
