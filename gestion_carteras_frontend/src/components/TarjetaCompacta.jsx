@@ -40,7 +40,7 @@ export default function TarjetaCompacta({
   // Color de borde/fondo según estado de abono
   const style = {
     display: 'grid',
-    gridTemplateColumns: '40px 1fr 100px 50px', // Ruta | Nombre | Input | Acción
+    gridTemplateColumns: '1fr 100px 50px', // Nombre | Input | Acción
     alignItems: 'center',
     gap: 8,
     padding: '8px 12px',
@@ -132,12 +132,7 @@ export default function TarjetaCompacta({
       onTouchMove={onTouchEnd} // Cancelar si mueve el dedo
       {...restProps}
     >
-      {/* Columna 1: Ruta */}
-      <div style={{fontWeight: 'bold', color: '#888', fontSize: 14}}>
-        {rutaNum ?? '-'}
-      </div>
-
-      {/* Columna 2: Nombre y Saldo */}
+      {/* Columna 1: Nombre y Saldo */}
       <div style={{overflow: 'hidden'}}>
         <div style={{fontWeight: 600, color: '#fff', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', fontSize: 15}}>
           {nombre}
@@ -170,7 +165,7 @@ export default function TarjetaCompacta({
         />
       </div>
 
-      {/* Columna 4: Acción */}
+      {/* Columna 3: Acción */}
       <div style={{display: 'flex', justifyContent: 'center'}}>
         {loading ? (
           <div className="spinner" style={{width:20, height:20}}></div>
@@ -183,8 +178,10 @@ export default function TarjetaCompacta({
               borderRadius: 6, 
               width: 36, 
               height: 36, 
-              display: 'grid', 
-              placeItems: 'center',
+              display: 'flex', 
+              alignItems: 'center',
+              justifyContent: 'center',
+              padding: 0,
               color: '#fff'
             }}
           >
@@ -199,8 +196,10 @@ export default function TarjetaCompacta({
               borderRadius: 6, 
               width: 36, 
               height: 36, 
-              display: 'grid', 
-              placeItems: 'center',
+              display: 'flex', 
+              alignItems: 'center',
+              justifyContent: 'center',
+              padding: 0,
               color: '#fff'
             }}
           >
