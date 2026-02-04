@@ -11,6 +11,7 @@ import GastosBasePage from './pages/GastosBase.jsx'
 import DataCreditoPage from './pages/DataCreditoPage.jsx'
 import BusquedaDataCreditoPage from './pages/BusquedaDataCreditoPage.jsx'
 import EncontrarClavo from './pages/EncontrarClavo.jsx'
+import OpcionesPage from './pages/Opciones.jsx'
 import { apiClient } from './api/client.js'
 import { formatDateYYYYMMDD } from './utils/date.js'
 import { readPlanInfo, persistPlanInfoFromLimits } from './utils/plan.js'
@@ -266,7 +267,7 @@ function App() {
       <Route path="/busqueda-datacredito" element={isAuthenticated ? <BusquedaDataCreditoPage /> : <Navigate to="/" replace />} />
       <Route path="/datacredito/:identificacion" element={isAuthenticated ? <DataCreditoPage /> : <Navigate to="/" replace />} />
       <Route path="/encontrar-clavo" element={isAuthenticated ? <EncontrarClavo /> : <Navigate to="/" replace />} />
-      <Route path="/opciones" element={isAuthenticated ? <div className="app-shell"><header className="app-header"><h1>Opciones</h1></header><main><p>Placeholder opciones.</p></main></div> : <Navigate to="/" replace />} />
+      <Route path="/opciones" element={isAuthenticated ? <OpcionesPage /> : <Navigate to="/" replace />} />
       <Route path="/logout" element={<Logout />} />
     </Routes>
   )

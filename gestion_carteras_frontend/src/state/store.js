@@ -2,9 +2,16 @@ const STORAGE_KEYS = {
   tarjetas: 'tarjetas_data',
   stats: 'tarjetas_stats',
   lastDownload: 'tarjetas_last_download',
+  viewMode: 'tarjetas_view_mode',
 }
 
 export const tarjetasStore = {
+  setViewMode(mode) { // 'cards' | 'list'
+    localStorage.setItem(STORAGE_KEYS.viewMode, mode)
+  },
+  getViewMode() {
+    return localStorage.getItem(STORAGE_KEYS.viewMode) || 'cards'
+  },
   saveTarjetas(list) {
     localStorage.setItem(STORAGE_KEYS.tarjetas, JSON.stringify(list || []))
   },

@@ -6,6 +6,7 @@ import { computeDerived } from '../utils/derive.js'
 import { useNavigate, Outlet, useLocation } from 'react-router-dom'
 import { Check, RotateCw, X, Plus } from 'lucide-react'
 import AddTarjetaModal from '../components/AddTarjetaModal.jsx'
+import TarjetaCompacta from '../components/TarjetaCompacta.jsx'
 
 function currency(n) { try { return new Intl.NumberFormat('es-CO', { style:'currency', currency:'COP', maximumFractionDigits:0 }).format(n||0) } catch { return `$${Number(n||0).toFixed(0)}` } }
 function formatMoney(n){ try { return new Intl.NumberFormat('es-CO', { style:'currency', currency:'COP', maximumFractionDigits:0 }).format(n||0) } catch { return `$${Number(n||0).toFixed(0)}` } }
@@ -26,6 +27,7 @@ export default function TarjetasPage() {
   const [addCtx, setAddCtx] = useState({ posicionAnterior: null, posicionSiguiente: null })
   const [showRecaudos, setShowRecaudos] = useState(false)
   const [scrollToCodigo, setScrollToCodigo] = useState(() => sessionStorage.getItem('last_tarjeta_codigo') || '')
+  const [viewMode, setViewMode] = useState('cards') // 'cards' | 'list'
   const location = useLocation()
   const searchInputRef = useRef(null)
   
@@ -95,6 +97,9 @@ export default function TarjetasPage() {
       }
       setAbonosPorTarjeta(abonosMap)
       
+      // Cargar preferencia de vista
+      setViewMode(tarjetasStore.getViewMode())
+
       // Construir mapa de tarjetas con abonos de la jornada actual (incluye outbox y abonos guardados)
       const map = {}
       let totalMontoHoy = 0
@@ -549,6 +554,23 @@ function RecaudosOverlay({ tarjetas, abonosPorTarjeta, onClose }){
             const abonadoHoy = !!abonadosHoyMap[t.codigo]
             const rutaNum = t?.numero_ruta != null ? Number(t.numero_ruta) : null
             const rutaSiguiente = idx < filtradas.length-1 ? Number(filtradas[idx+1]?.numero_ruta ?? null) : null
+            
+            if (viewMode === 'list') {
+              return (
+                <TarjetaCompacta 
+                  key={t.codigo} 
+                  tarjeta={t} 
+                  barraColor={barraColor} 
+                  nombre={nombre} 
+                  saldo={saldoPendiente} 
+                  abonadoHoy={abonadoHoy} 
+                  rutaNum={rutaNum}
+                  data-tarjeta-id={t.codigo}
+                  onLongPress={(tar)=>{ setAddCtx({ posicionAnterior: rutaNum, posicionSiguiente: rutaSiguiente }); setShowAdd(true) }}
+                />
+              )
+            }
+
             return (
               <SwipeableTarjeta key={t.codigo} tarjeta={t} barraColor={barraColor} nombre={nombre} telefono={telefono} direccion={direccion} saldo={saldoPendiente} estadoStr={estado} abonadoHoy={abonadoHoy} rutaNum={rutaNum} hideRuta={showRecaudos}
                 data-tarjeta-id={t.codigo} data-ruta={rutaNum != null ? rutaNum : ''}
