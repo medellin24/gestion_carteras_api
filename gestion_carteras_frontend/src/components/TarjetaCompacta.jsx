@@ -159,7 +159,7 @@ export default function TarjetaCompacta({
             borderRadius: 6,
             padding: '6px',
             textAlign: 'center',
-            fontSize: 14,
+            fontSize: 16,
             fontWeight: abonadoHoy ? 700 : 400
           }}
         />
