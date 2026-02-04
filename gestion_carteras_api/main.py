@@ -256,6 +256,8 @@ def caja_registrar_salida_endpoint(payload: CajaSalidaCreate, principal: dict = 
         # Recalcular caja del día si hay empleado
         try:
             if payload.empleado_identificacion:
+                # Usar fecha enviada por el cliente (ya debería ser local), pero pasar timezone para que la función sepa
+                # calcular límites de día en base a esa fecha.
                 _ = recalcular_caja_dia(payload.empleado_identificacion, payload.fecha, principal.get("timezone"))
         except Exception:
             pass
@@ -297,12 +299,26 @@ def caja_registrar_entrada_endpoint(payload: CajaEntradaCreate, principal: dict 
 def caja_recalcular_dia_endpoint(body: dict, principal: dict = Depends(get_current_principal)):
     try:
         emp = str(body.get('empleado_identificacion'))
-        from datetime import datetime as _dt
+        from datetime import datetime as _dt, date
         fecha = body.get('fecha')
+        
+        # Si viene string, parsear
         if isinstance(fecha, str):
             fecha = _dt.strptime(fecha, '%Y-%m-%d').date()
-        if not emp or not fecha:
-            raise HTTPException(status_code=400, detail='empleado_identificacion y fecha son requeridos')
+        
+        # Si no viene fecha, usar hoy en timezone local
+        if not fecha:
+            try:
+                from zoneinfo import ZoneInfo
+                from datetime import timezone as _tz
+                tz = ZoneInfo(principal.get("timezone")) if principal.get("timezone") else _tz.utc
+                fecha = _dt.now(tz).date()
+            except Exception:
+                fecha = date.today()
+
+        if not emp:
+            raise HTTPException(status_code=400, detail='empleado_identificacion es requerido')
+            
         val = recalcular_caja_dia(emp, fecha, principal.get("timezone"))
         return { 'fecha': fecha, 'valor': float(val) }
     except HTTPException:
@@ -1017,8 +1033,16 @@ def create_gasto_endpoint(gasto: GastoCreate, principal: dict = Depends(get_curr
             
         # Recalcular caja
         try:
-            from datetime import date
-            f_calc = gasto.fecha if gasto.fecha else date.today()
+            from datetime import datetime, date, timezone as _tz
+            f_calc = gasto.fecha
+            # Si no hay fecha explícita, usar ahora en la zona horaria del usuario
+            if not f_calc:
+                try:
+                    from zoneinfo import ZoneInfo
+                    tz = ZoneInfo(principal.get("timezone")) if principal.get("timezone") else _tz.utc
+                    f_calc = datetime.now(tz).date()
+                except Exception:
+                    f_calc = date.today()
             _ = recalcular_caja_dia(gasto.empleado_identificacion, f_calc, principal.get("timezone"))
         except Exception:
             pass
@@ -1061,10 +1085,23 @@ def update_gasto_endpoint(gasto_id: int, gasto: GastoUpdate, principal: dict = D
             
         # Recalcular caja
         try:
-            from datetime import date
-            f_calc = db_gasto.get("fecha_creacion")
-            if f_calc:
-                _ = recalcular_caja_dia(db_gasto.get("empleado_identificacion"), f_calc, principal.get("timezone"))
+            from datetime import datetime, date, timezone as _tz
+            f_creacion = db_gasto.get("fecha_creacion")
+            if f_creacion:
+                tz_name = principal.get("timezone")
+                try:
+                    from zoneinfo import ZoneInfo
+                    tz = ZoneInfo(tz_name) if tz_name else _tz.utc
+                    if isinstance(f_creacion, datetime):
+                        if f_creacion.tzinfo is None:
+                            f_creacion = f_creacion.replace(tzinfo=_tz.utc)
+                        f_calc = f_creacion.astimezone(tz).date()
+                    else:
+                        f_calc = f_creacion
+                except Exception:
+                    f_calc = f_creacion if isinstance(f_creacion, date) else date.today()
+                
+                _ = recalcular_caja_dia(db_gasto.get("empleado_identificacion"), f_calc, tz_name)
         except Exception:
             pass
 
@@ -1088,10 +1125,22 @@ def delete_gasto_endpoint(gasto_id: int, principal: dict = Depends(get_current_p
         # Recalcular caja
         if prev_gasto:
             try:
-                from datetime import date
-                f_calc = prev_gasto.get("fecha_creacion")
-                if f_calc:
-                    _ = recalcular_caja_dia(prev_gasto.get("empleado_identificacion"), f_calc, principal.get("timezone"))
+                from datetime import datetime, date, timezone as _tz
+                f_creacion = prev_gasto.get("fecha_creacion")
+                if f_creacion:
+                    tz_name = principal.get("timezone")
+                    try:
+                        from zoneinfo import ZoneInfo
+                        tz = ZoneInfo(tz_name) if tz_name else _tz.utc
+                        if isinstance(f_creacion, datetime):
+                            if f_creacion.tzinfo is None:
+                                f_creacion = f_creacion.replace(tzinfo=_tz.utc)
+                            f_calc = f_creacion.astimezone(tz).date()
+                        else:
+                            f_calc = f_creacion
+                    except Exception:
+                        f_calc = f_creacion if isinstance(f_creacion, date) else date.today()
+                    _ = recalcular_caja_dia(prev_gasto.get("empleado_identificacion"), f_calc, tz_name)
             except Exception:
                 pass
 
@@ -1808,14 +1857,27 @@ def create_tarjeta_endpoint(tarjeta: TarjetaCreate, principal: dict = Depends(ge
         }
         # Recalcular caja del día de la tarjeta nueva
         try:
-            from datetime import datetime as _dt
+            from datetime import datetime as _dt, date, timezone as _tz
             fecha_dt = tarjeta.fecha_creacion
             if fecha_dt and isinstance(fecha_dt, str):
                 try:
                     fecha_dt = _dt.fromisoformat(fecha_dt.replace('Z', '+00:00'))
                 except Exception:
                     fecha_dt = None
-            fecha_dia = fecha_dt.date() if fecha_dt else date.today()
+            
+            # Ajustar a zona horaria local para saber el día de caja
+            try:
+                from zoneinfo import ZoneInfo
+                tz = ZoneInfo(tz_name) if tz_name else _tz.utc
+                if fecha_dt:
+                    if fecha_dt.tzinfo is None:
+                        fecha_dt = fecha_dt.replace(tzinfo=_tz.utc)
+                    fecha_dia = fecha_dt.astimezone(tz).date()
+                else:
+                    fecha_dia = _dt.now(tz).date()
+            except Exception:
+                fecha_dia = date.today()
+
             _ = recalcular_caja_dia(tarjeta.empleado_identificacion, fecha_dia, tz_name)
         except Exception:
             pass
@@ -1864,9 +1926,37 @@ def update_tarjeta_endpoint(tarjeta_codigo: str, tarjeta: TarjetaUpdate, princip
 @app.delete("/tarjetas/{tarjeta_codigo}")
 def delete_tarjeta_endpoint(tarjeta_codigo: str, principal: dict = Depends(get_current_principal)):
     try:
+        # Obtener info antes de eliminar para recalcular caja
+        tarjeta = obtener_tarjeta_por_codigo(tarjeta_codigo)
+        
         ok = eliminar_tarjeta(tarjeta_codigo)
         if not ok:
             raise HTTPException(status_code=404, detail="Tarjeta no encontrada o no se pudo eliminar.")
+            
+        # Recalcular caja (resta el préstamo eliminado)
+        if tarjeta:
+            try:
+                from datetime import datetime, date, timezone as _tz
+                f_creacion = tarjeta.get("fecha_creacion")
+                if f_creacion:
+                    try:
+                        from zoneinfo import ZoneInfo
+                        tz = ZoneInfo(principal.get("timezone")) if principal.get("timezone") else _tz.utc
+                        if isinstance(f_creacion, datetime):
+                            if f_creacion.tzinfo is None:
+                                f_creacion = f_creacion.replace(tzinfo=_tz.utc)
+                            f_calc = f_creacion.astimezone(tz).date()
+                        elif isinstance(f_creacion, date):
+                            f_calc = f_creacion
+                        else:
+                            f_calc = date.today()
+                    except Exception:
+                        f_calc = date.today()
+                    
+                    _ = recalcular_caja_dia(tarjeta["empleado_identificacion"], f_calc, principal.get("timezone"))
+            except Exception:
+                pass
+                
         return {"ok": True}
     except HTTPException:
         raise
@@ -1963,8 +2053,20 @@ def create_abono_endpoint(abono: AbonoCreate, principal: dict = Depends(get_curr
         try:
             tarjeta_info = obtener_tarjeta_por_codigo(abono.tarjeta_codigo)
             if tarjeta_info:
-                from datetime import date
-                _ = recalcular_caja_dia(tarjeta_info["empleado_identificacion"], date.today(), principal.get("timezone"))
+                from datetime import datetime, date, timezone as _tz
+                try:
+                    from zoneinfo import ZoneInfo
+                    tz = ZoneInfo(principal.get("timezone")) if principal.get("timezone") else _tz.utc
+                    f_calc = datetime.now(tz).date()
+                    if abono.fecha:
+                        dt_ref = abono.fecha
+                        if dt_ref.tzinfo is None:
+                            dt_ref = dt_ref.replace(tzinfo=_tz.utc)
+                        f_calc = dt_ref.astimezone(tz).date()
+                except Exception:
+                    f_calc = date.today()
+                
+                _ = recalcular_caja_dia(tarjeta_info["empleado_identificacion"], f_calc, principal.get("timezone"))
         except Exception:
             pass
 
@@ -2003,8 +2105,22 @@ def update_abono_endpoint(abono_id: int, abono: AbonoUpdate, principal: dict = D
         try:
             tarjeta_info = obtener_tarjeta_por_codigo(db_abono.get("tarjeta_codigo"))
             if tarjeta_info:
-                from datetime import date
-                _ = recalcular_caja_dia(tarjeta_info["empleado_identificacion"], date.today(), principal.get("timezone"))
+                from datetime import datetime, date, timezone as _tz
+                try:
+                    from zoneinfo import ZoneInfo
+                    tz = ZoneInfo(principal.get("timezone")) if principal.get("timezone") else _tz.utc
+                    f_calc = datetime.now(tz).date()
+                    if db_abono.get('fecha'):
+                        dt_ref = db_abono['fecha']
+                        if isinstance(dt_ref, datetime):
+                            if dt_ref.tzinfo is None:
+                                dt_ref = dt_ref.replace(tzinfo=_tz.utc)
+                            f_calc = dt_ref.astimezone(tz).date()
+                        elif isinstance(dt_ref, date):
+                            f_calc = dt_ref
+                except Exception:
+                    f_calc = date.today()
+                _ = recalcular_caja_dia(tarjeta_info["empleado_identificacion"], f_calc, principal.get("timezone"))
                 # Verificar si debe reactivarse o cancelarse
                 verificar_reactivacion_tarjeta(db_abono.get("tarjeta_codigo"))
         except Exception:
@@ -2035,8 +2151,22 @@ def delete_abono_endpoint(abono_id: int, principal: dict = Depends(get_current_p
             try:
                 tarjeta_info = obtener_tarjeta_por_codigo(prev_abono.get("tarjeta_codigo"))
                 if tarjeta_info:
-                    from datetime import date
-                    _ = recalcular_caja_dia(tarjeta_info["empleado_identificacion"], date.today(), principal.get("timezone"))
+                    from datetime import datetime, date, timezone as _tz
+                    try:
+                        from zoneinfo import ZoneInfo
+                        tz = ZoneInfo(principal.get("timezone")) if principal.get("timezone") else _tz.utc
+                        f_calc = datetime.now(tz).date()
+                        if prev_abono.get('fecha'):
+                            dt_ref = prev_abono['fecha']
+                            if isinstance(dt_ref, datetime):
+                                if dt_ref.tzinfo is None:
+                                    dt_ref = dt_ref.replace(tzinfo=_tz.utc)
+                                f_calc = dt_ref.astimezone(tz).date()
+                            elif isinstance(dt_ref, date):
+                                f_calc = dt_ref
+                    except Exception:
+                        f_calc = date.today()
+                    _ = recalcular_caja_dia(tarjeta_info["empleado_identificacion"], f_calc, principal.get("timezone"))
                     # Verificar si debe reactivarse
                     verificar_reactivacion_tarjeta(prev_abono.get("tarjeta_codigo"))
             except Exception:
@@ -2056,9 +2186,30 @@ def delete_ultimo_abono_endpoint(tarjeta_codigo: str, principal: dict = Depends(
     """
     try:
         from .database.abonos_db import eliminar_ultimo_abono
+        
+        # Obtener info tarjeta antes para recalcular
+        tarjeta_info = obtener_tarjeta_por_codigo(tarjeta_codigo)
+        
         success = eliminar_ultimo_abono(tarjeta_codigo)
         if not success:
             raise HTTPException(status_code=404, detail="No se encontró ningún abono para eliminar.")
+            
+        # Recalcular caja
+        if tarjeta_info:
+            try:
+                from datetime import datetime, date
+                try:
+                    from zoneinfo import ZoneInfo
+                    from datetime import timezone as _tz
+                    tz = ZoneInfo(principal.get("timezone")) if principal.get("timezone") else _tz.utc
+                    f_calc = datetime.now(tz).date()
+                except Exception:
+                    f_calc = date.today()
+                _ = recalcular_caja_dia(tarjeta_info["empleado_identificacion"], f_calc, principal.get("timezone"))
+                verificar_reactivacion_tarjeta(tarjeta_codigo)
+            except Exception:
+                pass
+                
         return {"ok": True}
     except HTTPException:
         raise
