@@ -633,27 +633,42 @@ class FrameEntrega(ttk.Frame):
             logger.error(f"Error al renderizar tarjetas: {e}")
 
     def _render_tarjetas_filtradas(self, nueva_tarjeta_id=None):
-        """Pinta todas las tarjetas y aplica estilos según el filtro seleccionado."""
+        """Pinta las tarjetas en el Treeview filtrando según el criterio seleccionado."""
         try:
-            try:
-                if '__loading__' in self.tree.get_children():
-                    self.tree.delete('__loading__')
-            except Exception:
-                pass
+            # Limpiar items actuales (o loading)
             for item in self.tree.get_children():
                 self.tree.delete(item)
+            
+            # Resetear estado de filas
             self._row_info = {}
             self._tarjeta_por_iid = {}
+            # Nota: No reseteamos caché de abonos/resumen aquí para aprovechar lo descargado
+            # self._abonos_cache_por_tarjeta = {} 
+            
             tarjetas = self._tarjetas_actuales or []
             fecha_actual = self._fecha_actual_local or date.today()
-            self._abonos_cache_por_tarjeta = {}
-            self._abonos_raw_cache = {}
             visible_idx = 0
             seleccion_iid = None
+            
+            # Obtener filtro actual
+            filtro = self.filtro_actual or 'todos'
+            
+            # Si el filtro requiere datos remotos (días atraso), intentar prefetch
+            if filtro != 'todos':
+                self._maybe_prefetch_resumen()
+
             for tarjeta in tarjetas:
+                # 1. Verificar si cumple filtro
+                if filtro != 'todos':
+                    if not self._tarjeta_cumple_filtro(tarjeta, filtro):
+                        continue
+
+                # 2. Preparar datos para pintar
                 fecha_tarjeta = self._obtener_fecha_tarjeta(tarjeta, fecha_actual)
                 es_nueva = fecha_tarjeta == fecha_actual
                 fecha_str = fecha_tarjeta.strftime('%d/%m/%Y')
+                
+                # Ruta
                 numero_ruta = tarjeta.get('numero_ruta')
                 if numero_ruta is not None:
                     try:
@@ -663,6 +678,8 @@ class FrameEntrega(ttk.Frame):
                         ruta_str = str(numero_ruta)
                 else:
                     ruta_str = "0"
+                
+                # Cliente
                 cliente_obj = tarjeta.get('cliente') if isinstance(tarjeta.get('cliente'), dict) else None
                 nombre_cliente = (
                     (cliente_obj.get('nombre') if cliente_obj and 'nombre' in cliente_obj else tarjeta.get('cliente_nombre', ''))
@@ -670,19 +687,38 @@ class FrameEntrega(ttk.Frame):
                 apellido_cliente = (
                     (cliente_obj.get('apellido') if cliente_obj and 'apellido' in cliente_obj else tarjeta.get('cliente_apellido', ''))
                 ).upper()
+                
                 monto_str = f"${tarjeta.get('monto', 0):,.0f}"
                 cuotas_str = tarjeta.get('cuotas', '')
                 codigo = tarjeta.get('codigo', '')
                 iid = str(tarjeta.get('id', codigo) or f"row_{visible_idx}")
-                row_tag = 'row_odd' if (visible_idx % 2) else 'row_even'
-                tags = [row_tag]
-                if es_nueva:
-                    tags.append('nueva')
-                iid = str(tarjeta.get('id', codigo) or f"row_{visible_idx}")
+                
+                # 3. Definir Tags (Color)
+                tags = []
+                # Tag base para alternar colores (si no hay filtro específico)
                 base_tag = 'row_odd' if (visible_idx % 2) else 'row_even'
-                tags = [base_tag]
+                
+                if filtro != 'todos':
+                    # Si hay filtro activo, usar su color específico
+                    tag_filtro_info = self.FILTRO_TAGS.get(filtro)
+                    if tag_filtro_info:
+                        tag_name = tag_filtro_info[0]
+                        # Asegurar que el tag esté configurado
+                        try:
+                            self.tree.tag_configure(tag_name, background=tag_filtro_info[1])
+                        except Exception:
+                            pass
+                        tags.append(tag_name)
+                    else:
+                        tags.append(base_tag)
+                else:
+                    # Sin filtro: alternar gris/blanco
+                    tags.append(base_tag)
+
                 if es_nueva:
                     tags.append('nueva')
+
+                # Insertar en Treeview
                 self.tree.insert('', 'end', values=(
                     ruta_str,
                     monto_str,
@@ -692,57 +728,40 @@ class FrameEntrega(ttk.Frame):
                     cuotas_str,
                     codigo
                 ), iid=iid, tags=tuple(tags))
+                
+                # Guardar referencia
                 self._row_info[iid] = {'base': base_tag, 'nueva': es_nueva}
                 self._tarjeta_por_iid[iid] = tarjeta
+                
                 if nueva_tarjeta_id and iid == nueva_tarjeta_id:
                     seleccion_iid = iid
                 visible_idx += 1
+
+            # Si no hay resultados
             if visible_idx == 0:
                 try:
                     self.tree.insert('', 'end', values=('', '', 'Sin resultados', '', '', ''), iid='__empty__')
                 except Exception:
                     pass
             elif seleccion_iid:
-                self.tree.selection_set(seleccion_iid)
-                self.tree.see(seleccion_iid)
-                self.tree.focus(seleccion_iid)
-            self._apply_filtro_estilos()
+                try:
+                    self.tree.selection_set(seleccion_iid)
+                    self.tree.see(seleccion_iid)
+                    self.tree.focus(seleccion_iid)
+                except Exception:
+                    pass
+                    
         except Exception as e:
             logger.error(f"Error al pintar tarjetas filtradas: {e}")
 
     def _apply_filtro_estilos(self):
-        if not self.tree or not self._row_info:
-            return
-        self._maybe_prefetch_resumen()
-        highlight_tag = None
-        if self.filtro_actual and self.filtro_actual != 'todos':
-            tag_info = self.FILTRO_TAGS.get(self.filtro_actual)
-            if tag_info:
-                highlight_tag = tag_info[0]
-                try:
-                    self.tree.tag_configure(highlight_tag, background=tag_info[1])
-                except Exception:
-                    pass
-        for iid in self.tree.get_children():
-            info = self._row_info.get(iid)
-            if not info:
-                continue
-            tags = []
-            tarjeta = self._tarjeta_por_iid.get(iid)
-            aplica_resaltado = (
-                highlight_tag
-                and tarjeta
-                and self._tarjeta_cumple_filtro(tarjeta, self.filtro_actual)
-            )
-            if aplica_resaltado:
-                tags.append(highlight_tag)
-            else:
-                base_tag = info.get('base', 'row_even')
-                if base_tag:
-                    tags.append(base_tag)
-            if info.get('nueva'):
-                tags.append('nueva')
-            self.tree.item(iid, tags=tuple(dict.fromkeys(tags)))
+        """
+        Método wrapper para compatibilidad. Ahora redirige a _render_tarjetas_filtradas
+        para redibujar la lista completa según el filtro.
+        """
+        # Si cambiamos filtro, necesitamos redibujar (filtrar filas), no solo cambiar estilos
+        self._render_tarjetas_filtradas()
+
 
     def _maybe_prefetch_resumen(self):
         filtros_resumen = {'excelentes', 'buenos', 'regulares', 'malos', 'clavos'}
