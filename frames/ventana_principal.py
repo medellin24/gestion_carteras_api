@@ -15,7 +15,7 @@ from frames.frame_contabilidad import FrameContabilidad
 from api_client.client import api_client, APIError
 
 class VentanaPrincipal:
-    APP_VERSION = "2.1"
+    APP_VERSION = "2.2"
 
     def __init__(self, root, user_email=None):
         self.root = root

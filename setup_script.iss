@@ -1,7 +1,7 @@
 ; Script generado para NeonBlue (Gestión de Carteras)
 
 #define MyAppName "NeonBlue"
-#define MyAppVersion "1.0"
+#define MyAppVersion "2.2"
 #define MyAppPublisher "SIRC"
 #define MyAppExeName "NeonBlue.exe"
 #define MyIcon "assets\icons\home.ico"

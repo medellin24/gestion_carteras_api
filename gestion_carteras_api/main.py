@@ -174,7 +174,7 @@ def read_root():
 # --- Versión de la aplicación de escritorio ---
 # Actualizar aquí con cada release del instalador .exe
 DESKTOP_APP_VERSION = {
-    "version": "2.1",
+    "version": "2.2",
     "download_url": "",
     "notas": "",
 }
