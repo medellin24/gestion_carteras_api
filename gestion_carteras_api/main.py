@@ -175,8 +175,8 @@ def read_root():
 # Actualizar aquí con cada release del instalador .exe
 DESKTOP_APP_VERSION = {
     "version": "2.2",
-    "download_url": "",
-    "notas": "",
+    "download_url": "https://drive.google.com/drive/folders/1bblA_PA60sMO3El06SJwvwGX93qwMtAU?usp=sharing",
+    "notas": "Scroll restore en busqueda, indicador amarillo no-diario, auto-actualizacion, limpieza de proyecto",
 }
 
 @app.get("/app/version")
