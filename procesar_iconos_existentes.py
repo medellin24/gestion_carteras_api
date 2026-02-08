@@ -109,8 +109,9 @@ def procesar_todos_los_iconos():
             ancho, alto, modo = match_config
             print(f"Procesando {nombre_archivo} -> {ancho}x{alto} (modo: {modo})")
         else:
-            ancho, alto, modo = 24, 24, 'fit'
-            print(f"Procesando {nombre_archivo} -> {ancho}x{alto} (default 24x24)")
+            print(f"SALTADO: {nombre_archivo} (no está en el diccionario, se deja intacto)")
+            print("-" * 30)
+            continue
         
         img_procesada = procesar_icono(archivo, ancho, alto, modo)
         

@@ -251,6 +251,11 @@ button {
   box-shadow: 0 8px 24px rgba(0, 0, 0, .35), inset 0 0 0 1px rgba(34, 193, 195, .15)
 }
 
+.neon-card.no-abono-nodiario {
+  border-color: #f59e0b;
+  box-shadow: 0 8px 24px rgba(245, 158, 11, .3), 0 0 0 2px rgba(245, 158, 11, .15) inset
+}
+
 .neon-card::before {
   content: "";
   position: absolute;
@@ -281,6 +286,11 @@ button {
 .neon-avatar.neon-avatar--noabono {
   background: linear-gradient(135deg, #f87171, #ef4444);
   box-shadow: 0 8px 22px rgba(239, 68, 68, .35)
+}
+
+.neon-avatar.neon-avatar--nodiario {
+  background: linear-gradient(135deg, #fbbf24, #f59e0b);
+  box-shadow: 0 8px 22px rgba(245, 158, 11, .35)
 }
 
 .neon-title {

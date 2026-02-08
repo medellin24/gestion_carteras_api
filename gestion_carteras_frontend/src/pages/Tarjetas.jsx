@@ -30,6 +30,8 @@ export default function TarjetasPage() {
   const [viewMode, setViewMode] = useState('cards') // 'cards' | 'list'
   const location = useLocation()
   const searchInputRef = useRef(null)
+  // Guardar posición de scroll antes de iniciar búsqueda (para restaurar al limpiar filtro)
+  const preSearchScrollRef = useRef({ scrollTop: 0, codigo: null })
   
   // Detectar si hay una ruta hija activa (detalle o abonos)
   const hasChildRoute = location.pathname !== '/tarjetas'
@@ -245,6 +247,44 @@ export default function TarjetasPage() {
       return () => clearTimeout(timer)
     }
   }, [filtradas.length, scrollToCodigo])
+
+  // Obtener el contenedor de scroll real (.tarjetas-scroll tiene overflow-y:auto)
+  function getScrollContainer() {
+    return document.querySelector('.tarjetas-scroll')
+  }
+
+  // Encontrar el código de la primera tarjeta visible en pantalla
+  function findFirstVisibleCardCode() {
+    const cards = document.querySelectorAll('[data-tarjeta-id]')
+    const container = getScrollContainer()
+    if (!container) return null
+    const containerTop = container.getBoundingClientRect().top
+    for (const card of cards) {
+      const rect = card.getBoundingClientRect()
+      if (rect.bottom > containerTop + 10) return card.getAttribute('data-tarjeta-id')
+    }
+    return null
+  }
+
+  // Restaurar scroll a la posición pre-búsqueda
+  function restorePreSearchScroll() {
+    const { scrollTop: savedTop, codigo: savedCodigo } = preSearchScrollRef.current
+    setTimeout(() => {
+      const container = getScrollContainer()
+      if (!container) return
+      if (savedCodigo) {
+        const el = document.querySelector(`[data-tarjeta-id="${savedCodigo}"]`)
+        if (el) {
+          const containerRect = container.getBoundingClientRect()
+          const elRect = el.getBoundingClientRect()
+          const offset = elRect.top - containerRect.top + container.scrollTop
+          container.scrollTo({ top: Math.max(0, offset - 6), behavior: 'instant' })
+          return
+        }
+      }
+      if (savedTop) container.scrollTo({ top: savedTop, behavior: 'instant' })
+    }, 0)
+  }
 
 function RecaudosOverlay({ tarjetas, abonosPorTarjeta, onClose }){
   const [abonosHoyPorTarjeta, setAbonosHoyPorTarjeta] = useState({})
@@ -511,8 +551,19 @@ function RecaudosOverlay({ tarjetas, abonosPorTarjeta, onClose }){
             type="search"
             placeholder="Buscar por nombre y apellido..."
             value={query}
-            onChange={(e)=>setQuery(e.target.value)}
-            onKeyDown={(e)=>{ if (e.key === 'Escape') { e.preventDefault(); setQuery('') } }}
+            onChange={(e)=>{
+              const newVal = e.target.value
+              // Al iniciar búsqueda, guardar posición actual para restaurar después
+              if (!query.trim() && newVal.trim()) {
+                const container = getScrollContainer()
+                preSearchScrollRef.current = {
+                  scrollTop: container?.scrollTop || 0,
+                  codigo: findFirstVisibleCardCode()
+                }
+              }
+              setQuery(newVal)
+            }}
+            onKeyDown={(e)=>{ if (e.key === 'Escape') { e.preventDefault(); setQuery(''); if (searchInputRef.current) searchInputRef.current.blur(); restorePreSearchScroll() } }}
             style={{paddingRight: query.trim() ? 32 : undefined}}
           />
           {query.trim() && (
@@ -522,9 +573,8 @@ function RecaudosOverlay({ tarjetas, abonosPorTarjeta, onClose }){
                 setQuery(''); 
                 // Al limpiar, desenfocar para ocultar teclado
                 if (searchInputRef.current) searchInputRef.current.blur()
-                // Restaurar scroll a la última tarjeta vista/interactuada si existe
-                const lastCode = sessionStorage.getItem('last_tarjeta_codigo')
-                if (lastCode) setScrollToCodigo(lastCode)
+                // Restaurar scroll a la posición donde estaba antes de buscar
+                restorePreSearchScroll()
               }}
               style={{
                 position:'absolute', right:8, top:'50%', transform:'translateY(-50%)',
@@ -571,8 +621,10 @@ function RecaudosOverlay({ tarjetas, abonosPorTarjeta, onClose }){
               )
             }
 
+            const esDiario = (t?.modalidad_pago || 'diario').toLowerCase() === 'diario'
+
             return (
-              <SwipeableTarjeta key={t.codigo} tarjeta={t} barraColor={barraColor} nombre={nombre} telefono={telefono} direccion={direccion} saldo={saldoPendiente} estadoStr={estado} abonadoHoy={abonadoHoy} rutaNum={rutaNum} hideRuta={showRecaudos}
+              <SwipeableTarjeta key={t.codigo} tarjeta={t} barraColor={barraColor} nombre={nombre} telefono={telefono} direccion={direccion} saldo={saldoPendiente} estadoStr={estado} abonadoHoy={abonadoHoy} esDiario={esDiario} rutaNum={rutaNum} hideRuta={showRecaudos}
                 data-tarjeta-id={t.codigo} data-ruta={rutaNum != null ? rutaNum : ''}
                 onLongPress={(tar)=>{ setAddCtx({ posicionAnterior: rutaNum, posicionSiguiente: rutaSiguiente }); setShowAdd(true) }} />
             )
@@ -596,7 +648,7 @@ function RecaudosOverlay({ tarjetas, abonosPorTarjeta, onClose }){
   )
 }
 
-function SwipeableTarjeta({ tarjeta, barraColor, nombre, telefono, direccion, saldo, estadoStr, abonadoHoy, rutaNum, hideRuta, onLongPress, ...restProps }) {
+function SwipeableTarjeta({ tarjeta, barraColor, nombre, telefono, direccion, saldo, estadoStr, abonadoHoy, esDiario, rutaNum, hideRuta, onLongPress, ...restProps }) {
   const navigate = useNavigate()
   // extraer cuotas restantes para limitar el selector de abono
   const resumen = tarjeta?.resumen || computeDerived(tarjeta, [], new Date())
@@ -622,7 +674,7 @@ function SwipeableTarjeta({ tarjeta, barraColor, nombre, telefono, direccion, sa
   const swipeIntent = useRef(null) // null | 'h' | 'v'
   const longPressTimer = useRef(null)
   const longPressTriggered = useRef(false)
-  const claseEstadoAbono = abonadoHoy ? 'abonado' : 'no-abono'
+  const claseEstadoAbono = abonadoHoy ? 'abonado' : (esDiario !== false ? 'no-abono' : 'no-abono-nodiario')
 
   function onTouchStart(e){
     const x = e.touches[0].clientX
@@ -791,7 +843,7 @@ function SwipeableTarjeta({ tarjeta, barraColor, nombre, telefono, direccion, sa
       {/* Panel principal */}
       <div style={{transform:`translateX(${activePanel==='left'?-100: activePanel==='right'?100:0}% ) translateX(${offsetX}px)`, transition: dragging.current ? 'none' : 'transform .25s cubic-bezier(.22,.61,.36,1)'}}>
         <div style={{display:'flex', flexDirection:'column', alignItems:'center', padding:16}}>
-          <div className={`neon-avatar ${abonadoHoy ? 'neon-avatar--abonado' : 'neon-avatar--noabono'}`}>{(nombre[0]||'U').toUpperCase()}</div>
+          <div className={`neon-avatar ${abonadoHoy ? 'neon-avatar--abonado' : (esDiario !== false ? 'neon-avatar--noabono' : 'neon-avatar--nodiario')}`}>{(nombre[0]||'U').toUpperCase()}</div>
           <div className="neon-title" style={{textAlign:'center'}}>{nombre}</div>
           {telefono ? (
             <div className="neon-sub" style={{textAlign:'center'}}>Tel: <span className="val-num">{telefono}</span></div>

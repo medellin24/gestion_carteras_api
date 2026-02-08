@@ -171,6 +171,19 @@ def shutdown_event():
 def read_root():
     return {"message": "¡Bienvenido a la API de Gestión de Carteras!"}
 
+# --- Versión de la aplicación de escritorio ---
+# Actualizar aquí con cada release del instalador .exe
+DESKTOP_APP_VERSION = {
+    "version": "2.1",
+    "download_url": "",
+    "notas": "",
+}
+
+@app.get("/app/version")
+def get_app_version():
+    """Devuelve la versión actual de la app de escritorio y el link de descarga (público, sin auth)."""
+    return DESKTOP_APP_VERSION
+
 # --- Endpoints de Contabilidad / Caja ---
 
 @app.get("/contabilidad/esquema", response_model=VerificacionEsquemaCaja)

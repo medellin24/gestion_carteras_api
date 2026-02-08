@@ -1,5 +1,10 @@
 import tkinter as tk
 from tkinter import ttk, messagebox
+import threading
+import webbrowser
+import logging
+
+logger = logging.getLogger(__name__)
 
 # Las importaciones ahora son directas, sin el prefijo del paquete anterior
 from frames.frame_entrega import FrameEntrega
@@ -10,9 +15,13 @@ from frames.frame_contabilidad import FrameContabilidad
 from api_client.client import api_client, APIError
 
 class VentanaPrincipal:
+    APP_VERSION = "2.1"
+
     def __init__(self, root, user_email=None):
         self.root = root
         self.user_email = user_email
+        self.app_version = self.APP_VERSION
+        self._update_info = {}
         # Formatear título con email del usuario
         if user_email:
             self.root.title(f"NeonBlue [{user_email}] informes : 3112027405")
@@ -61,12 +70,101 @@ class VentanaPrincipal:
         # Iniciar actualización y refresco periódico del estado de licencia
         self._iniciar_actualizacion_licencia()
 
+        # Versión actual (se actualiza si hay nueva versión disponible)
+        self.menu_bar.add_command(label=f"v{self.app_version}", state='disabled')
+        self._version_menu_index = self.menu_bar.index('end')
+        # Verificar actualizaciones en segundo plano
+        self._verificar_actualizacion()
+
     def _aplicar_estilo_licencia(self):
         """Aplica estilo personalizado al menú de licencia."""
         try:
             self.menu_bar.entryconfig(self._licencia_menu_index, background='#B2FF59', activebackground='#9CE64D')
         except Exception:
             pass
+
+    # --- Verificación de actualizaciones ---
+
+    def _verificar_actualizacion(self):
+        """Consulta la API en segundo plano para detectar nueva versión."""
+        def _check():
+            try:
+                data = api_client.get_app_version()
+                remote_version = data.get('version', '')
+                if remote_version and remote_version != self.app_version:
+                    self._update_info = data
+                    self.root.after(0, self._mostrar_indicador_actualizacion)
+            except Exception as e:
+                logger.debug(f"No se pudo verificar actualización: {e}")
+        threading.Thread(target=_check, daemon=True).start()
+
+    def _mostrar_indicador_actualizacion(self):
+        """Actualiza el menú para mostrar que hay una nueva versión disponible."""
+        try:
+            nueva = self._update_info.get('version', '?')
+            self.menu_bar.entryconfig(
+                self._version_menu_index,
+                label=f"\u2b06 Nueva versión {nueva} disponible",
+                state='normal',
+                command=self._dialogo_actualizacion,
+                background='#FF9800',
+                foreground='#000000',
+                activebackground='#F57C00',
+            )
+        except Exception as e:
+            logger.debug(f"Error al mostrar indicador de actualización: {e}")
+
+    def _dialogo_actualizacion(self):
+        """Muestra diálogo con info de la nueva versión y botón de descarga."""
+        info = self._update_info or {}
+        nueva_version = info.get('version', '?')
+        notas = info.get('notas', '')
+        download_url = info.get('download_url', '')
+
+        top = tk.Toplevel(self.root)
+        top.title("Actualización disponible")
+        top.geometry("420x220")
+        top.resizable(False, False)
+        top.transient(self.root)
+        top.grab_set()
+        try:
+            top.update_idletasks()
+            x = (top.winfo_screenwidth() // 2) - (420 // 2)
+            y = (top.winfo_screenheight() // 2) - (220 // 2)
+            top.geometry(f"420x220+{x}+{y}")
+        except Exception:
+            pass
+
+        cont = ttk.Frame(top, padding=20)
+        cont.pack(fill='both', expand=True)
+
+        ttk.Label(cont, text="Nueva versión disponible", font=('Segoe UI', 13, 'bold')).pack(anchor='w')
+        ttk.Label(cont, text=f"Versión instalada: {self.app_version}").pack(anchor='w', pady=(8, 0))
+        ttk.Label(cont, text=f"Versión disponible: {nueva_version}", foreground='#2E7D32').pack(anchor='w')
+        if notas:
+            ttk.Label(cont, text=f"Notas: {notas}", wraplength=380).pack(anchor='w', pady=(6, 0))
+
+        btn_frame = ttk.Frame(cont)
+        btn_frame.pack(fill='x', pady=(16, 0))
+
+        if download_url:
+            ttk.Button(btn_frame, text="Descargar instalador", command=lambda: self._abrir_descarga(download_url, top)).pack(side='left')
+        else:
+            ttk.Label(btn_frame, text="Link de descarga no disponible aún", foreground='#999').pack(side='left')
+
+        ttk.Button(btn_frame, text="Cerrar", command=top.destroy).pack(side='right')
+
+    def _abrir_descarga(self, url, dialogo=None):
+        """Abre el link de descarga en el navegador predeterminado."""
+        try:
+            webbrowser.open(url)
+        except Exception as e:
+            messagebox.showerror("Error", f"No se pudo abrir el navegador:\n{e}")
+        if dialogo:
+            try:
+                dialogo.destroy()
+            except Exception:
+                pass
 
     def mostrar_ayuda(self):
         """Mostrar información de soporte."""

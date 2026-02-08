@@ -742,5 +742,11 @@ class APIClient:
         """Obtiene la lista de clientes de un empleado (todos o solo activos)"""
         return self._make_request('GET', f'/empleados/{empleado_id}/clientes', params={'scope': scope})
 
+    # --- Versión de la aplicación ---
+
+    def get_app_version(self) -> Dict:
+        """Obtiene la versión más reciente de la app de escritorio disponible en el servidor."""
+        return self._make_request('GET', '/app/version')
+
 # Instancia global del cliente
 api_client = APIClient() 
