@@ -183,7 +183,19 @@ async def telegram_webhook(request: Request):
 @router.get("/setup")
 async def setup_webhook(url: str):
     """Llamar a este endpoint una vez para configurar el webhook en Telegram."""
-    if not tg_app: return {"error": "No token"}
-    webhook_url = f"{url}/telegram/webhook"
-    success = await tg_app.bot.set_webhook(webhook_url)
-    return {"webhook_set": success, "url": webhook_url}
+    if not tg_app: 
+        return {"error": "BOT_TOKEN no configurado en las variables de entorno de AWS"}
+    
+    try:
+        webhook_url = f"{url}/telegram/webhook"
+        # Forzar la inicialización si fuera necesario
+        await tg_app.initialize()
+        success = await tg_app.bot.set_webhook(webhook_url)
+        return {
+            "webhook_set": success, 
+            "url": webhook_url,
+            "bot_info": (await tg_app.bot.get_me()).username if success else "unknown"
+        }
+    except Exception as e:
+        logging.error(f"Error en setup_webhook: {e}")
+        return {"error": str(e), "detail": "Verifica que el TELEGRAM_BOT_TOKEN sea correcto"}
