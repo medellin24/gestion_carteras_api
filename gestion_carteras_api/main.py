@@ -98,12 +98,14 @@ from .routers import billing as billing_router
 from .routers import public as public_router
 from .routers import admin_users as admin_users_router
 from .routers import datacredito as datacredito_router
+from .routers import telegram_bot as telegram_router
 
 app.include_router(auth_router.router, prefix="/auth", tags=["auth"])
 app.include_router(billing_router.router, prefix="/billing", tags=["billing"])
 app.include_router(public_router.router, prefix="/public", tags=["public"])
 app.include_router(admin_users_router.router, prefix="/admin", tags=["admin"])
 app.include_router(datacredito_router.router, prefix="/datacredito", tags=["datacredito"])
+app.include_router(telegram_router.router, prefix="/telegram", tags=["telegram"])
 
 # Seguridad
 from .security import get_current_principal, require_admin

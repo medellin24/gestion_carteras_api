@@ -34,3 +34,6 @@ email-validator>=2.0.0
 
 # Zonas horarias
 tzdata==2025.2
+
+# Bot de Telegram
+python-telegram-bot==21.10
