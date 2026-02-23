@@ -1924,6 +1924,26 @@ def update_tarjeta_endpoint(tarjeta_codigo: str, tarjeta: TarjetaUpdate, princip
         db_tarjeta = obtener_tarjeta_por_codigo(tarjeta_codigo)
         if db_tarjeta is None:
             raise HTTPException(status_code=404, detail="Tarjeta no encontrada después de actualizar.")
+
+        if tarjeta.monto is not None:
+            try:
+                from datetime import datetime as _dt, date, timezone as _tz
+                f_creacion = db_tarjeta.get("fecha_creacion")
+                if f_creacion:
+                    from zoneinfo import ZoneInfo
+                    tz = ZoneInfo(principal.get("timezone")) if principal.get("timezone") else _tz.utc
+                    if isinstance(f_creacion, _dt):
+                        if f_creacion.tzinfo is None:
+                            f_creacion = f_creacion.replace(tzinfo=_tz.utc)
+                        f_calc = f_creacion.astimezone(tz).date()
+                    elif isinstance(f_creacion, date):
+                        f_calc = f_creacion
+                    else:
+                        f_calc = date.today()
+                    _ = recalcular_caja_dia(db_tarjeta["empleado_identificacion"], f_calc, principal.get("timezone"))
+            except Exception:
+                pass
+
         db_tarjeta["cliente"] = {
             "identificacion": db_tarjeta.get("cliente_identificacion", ""),
             "nombre": db_tarjeta.get("cliente_nombre", ""),
