@@ -344,7 +344,8 @@ class FrameEntrega(ttk.Frame):
                 fecha_str = str(fecha_raw)[:10] if fecha_raw else ''
                 
                 try:
-                    monto_fmt = f"${float(t.get('monto', 0)):,.0f}"
+                    _mv = float(t.get('monto', 0))
+                    monto_fmt = f"${_mv:,.0f}" if _mv % 1 == 0 else f"${_mv:,.1f}"
                 except:
                     monto_fmt = str(t.get('monto', 0))
 
@@ -569,7 +570,7 @@ class FrameEntrega(ttk.Frame):
                 row_tag = 'row_odd' if (idx % 2) else 'row_even'
                 item_id = self.tree.insert('', 'end', values=(
                     ruta_str,
-                    f"${tarjeta['monto']:,.0f}",
+                    f"${tarjeta['monto']:,.0f}" if tarjeta['monto'] % 1 == 0 else f"${tarjeta['monto']:,.1f}",
                     nombre_cliente,
                     apellido_cliente,
                     fecha_str,
@@ -688,7 +689,8 @@ class FrameEntrega(ttk.Frame):
                     (cliente_obj.get('apellido') if cliente_obj and 'apellido' in cliente_obj else tarjeta.get('cliente_apellido', ''))
                 ).upper()
                 
-                monto_str = f"${tarjeta.get('monto', 0):,.0f}"
+                _mtv = tarjeta.get('monto', 0)
+                monto_str = f"${_mtv:,.0f}" if _mtv % 1 == 0 else f"${_mtv:,.1f}"
                 cuotas_str = tarjeta.get('cuotas', '')
                 codigo = tarjeta.get('codigo', '')
                 iid = str(tarjeta.get('id', codigo) or f"row_{visible_idx}")
@@ -1107,7 +1109,8 @@ class FrameEntrega(ttk.Frame):
                 except Exception:
                     fecha_str = fecha_raw
                 try:
-                    monto_str = f"$ {Decimal(abono['monto']):,.0f}"
+                    _am = Decimal(abono['monto'])
+                    monto_str = f"$ {_am:,.0f}" if _am % 1 == 0 else f"$ {_am:,.1f}"
                 except Exception:
                     monto_str = str(abono.get('monto', ''))
                 item_index = str(idx + 1)  # 1 = más antiguo
@@ -1659,7 +1662,7 @@ class FrameEntrega(ttk.Frame):
                                       f"¡Felicitaciones!\n\n"
                                       f"La tarjeta {resumen['codigo_tarjeta']} ha sido completamente pagada.\n"
                                       f"Estado cambiado automáticamente a 'CANCELADA'.\n\n"
-                                      f"Monto total pagado: $ {Decimal(resumen['total_abonado']):,.0f}")
+                                      f"Monto total pagado: $ {Decimal(resumen['total_abonado']):,.1f}")
                     
                     self.mostrar_tabla_tarjetas()
                     
@@ -1690,7 +1693,7 @@ class FrameEntrega(ttk.Frame):
             if valor_cuota_exacto % 1 == 0:
                 txt_valor_base = f"$ {valor_cuota_exacto:,.0f}"
             else:
-                txt_valor_base = f"$ {valor_cuota_exacto:,.2f}"
+                txt_valor_base = f"$ {valor_cuota_exacto:,.1f}"
 
             # Detectar residuo en la última cuota restante
             # Si el saldo pendiente no es múltiplo "casi exacto" de la cuota base...
@@ -1705,7 +1708,7 @@ class FrameEntrega(ttk.Frame):
                     if residuo % 1 == 0:
                         txt_residuo = f"$ {residuo:,.0f}"
                     else:
-                        txt_residuo = f"$ {residuo:,.2f}"
+                        txt_residuo = f"$ {residuo:,.1f}"
                         
                     texto_final = f"{cuotas_enteras} cuota(s) de {txt_valor_base} y una de {txt_residuo}"
                 else:
@@ -1723,13 +1726,14 @@ class FrameEntrega(ttk.Frame):
             if 'Modalidad de pago' in self.info_labels:
                 self.info_labels['Modalidad de pago'].config(text=modalidad)
             
+            _abono_val = Decimal(resumen['total_abonado'])
             self.info_labels['Abono'].config(
-                text=f"$ {Decimal(resumen['total_abonado']):,.0f}")
+                text=f"$ {_abono_val:,.0f}" if _abono_val % 1 == 0 else f"$ {_abono_val:,.1f}")
             
             saldo_pendiente = Decimal(resumen['saldo_pendiente'])
             saldo_color = '#d32f2f' if saldo_pendiente > 0 else '#2e7d32'
             self.info_labels['Saldo'].config(
-                text=f"$ {saldo_pendiente:,.0f}", foreground=saldo_color)
+                text=f"$ {saldo_pendiente:,.0f}" if saldo_pendiente % 1 == 0 else f"$ {saldo_pendiente:,.1f}", foreground=saldo_color)
             
             # Interpretación correcta:
             # cuotas_pendientes_a_la_fecha = cuotas_pagadas - cuotas_esperadas
@@ -1794,7 +1798,7 @@ class FrameEntrega(ttk.Frame):
                 respuesta = messagebox.askyesno(
                     "Abono Excesivo",
                     f"⚠️ ATENCIÓN ⚠️\n\n"
-                    f"El abono de $ {monto:,.2f} excede el saldo pendiente de $ {saldo_pendiente:,.2f}.\n"
+                    f"El abono de $ {monto:,.1f} excede el saldo pendiente de $ {saldo_pendiente:,.1f}.\n"
                     f"¿Desea ajustar el abono al saldo exacto?"
                 )
                 if respuesta:
@@ -1877,8 +1881,9 @@ class FrameEntrega(ttk.Frame):
                 
                 # Solo mostrar mensaje si no se canceló (el otro método ya lo muestra)
                 if saldo_pendiente is None or saldo_pendiente > 0:
+                    _mfmt = f"$ {monto:,.0f}" if monto % 1 == 0 else f"$ {monto:,.1f}"
                     messagebox.showinfo("✓ Abono Registrado", 
-                                      f"Abono de $ {monto:,.0f} registrado correctamente.")
+                                      f"Abono de {_mfmt} registrado correctamente.")
             else:
                 error_msg = nuevo_abono.get('detail', 'Error desconocido.')
                 messagebox.showerror("Error de API", f"No se pudo registrar el abono: {error_msg}")
@@ -1895,8 +1900,9 @@ class FrameEntrega(ttk.Frame):
             texto = self.entry_monto_abono.get().replace(',', '').replace('$', '').strip()
             if texto and texto.replace('.', '').isdigit():
                 numero = float(texto)
+                fmt = f"{numero:,.0f}" if numero % 1 == 0 else f"{numero:,.1f}"
                 self.entry_monto_abono.delete(0, tk.END)
-                self.entry_monto_abono.insert(0, f"{numero:,.0f}")
+                self.entry_monto_abono.insert(0, fmt)
         except:
             pass
     
@@ -1996,7 +2002,7 @@ class FrameEntrega(ttk.Frame):
             ttk.Label(f_form, text="Nuevo Monto:").grid(row=0, column=0, sticky='e', pady=5)
             ent_monto = ttk.Entry(f_form)
             ent_monto.grid(row=0, column=1, sticky='ew', padx=5)
-            ent_monto.insert(0, f"{monto_orig:,.0f}")
+            ent_monto.insert(0, f"{monto_orig:,.0f}" if monto_orig % 1 == 0 else f"{monto_orig:,.1f}")
             
             ttk.Label(f_form, text="Nueva Fecha:").grid(row=1, column=0, sticky='e', pady=5)
             
@@ -2098,7 +2104,7 @@ class FrameEntrega(ttk.Frame):
             if valor_exacto % 1 == 0:
                 txt_val = f"{valor_exacto:,.0f}"
             else:
-                txt_val = f"{valor_exacto:,.2f}"
+                txt_val = f"{valor_exacto:,.1f}"
             
             self.entry_monto_abono.delete(0, tk.END)
             self.entry_monto_abono.insert(0, txt_val)
@@ -2122,7 +2128,7 @@ class FrameEntrega(ttk.Frame):
             if valor_cuota_exacto % 1 == 0:
                 txt_valor_base = f"$ {valor_cuota_exacto:,.0f}"
             else:
-                txt_valor_base = f"$ {valor_cuota_exacto:,.2f}"
+                txt_valor_base = f"$ {valor_cuota_exacto:,.1f}"
 
             # Detectar residuo en la última cuota restante
             es_multiplo = (saldo % valor_cuota_exacto) == 0
@@ -2133,7 +2139,7 @@ class FrameEntrega(ttk.Frame):
                     if residuo % 1 == 0:
                         txt_residuo = f"$ {residuo:,.0f}"
                     else:
-                        txt_residuo = f"$ {residuo:,.2f}"
+                        txt_residuo = f"$ {residuo:,.1f}"
                     texto_final = f"{cuotas_enteras} cuota(s) de {txt_valor_base} y una de {txt_residuo}"
                 else:
                     texto_final = f"{cuotas_rest} cuota(s) de {txt_valor_base}"
@@ -2149,12 +2155,13 @@ class FrameEntrega(ttk.Frame):
                 modalidad = 'diario'
             if 'Modalidad de pago' in self.info_labels:
                 self.info_labels['Modalidad de pago'].config(text=modalidad)
+            _abono_val2 = Decimal(resumen.get('total_abonado', 0))
             self.info_labels['Abono'].config(
-                text=f"$ {Decimal(resumen.get('total_abonado', 0)):,.0f}")
+                text=f"$ {_abono_val2:,.0f}" if _abono_val2 % 1 == 0 else f"$ {_abono_val2:,.1f}")
             saldo_pendiente = Decimal(resumen.get('saldo_pendiente', 0))
             saldo_color = '#d32f2f' if saldo_pendiente > 0 else '#2e7d32'
             self.info_labels['Saldo'].config(
-                text=f"$ {saldo_pendiente:,.0f}", foreground=saldo_color)
+                text=f"$ {saldo_pendiente:,.0f}" if saldo_pendiente % 1 == 0 else f"$ {saldo_pendiente:,.1f}", foreground=saldo_color)
             try:
                 balance = int(resumen.get('cuotas_pendientes_a_la_fecha', 0) or 0)
             except Exception:

@@ -1256,17 +1256,20 @@ class FrameContabilidad(ttk.Frame):
         """
         # Actualizar labels de métricas (panel izquierdo)
         try:
-            self.lbl_cobrado.config(text=f"$ {data.get('total_cobrado', 0):,.0f}")
-            self.lbl_bases.config(text=f"$ {data.get('total_bases', 0):,.0f}")
-            self.lbl_prestamos.config(text=f"$ {data.get('total_prestamos', 0):,.0f}")
-            self.lbl_gastos.config(text=f"$ {data.get('total_gastos', 0):,.0f}")
-            self.lbl_salidas.config(text=f"$ {data.get('total_salidas', 0):,.0f}")
-            self.lbl_entradas.config(text=f"$ {data.get('total_entradas', 0):,.0f}")
-            self.lbl_intereses.config(text=f"$ {data.get('total_intereses', 0):,.0f}")
-            self.lbl_cartera.config(text=f"$ {data.get('cartera_en_calle', 0):,.0f}")
-            self.lbl_cartera_desde.config(text=f"$ {data.get('cartera_en_calle_desde', 0):,.0f}")
-            self.lbl_efectivo.config(text=f"$ {data.get('total_efectivo', 0):,.0f}")
-            self.lbl_clavos.config(text=f"$ {data.get('total_clavos', 0):,.0f}")
+            def _fmc(v):
+                v = float(v or 0)
+                return f"$ {v:,.0f}" if v % 1 == 0 else f"$ {v:,.1f}"
+            self.lbl_cobrado.config(text=_fmc(data.get('total_cobrado', 0)))
+            self.lbl_bases.config(text=_fmc(data.get('total_bases', 0)))
+            self.lbl_prestamos.config(text=_fmc(data.get('total_prestamos', 0)))
+            self.lbl_gastos.config(text=_fmc(data.get('total_gastos', 0)))
+            self.lbl_salidas.config(text=_fmc(data.get('total_salidas', 0)))
+            self.lbl_entradas.config(text=_fmc(data.get('total_entradas', 0)))
+            self.lbl_intereses.config(text=_fmc(data.get('total_intereses', 0)))
+            self.lbl_cartera.config(text=_fmc(data.get('cartera_en_calle', 0)))
+            self.lbl_cartera_desde.config(text=_fmc(data.get('cartera_en_calle_desde', 0)))
+            self.lbl_efectivo.config(text=_fmc(data.get('total_efectivo', 0)))
+            self.lbl_clavos.config(text=_fmc(data.get('total_clavos', 0)))
         except Exception:
             pass
 
@@ -1283,7 +1286,8 @@ class FrameContabilidad(ttk.Frame):
 
         def fmt_money(v: float | int | None) -> str:
             try:
-                return f"$ {float(v or 0):,.0f}"
+                fv = float(v or 0)
+                return f"$ {fv:,.0f}" if fv % 1 == 0 else f"$ {fv:,.1f}"
             except Exception:
                 return "$ 0"
 
@@ -1388,15 +1392,18 @@ class FrameContabilidad(ttk.Frame):
             self.txt_resumen.insert('end', '  Variación porcentual: (no disponible)', ('muted',))
 
         # Actualizar labels nuevos y ganancia
+        def _fmc2(v):
+            fv = float(v or 0)
+            return f"$ {fv:,.0f}" if fv % 1 == 0 else f"$ {fv:,.1f}"
         if hasattr(self, 'lbl_efectivo'):
             val = data.get('total_efectivo', 0)
-            self.lbl_efectivo.config(text=f"$ {float(val):,.0f}" if val is not None else "$ 0")
+            self.lbl_efectivo.config(text=_fmc2(val) if val is not None else "$ 0")
         if hasattr(self, 'lbl_clavos'):
             val = data.get('total_clavos', 0)
-            self.lbl_clavos.config(text=f"$ {float(val):,.0f}" if val is not None else "$ 0")
+            self.lbl_clavos.config(text=_fmc2(val) if val is not None else "$ 0")
         if hasattr(self, 'lbl_ganancia'):
             val = data.get('ganancia', 0)
-            self.lbl_ganancia.config(text=f"$ {float(val):,.0f}" if val is not None else "$ 0")
+            self.lbl_ganancia.config(text=_fmc2(val) if val is not None else "$ 0")
 
     def _compute_cartera_fallback_async(self, empleado_id: str, fecha_hasta: date) -> None:
         t0 = _pc()

@@ -5,7 +5,7 @@ import { offlineDB } from '../offline/db.js'
 import { computeDerived } from '../utils/derive.js'
 import { parseISODateToLocal, formatDateYYYYMMDD } from '../utils/date.js'
 
-function currency(n){ try { return new Intl.NumberFormat('es-CO',{style:'currency',currency:'COP',maximumFractionDigits:0}).format(n||0) } catch { return `$${Number(n||0).toFixed(0)}` } }
+function currency(n){ try { const v = Number(n||0); const fd = v % 1 === 0 ? 0 : 1; return new Intl.NumberFormat('es-CO',{style:'currency',currency:'COP',minimumFractionDigits:fd,maximumFractionDigits:fd}).format(v) } catch { return `$${Number(n||0).toFixed(1)}` } }
 function formatDecimal(value){
   const num = Number(value || 0)
   try {

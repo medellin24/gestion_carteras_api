@@ -3,7 +3,7 @@ import { Check, X, RotateCw } from 'lucide-react'
 import { offlineDB } from '../offline/db.js'
 import { getLocalDateString } from '../utils/date.js'
 
-function formatMoney(n){ try { return new Intl.NumberFormat('es-CO', { style:'currency', currency:'COP', maximumFractionDigits:0 }).format(n||0) } catch { return `$${Number(n||0).toFixed(0)}` } }
+function formatMoney(n){ try { const v = Number(n||0); const fd = v % 1 === 0 ? 0 : 1; return new Intl.NumberFormat('es-CO', { style:'currency', currency:'COP', minimumFractionDigits:fd, maximumFractionDigits:fd }).format(v) } catch { return `$${Number(n||0).toFixed(1)}` } }
 
 function getCurrentJornada(){
   const token = (typeof localStorage !== 'undefined' && localStorage.getItem('jornada_token')) || ''

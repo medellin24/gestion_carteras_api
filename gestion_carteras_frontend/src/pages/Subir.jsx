@@ -6,9 +6,10 @@ import { Edit, Trash2, Check, X } from 'lucide-react'
 
 function currency(n) {
   try {
-    return new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', maximumFractionDigits: 0 }).format(Number(n) || 0)
+    const v = Number(n) || 0; const fd = v % 1 === 0 ? 0 : 1
+    return new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', minimumFractionDigits: fd, maximumFractionDigits: fd }).format(v)
   } catch {
-    return `$${Number(n || 0).toFixed(0)}`
+    return `$${Number(n || 0).toFixed(1)}`
   }
 }
 
