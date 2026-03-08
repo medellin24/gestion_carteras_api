@@ -246,12 +246,19 @@ def obtener_tarjeta_por_codigo(codigo: str) -> Optional[Dict]:
         logger.error(f"Error al obtener tarjeta por código: {e}")
         return None
 
-def actualizar_estado_tarjeta(tarjeta_codigo: str, nuevo_estado: str) -> bool:
+def actualizar_estado_tarjeta(tarjeta_codigo: str, nuevo_estado: str, timezone_name: str = None) -> bool:
     """Actualiza el estado de una tarjeta"""
     try:
         with DatabasePool.get_cursor() as cursor:
-            # Usar fecha local para cancelación
-            fecha_cancelacion = date.today() if nuevo_estado == 'cancelada' else None
+            fecha_cancelacion = None
+            if nuevo_estado == 'cancelada':
+                try:
+                    from zoneinfo import ZoneInfo
+                    from datetime import datetime as _dt, timezone as _tz
+                    tz = ZoneInfo(timezone_name) if timezone_name else _tz.utc
+                    fecha_cancelacion = _dt.now(_tz.utc).astimezone(tz).date()
+                except Exception:
+                    fecha_cancelacion = date.today()
             
             query = '''
                 UPDATE tarjetas 
@@ -924,7 +931,7 @@ def obtener_tarjetas_canceladas_antiguas(meses_antiguedad: int = 12) -> List[Dic
         logger.error(f"Error al obtener tarjetas antiguas: {e}")
         return []
 
-def verificar_reactivacion_tarjeta(tarjeta_codigo: str) -> bool:
+def verificar_reactivacion_tarjeta(tarjeta_codigo: str, timezone_name: str = None) -> bool:
     """
     Verifica el saldo de una tarjeta y actualiza su estado automáticamente.
     - Si saldo > 0 y estaba cancelada -> Reactiva a 'activas' y quita fecha_cancelacion.
@@ -932,7 +939,6 @@ def verificar_reactivacion_tarjeta(tarjeta_codigo: str) -> bool:
     Retorna True si hubo cambio de estado.
     """
     try:
-        # Importación local para evitar circularidad
         from .abonos_db import obtener_saldo_tarjeta
         
         saldo = obtener_saldo_tarjeta(tarjeta_codigo)
@@ -948,7 +954,6 @@ def verificar_reactivacion_tarjeta(tarjeta_codigo: str) -> bool:
         nueva_fecha_cancelacion = None
         cambio_necesario = False
         
-        # Lógica de transición
         if saldo > 0 and estado_actual in ('cancelada', 'canceladas'):
             nuevo_estado = 'activas'
             nueva_fecha_cancelacion = None
@@ -957,7 +962,13 @@ def verificar_reactivacion_tarjeta(tarjeta_codigo: str) -> bool:
             
         elif saldo <= 0 and estado_actual == 'activas':
             nuevo_estado = 'cancelada'
-            nueva_fecha_cancelacion = date.today()
+            try:
+                from zoneinfo import ZoneInfo
+                from datetime import datetime as _dt, timezone as _tz
+                tz = ZoneInfo(timezone_name) if timezone_name else _tz.utc
+                nueva_fecha_cancelacion = _dt.now(_tz.utc).astimezone(tz).date()
+            except Exception:
+                nueva_fecha_cancelacion = date.today()
             cambio_necesario = True
             logger.info(f"Cancelando tarjeta {tarjeta_codigo} (Saldo: {saldo})")
             

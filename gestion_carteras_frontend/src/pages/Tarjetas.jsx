@@ -8,8 +8,8 @@ import { Check, RotateCw, X, Plus } from 'lucide-react'
 import AddTarjetaModal from '../components/AddTarjetaModal.jsx'
 import TarjetaCompacta from '../components/TarjetaCompacta.jsx'
 
-function currency(n) { try { return new Intl.NumberFormat('es-CO', { style:'currency', currency:'COP', maximumFractionDigits:0 }).format(n||0) } catch { return `$${Number(n||0).toFixed(0)}` } }
-function formatMoney(n){ try { return new Intl.NumberFormat('es-CO', { style:'currency', currency:'COP', maximumFractionDigits:0 }).format(n||0) } catch { return `$${Number(n||0).toFixed(0)}` } }
+function currency(n) { try { const v = Number(n||0); const fd = v % 1 === 0 ? 0 : 1; return new Intl.NumberFormat('es-CO', { style:'currency', currency:'COP', minimumFractionDigits:fd, maximumFractionDigits:fd }).format(v) } catch { return `$${Number(n||0).toFixed(1)}` } }
+function formatMoney(n){ try { const v = Number(n||0); const fd = v % 1 === 0 ? 0 : 1; return new Intl.NumberFormat('es-CO', { style:'currency', currency:'COP', minimumFractionDigits:fd, maximumFractionDigits:fd }).format(v) } catch { return `$${Number(n||0).toFixed(1)}` } }
 function getCurrentJornada(){
   const token = (typeof localStorage !== 'undefined' && localStorage.getItem('jornada_token')) || ''
   const startedRaw = (typeof localStorage !== 'undefined' && localStorage.getItem('jornada_started_at')) || '0'
@@ -658,7 +658,7 @@ function SwipeableTarjeta({ tarjeta, barraColor, nombre, telefono, direccion, sa
   const interes = Number(tarjeta?.interes || 0)
   const totalEstimado = monto * (1 + interes/100)
   const cuotasTotales = Number(tarjeta?.cuotas || 1)
-  const cuotaMonto = cuotasTotales > 0 ? Math.round(totalEstimado / cuotasTotales) : 0
+  const cuotaMonto = cuotasTotales > 0 ? Math.round(totalEstimado / cuotasTotales * 10) / 10 : 0
   const saldoEstimado = resumenSaldoEstimado(tarjeta) // fallback para validaciones
   const abonado = Number.isFinite(Number(saldoEstimado)) && totalEstimado && Number(saldoEstimado) < Number(totalEstimado)
   const [offsetX, setOffsetX] = useState(0)
@@ -880,7 +880,7 @@ function resumenSaldoEstimado(tarjeta){
 
 function PanelPago({ onClose, onPagar, onReset, maxCuotas = 99, cuotaMonto = 0, saldoRestante = 0 }) {
   const [cuotas, setCuotas] = useState(1)
-  const cuotaSugerida = Math.max(0, Math.round(Number(cuotaMonto)||0))
+  const cuotaSugerida = Math.max(0, Math.round(Number(cuotaMonto||0) * 10) / 10)
   const [montoBase, setMontoBase] = useState(() => formatMoney(Math.max(0, Math.min(Number(saldoRestante)||0, cuotaSugerida))))
   const [metodo, setMetodo] = useState('efectivo')
   useEffect(() => {
@@ -895,7 +895,7 @@ function PanelPago({ onClose, onPagar, onReset, maxCuotas = 99, cuotaMonto = 0, 
     const sugerido = Math.max(0, Math.min(s, cuotaSugerida))
     setMontoBase(formatMoney(sugerido))
   }, [saldoRestante, cuotaSugerida])
-  const total = Number((montoBase||'').toString().replace(/[^0-9]/g,''))
+  const total = Number((montoBase||'').toString().replace(/[^0-9.]/g,''))
   function onWheel(e){
     e.preventDefault(); e.stopPropagation()
     const delta = Math.sign(e.deltaY)
@@ -906,7 +906,7 @@ function PanelPago({ onClose, onPagar, onReset, maxCuotas = 99, cuotaMonto = 0, 
       if (next > maxCuotas) next = 1
       if (next !== c) {
         playTick()
-        setMontoBase(formatMoney(Math.max(0, Math.round((Number(cuotaMonto)||0) * next))))
+        setMontoBase(formatMoney(Math.max(0, Math.round((Number(cuotaMonto)||0) * next * 10) / 10)))
       }
       return next
     })
@@ -940,7 +940,7 @@ function PanelPago({ onClose, onPagar, onReset, maxCuotas = 99, cuotaMonto = 0, 
         if (next > maxCuotas) next = 1
         if (next !== c) {
           playTick()
-          setMontoBase(formatMoney(Math.max(0, Math.round((Number(cuotaMonto)||0) * next))))
+          setMontoBase(formatMoney(Math.max(0, Math.round((Number(cuotaMonto)||0) * next * 10) / 10)))
         }
         return next
       })
@@ -1005,11 +1005,11 @@ function PanelPago({ onClose, onPagar, onReset, maxCuotas = 99, cuotaMonto = 0, 
           <span style={{fontSize:12, color:'var(--muted)'}}>x {cuotas}</span>
         </div>
         <div style={{display:'flex', alignItems:'center', justifyContent:'center', marginTop:12}}>
-          <input type="text" inputMode="numeric" placeholder="$ monto" pattern="[0-9]*"
+          <input type="text" inputMode="decimal" placeholder="$ monto"
                  value={montoBase}
                  maxLength={20}
                  onChange={(e)=>{
-                   const raw = e.target.value.replace(/[^0-9]/g,'')
+                   const raw = e.target.value.replace(/[^0-9.]/g,'')
                    setMontoBase(formatMoney(Number(raw||0)))
                  }}
                  onFocus={(e) => e.target.select()}

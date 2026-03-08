@@ -1906,7 +1906,7 @@ def update_tarjeta_endpoint(tarjeta_codigo: str, tarjeta: TarjetaUpdate, princip
     try:
         # Si hay cambio de estado explícito, usar función dedicada
         if tarjeta.estado is not None:
-            ok = actualizar_estado_tarjeta(tarjeta_codigo, tarjeta.estado)
+            ok = actualizar_estado_tarjeta(tarjeta_codigo, tarjeta.estado, principal.get("timezone"))
             if not ok:
                 raise HTTPException(status_code=404, detail="Tarjeta no encontrada o no se pudo actualizar el estado.")
         # Actualizar otros campos
@@ -2154,8 +2154,7 @@ def update_abono_endpoint(abono_id: int, abono: AbonoUpdate, principal: dict = D
                 except Exception:
                     f_calc = date.today()
                 _ = recalcular_caja_dia(tarjeta_info["empleado_identificacion"], f_calc, principal.get("timezone"))
-                # Verificar si debe reactivarse o cancelarse
-                verificar_reactivacion_tarjeta(db_abono.get("tarjeta_codigo"))
+                verificar_reactivacion_tarjeta(db_abono.get("tarjeta_codigo"), principal.get("timezone"))
         except Exception:
             pass
 
@@ -2200,8 +2199,7 @@ def delete_abono_endpoint(abono_id: int, principal: dict = Depends(get_current_p
                     except Exception:
                         f_calc = date.today()
                     _ = recalcular_caja_dia(tarjeta_info["empleado_identificacion"], f_calc, principal.get("timezone"))
-                    # Verificar si debe reactivarse
-                    verificar_reactivacion_tarjeta(prev_abono.get("tarjeta_codigo"))
+                    verificar_reactivacion_tarjeta(prev_abono.get("tarjeta_codigo"), principal.get("timezone"))
             except Exception:
                 pass
 
@@ -2239,7 +2237,7 @@ def delete_ultimo_abono_endpoint(tarjeta_codigo: str, principal: dict = Depends(
                 except Exception:
                     f_calc = date.today()
                 _ = recalcular_caja_dia(tarjeta_info["empleado_identificacion"], f_calc, principal.get("timezone"))
-                verificar_reactivacion_tarjeta(tarjeta_codigo)
+                verificar_reactivacion_tarjeta(tarjeta_codigo, principal.get("timezone"))
             except Exception:
                 pass
                 

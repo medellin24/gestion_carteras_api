@@ -28,7 +28,7 @@ export default function TarjetaCompacta({
   const interes = Number(tarjeta?.interes || 0)
   const totalEstimado = monto * (1 + interes/100)
   const cuotasTotales = Number(tarjeta?.cuotas || 1)
-  const cuotaMonto = cuotasTotales > 0 ? Math.round(totalEstimado / cuotasTotales) : 0
+  const cuotaMonto = cuotasTotales > 0 ? Math.round(totalEstimado / cuotasTotales * 10) / 10 : 0
   
   // Inicializar input con el valor de la cuota sugerida
   useEffect(() => {
@@ -60,7 +60,7 @@ export default function TarjetaCompacta({
   }
 
   async function handleAbonar() {
-    const val = Number(cuotaInput.replace(/[^0-9]/g, ''))
+    const val = Number(cuotaInput.replace(/[^0-9.]/g, ''))
     if (!val || val <= 0) return
     setLoading(true)
     try {
@@ -145,7 +145,8 @@ export default function TarjetaCompacta({
       {/* Columna 3: Input de Cuota */}
       <div>
         <input 
-          type="tel" 
+          type="text"
+          inputMode="decimal"
           disabled={abonadoHoy}
           value={abonadoHoy ? 'PAGADO' : cuotaInput}
           onChange={(e) => setCuotaInput(e.target.value)}
