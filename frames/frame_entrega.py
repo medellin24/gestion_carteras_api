@@ -1794,7 +1794,7 @@ class FrameEntrega(ttk.Frame):
                 respuesta = messagebox.askyesno(
                     "Abono Excesivo",
                     f"⚠️ ATENCIÓN ⚠️\n\n"
-                    f"El abono de $ {monto:,.0f} excede el saldo pendiente de $ {saldo_pendiente:,.0f}.\n"
+                    f"El abono de $ {monto:,.2f} excede el saldo pendiente de $ {saldo_pendiente:,.2f}.\n"
                     f"¿Desea ajustar el abono al saldo exacto?"
                 )
                 if respuesta:

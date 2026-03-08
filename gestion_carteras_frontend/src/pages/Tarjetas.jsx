@@ -1020,7 +1020,7 @@ function PanelPago({ onClose, onPagar, onReset, maxCuotas = 99, cuotaMonto = 0, 
             <X size={22} />
           </button>
           <button className="neon-btn" aria-label="Aceptar" title="Aceptar" style={{padding:'8px', width:44, height:44, display:'grid', placeItems:'center', background:'#14532d'}} onClick={()=>{
-            const numeric = Number((montoBase||'').toString().replace(/[^0-9]/g,''))
+            const numeric = Number((montoBase||'').toString().replace(/[^0-9.]/g,''))
             onPagar(numeric, metodo)
           }}>
             <Check size={22} />
